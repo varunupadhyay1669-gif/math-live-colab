@@ -833,6 +833,15 @@ export default function Room() {
                 </div>
                 
                 <div className="flex items-center gap-1 p-1 rounded-full" style={{ background: 'rgba(0,0,0,0.04)' }}>
+                  {/* Cursor Toggle (Removes Pen/Laser so you can interact) */}
+                  <button onClick={() => { setDrawMode(false); setLaserMode(false); }} 
+                    className="transition-all active:scale-95 px-5 py-1.5 rounded-full text-[12px] font-bold" style={{
+                    background: (!drawMode && !laserMode) ? 'white' : 'transparent',
+                    color: (!drawMode && !laserMode) ? 'black' : 'rgba(0,0,0,0.5)', cursor: 'pointer',
+                    boxShadow: (!drawMode && !laserMode) ? '0 1px 3px rgba(0,0,0,0.1)' : 'none'
+                  }}>
+                    Cursor
+                  </button>
                   {/* Disappearing Pen Toggle */}
                   <button onClick={() => { setDrawMode(true); setPenType('transient'); setLaserMode(false); }} 
                     className="transition-all active:scale-95 px-5 py-1.5 rounded-full text-[12px] font-bold" style={{
