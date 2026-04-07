@@ -75,6 +75,16 @@ export default function Room() {
   const [penColor, setPenColor] = useState('#00ff88');
   const [penWidth, setPenWidth] = useState(3);
   const [showPenMenu, setShowPenMenu] = useState(false);
+  // ── Laser Pointer ──
+  const [laserMode, setLaserMode] = useState(false);
+  // ── Challenge Timer ──
+  const [challengeTimer, setChallengeTimer] = useState<{ seconds: number; remaining: number } | null>(null);
+  const [showTimerMenu, setShowTimerMenu] = useState(false);
+  // ── Student Feedback ──
+  const [studentFeedback, setStudentFeedback] = useState<Array<{ id: number; emoji: string; label: string; studentName: string }>>([]);
+  const feedbackIdRef = useRef(0);
+  // ── Celebration ──
+  const [showCelebration, setShowCelebration] = useState(false);
 
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -85,6 +95,7 @@ export default function Room() {
   const currentStrokeRef = useRef<Array<{x: number; y: number}>>([]);
   const strokesRef = useRef<Array<{points: Array<{x: number; y: number}>; color: string; width: number; time: number}>>([]);
   const drawAnimFrameRef = useRef<number>();
+  const challengeTimerRef = useRef<ReturnType<typeof setInterval>>();
 
   // ── Session Timer ──
   useEffect(() => {
@@ -167,6 +178,29 @@ export default function Room() {
       } else if (iframeRef.current?.contentWindow) {
         iframeRef.current.contentWindow.postMessage({ ...event, type: event.type.replace("SYNC_", "REMOTE_") }, "*");
       }
+    });
+
+    // ── Student Feedback Alerts ──
+    newSocket.on("student_feedback", ({ emoji, label, studentName }: { emoji: string; label: string; studentName: string }) => {
+      const id = feedbackIdRef.current++;
+      setStudentFeedback(prev => [...prev, { id, emoji, label, studentName }]);
+      showNotif(`${emoji} ${studentName}: ${label}`);
+      setTimeout(() => setStudentFeedback(prev => prev.filter(f => f.id !== id)), 5000);
+    });
+
+    // ── Timer Events ──
+    newSocket.on("timer_started", ({ seconds }: { seconds: number }) => {
+      setChallengeTimer({ seconds, remaining: seconds });
+    });
+    newSocket.on("timer_stopped", () => {
+      setChallengeTimer(null);
+      if (challengeTimerRef.current) clearInterval(challengeTimerRef.current);
+    });
+
+    // ── Celebration ──
+    newSocket.on("celebration", () => {
+      setShowCelebration(true);
+      setTimeout(() => setShowCelebration(false), 4000);
     });
 
     return () => { newSocket.disconnect(); };
@@ -439,6 +473,57 @@ export default function Room() {
     return () => { socket.off('draw_stroke', handleStroke); socket.off('draw_clear', handleClear); };
   }, [socket]);
 
+  // ── Challenge Timer Countdown ──
+  useEffect(() => {
+    if (!challengeTimer) return;
+    if (challengeTimerRef.current) clearInterval(challengeTimerRef.current);
+    challengeTimerRef.current = setInterval(() => {
+      setChallengeTimer(prev => {
+        if (!prev || prev.remaining <= 1) {
+          clearInterval(challengeTimerRef.current);
+          return null;
+        }
+        return { ...prev, remaining: prev.remaining - 1 };
+      });
+    }, 1000);
+    return () => { if (challengeTimerRef.current) clearInterval(challengeTimerRef.current); };
+  }, [challengeTimer?.seconds]);
+
+  const startChallengeTimer = (seconds: number) => {
+    if (!socket) return;
+    socket.emit('start_timer', { roomId, seconds });
+    setShowTimerMenu(false);
+  };
+
+  const stopChallengeTimer = () => {
+    if (!socket) return;
+    socket.emit('stop_timer', { roomId });
+    setChallengeTimer(null);
+    if (challengeTimerRef.current) clearInterval(challengeTimerRef.current);
+  };
+
+  // ── Laser Pointer ──
+  const handleLaserMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (!laserMode || !socket) return;
+    const canvas = drawCanvasRef.current;
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    const x = (e.clientX - rect.left) / rect.width;
+    const y = (e.clientY - rect.top) / rect.height;
+    socket.emit('laser_pointer', { roomId, x, y, active: true });
+  };
+
+  const handleLaserLeave = () => {
+    if (!socket) return;
+    socket.emit('laser_pointer', { roomId, x: 0, y: 0, active: false });
+  };
+
+  // ── Celebration ──
+  const triggerCelebration = () => {
+    if (!socket) return;
+    socket.emit('trigger_celebration', { roomId, type: 'confetti' });
+  };
+
   const sendChat = (e: React.FormEvent) => {
     e.preventDefault();
     if (!socket || !chatInput.trim()) return;
@@ -514,10 +599,10 @@ export default function Room() {
 
         {/* Left: Logo + Room */}
         <div className="flex items-center gap-4">
-          <div className="flex items-center gap-2">
+          <button onClick={() => navigate('/')} className="flex items-center gap-2 hover:opacity-80 transition-all" style={{ background: 'none', border: 'none', cursor: 'pointer' }}>
             <span className="text-lg">🧮</span>
-            <span className="font-bold text-sm">MathsLive</span>
-          </div>
+            <span className="font-bold text-sm" style={{ color: 'var(--text-primary)' }}>MathsLive</span>
+          </button>
           <div className="hidden sm:flex items-center gap-1 px-2 py-1 rounded-md" style={{ background: 'var(--bg-card)', border: '1px solid var(--border-subtle)' }}>
             <span className="text-[10px] font-mono" style={{ color: 'var(--text-muted)' }}>ROOM</span>
             <span className="text-xs font-mono font-bold" style={{ color: '#4f8fff' }}>{roomId}</span>
@@ -532,6 +617,40 @@ export default function Room() {
 
         {/* Right: Status + Actions */}
         <div className="flex items-center gap-2">
+          {/* Challenge Timer */}
+          <div className="relative">
+            <button onClick={() => setShowTimerMenu(!showTimerMenu)} className="transition-all active:scale-95"
+              style={{ ...s.headerBtn(!!challengeTimer), color: challengeTimer ? '#fbbf24' : 'var(--text-secondary)' }}>
+              {challengeTimer ? `⏱ ${challengeTimer.remaining}s` : '⏱ Timer'}
+            </button>
+            {showTimerMenu && (
+              <div className="absolute top-full right-0 mt-1 z-50 animate-fade-in" style={{
+                background: 'var(--bg-card)', border: '1px solid var(--border-subtle)', borderRadius: '10px',
+                padding: '8px', minWidth: '140px', boxShadow: '0 10px 30px rgba(0,0,0,0.5)'
+              }}>
+                {[30, 60, 90, 120, 180].map(sec => (
+                  <button key={sec} onClick={() => startChallengeTimer(sec)} className="w-full text-left px-3 py-2 rounded-lg text-xs font-semibold hover:bg-white/5 transition-all" style={{
+                    color: 'var(--text-primary)', background: 'transparent', border: 'none', cursor: 'pointer'
+                  }}>
+                    ⏱ {sec >= 60 ? `${sec / 60} min` : `${sec}s`}
+                  </button>
+                ))}
+                {challengeTimer && (
+                  <button onClick={stopChallengeTimer} className="w-full text-left px-3 py-2 rounded-lg text-xs font-semibold hover:bg-white/5 transition-all" style={{
+                    color: '#f43f5e', background: 'transparent', border: 'none', cursor: 'pointer'
+                  }}>
+                    ✕ Stop Timer
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* Celebration */}
+          <button onClick={triggerCelebration} className="transition-all active:scale-90 hover:scale-110" style={s.headerBtn(false)}>
+            🎉
+          </button>
+
           <div className="hidden sm:flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-mono" style={{ background: 'var(--bg-card)', border: '1px solid var(--border-subtle)', color: 'var(--text-muted)' }}>
             ⏱ {formatTime(sessionTimer)}
           </div>
@@ -712,6 +831,16 @@ export default function Room() {
                   }}>
                     ✏️ {drawMode ? 'Pen ON' : 'Pen'}
                   </button>
+                  {/* Laser Pointer Toggle */}
+                  <button onClick={() => { setLaserMode(!laserMode); if (!laserMode) setDrawMode(false); }} className="transition-all active:scale-95" style={{
+                    padding: '5px 14px', borderRadius: '6px', fontSize: '12px', fontWeight: 700,
+                    background: laserMode ? 'rgba(239,68,68,0.2)' : 'rgba(107,114,128,0.1)',
+                    color: laserMode ? '#ef4444' : '#6b7280',
+                    border: laserMode ? '1.5px solid rgba(239,68,68,0.4)' : '1px solid rgba(107,114,128,0.2)',
+                    cursor: 'pointer',
+                  }}>
+                    🔴 {laserMode ? 'Laser ON' : 'Laser'}
+                  </button>
                   <button onClick={togglePause} className="transition-all active:scale-95" style={{
                     padding: '5px 14px', borderRadius: '6px', fontSize: '12px', fontWeight: 600,
                     background: isPaused ? 'rgba(52,211,153,0.12)' : 'rgba(244,63,94,0.08)',
@@ -775,14 +904,14 @@ export default function Room() {
                 ref={drawCanvasRef}
                 className="absolute inset-0 w-full h-full"
                 style={{
-                  cursor: drawMode ? 'crosshair' : 'default',
-                  pointerEvents: drawMode ? 'auto' : 'none',
+                  cursor: drawMode ? 'crosshair' : laserMode ? 'none' : 'default',
+                  pointerEvents: (drawMode || laserMode) ? 'auto' : 'none',
                   zIndex: 10,
                 }}
                 onMouseDown={startDraw}
-                onMouseMove={moveDraw}
+                onMouseMove={(e) => { moveDraw(e); handleLaserMove(e); }}
                 onMouseUp={endDraw}
-                onMouseLeave={endDraw}
+                onMouseLeave={(e) => { endDraw(); handleLaserLeave(); }}
               />
 
               {/* Cursors */}
@@ -801,6 +930,58 @@ export default function Room() {
                   <div key={r.id} className="absolute" style={{ left: `${20 + Math.random() * 60}%`, bottom: '10%', fontSize: '44px', animation: 'reaction-float-up 2.5s ease-out forwards' }}>{r.emoji}</div>
                 ))}
               </div>
+
+              {/* ── Challenge Timer Overlay ── */}
+              {challengeTimer && (
+                <div className="absolute top-4 left-1/2 -translate-x-1/2 pointer-events-none z-20 animate-bounce-in">
+                  <div className="flex items-center gap-3 px-6 py-3 rounded-2xl" style={{
+                    background: challengeTimer.remaining <= 10 ? 'rgba(239,68,68,0.9)' : 'rgba(0,0,0,0.8)',
+                    backdropFilter: 'blur(10px)', boxShadow: '0 8px 32px rgba(0,0,0,0.4)',
+                    animation: challengeTimer.remaining <= 5 ? 'pulse 0.5s ease-in-out infinite' : 'none',
+                  }}>
+                    <span className="text-2xl">⏱</span>
+                    <span className="text-3xl font-black text-white tabular-nums">{challengeTimer.remaining}s</span>
+                    <div className="w-24 h-2 rounded-full overflow-hidden" style={{ background: 'rgba(255,255,255,0.2)' }}>
+                      <div className="h-full rounded-full transition-all duration-1000 ease-linear" style={{
+                        width: `${(challengeTimer.remaining / challengeTimer.seconds) * 100}%`,
+                        background: challengeTimer.remaining <= 10 ? '#fbbf24' : '#10b981',
+                      }} />
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* ── Student Feedback Alerts ── */}
+              <div className="absolute top-4 right-4 z-20 flex flex-col gap-2 pointer-events-none">
+                {studentFeedback.map(f => (
+                  <div key={f.id} className="animate-slide-in-right flex items-center gap-2 px-4 py-2 rounded-xl" style={{
+                    background: 'rgba(0,0,0,0.85)', backdropFilter: 'blur(10px)', boxShadow: '0 4px 20px rgba(0,0,0,0.3)',
+                  }}>
+                    <span className="text-xl">{f.emoji}</span>
+                    <div>
+                      <div className="text-[10px] font-bold" style={{ color: '#4f8fff' }}>{f.studentName}</div>
+                      <div className="text-xs font-semibold text-white">{f.label}</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              {/* ── Celebration Confetti ── */}
+              {showCelebration && (
+                <div className="absolute inset-0 pointer-events-none z-30 overflow-hidden">
+                  {Array.from({ length: 60 }).map((_, i) => (
+                    <div key={i} className="absolute" style={{
+                      left: `${Math.random() * 100}%`, top: '-5%',
+                      width: `${6 + Math.random() * 8}px`, height: `${6 + Math.random() * 8}px`,
+                      background: ['#ff3366', '#00ff88', '#ffdd00', '#4f8fff', '#ff8800', '#8b5cf6', '#ec4899', '#06b6d4'][i % 8],
+                      borderRadius: Math.random() > 0.5 ? '50%' : '2px',
+                      animation: `confetti-fall ${2 + Math.random() * 2}s ease-in forwards`,
+                      animationDelay: `${Math.random() * 0.8}s`,
+                      transform: `rotate(${Math.random() * 360}deg)`,
+                    }} />
+                  ))}
+                </div>
+              )}
 
               {/* Paused Overlay */}
               {isPaused && (

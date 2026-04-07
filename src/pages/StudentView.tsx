@@ -62,6 +62,13 @@ export default function StudentView() {
   const strokesRef = useRef<Array<{points: Array<{x: number; y: number}>; color: string; width: number; time: number}>>([]);
   const drawAnimRef = useRef<number>();
 
+  // ── Engagement Features ──
+  const [laserPointer, setLaserPointer] = useState<{ x: number; y: number; active: boolean }>({ x: 0, y: 0, active: false });
+  const [challengeTimer, setChallengeTimer] = useState<{ seconds: number; remaining: number } | null>(null);
+  const challengeTimerRef = useRef<ReturnType<typeof setInterval>>();
+  const [showCelebration, setShowCelebration] = useState(false);
+  const [reactionCooldown, setReactionCooldown] = useState(false);
+
   const showNotification = (msg: string) => {
     setNotification(msg);
     setTimeout(() => setNotification(""), 4000);
@@ -201,6 +208,26 @@ export default function StudentView() {
       }
     });
 
+    // ── Laser Pointer ──
+    newSocket.on("laser_pointer", (data: { x: number; y: number; active: boolean }) => {
+      setLaserPointer(data);
+    });
+
+    // ── Challenge Timer ──
+    newSocket.on("timer_started", ({ seconds }: { seconds: number }) => {
+      setChallengeTimer({ seconds, remaining: seconds });
+    });
+    newSocket.on("timer_stopped", () => {
+      setChallengeTimer(null);
+      if (challengeTimerRef.current) clearInterval(challengeTimerRef.current);
+    });
+
+    // ── Celebration ──
+    newSocket.on("celebration", () => {
+      setShowCelebration(true);
+      setTimeout(() => setShowCelebration(false), 4000);
+    });
+
     return () => { newSocket.disconnect(); };
   }, [roomId, navigate, studentName]);
 
@@ -278,6 +305,22 @@ export default function StudentView() {
     return () => { running = false; if (drawAnimRef.current) cancelAnimationFrame(drawAnimRef.current); };
   }, []);
 
+  // ── Challenge Timer Countdown ──
+  useEffect(() => {
+    if (!challengeTimer) return;
+    if (challengeTimerRef.current) clearInterval(challengeTimerRef.current);
+    challengeTimerRef.current = setInterval(() => {
+      setChallengeTimer(prev => {
+        if (!prev || prev.remaining <= 1) {
+          clearInterval(challengeTimerRef.current);
+          return null;
+        }
+        return { ...prev, remaining: prev.remaining - 1 };
+      });
+    }, 1000);
+    return () => { if (challengeTimerRef.current) clearInterval(challengeTimerRef.current); };
+  }, [challengeTimer?.seconds]);
+
   // Receive drawing events
   useEffect(() => {
     if (!socket) return;
@@ -297,6 +340,20 @@ export default function StudentView() {
     socket.emit("raise_hand", { roomId, studentName });
     setHandUp(true);
     setTimeout(() => setHandUp(false), 5000);
+  };
+
+  const sendReaction = (emoji: string, label: string) => {
+    if (!socket || reactionCooldown) return;
+    socket.emit("student_reaction", { roomId, emoji, label, studentName });
+    
+    // Also show local bubble
+    const id = reactionIdRef.current++;
+    const x = 15 + Math.random() * 70;
+    setReactions(prev => [...prev, { id, emoji, x }]);
+    setTimeout(() => setReactions(prev => prev.filter(r => r.id !== id)), 3000);
+    
+    setReactionCooldown(true);
+    setTimeout(() => setReactionCooldown(false), 2000);
   };
 
   const sendChat = (e: React.FormEvent) => {
@@ -430,15 +487,86 @@ export default function StudentView() {
                 }} />
             </div>
           )}
+          
+          {/* ── Laser Pointer Overlay ── */}
+          {laserPointer.active && (
+            <div className="absolute inset-0 pointer-events-none z-20">
+              <div className="absolute w-4 h-4 rounded-full"
+                style={{
+                  left: `${laserPointer.x * 100}%`, top: `${laserPointer.y * 100}%`,
+                  transform: 'translate(-50%, -50%)',
+                  background: 'rgba(239,68,68,0.9)',
+                  boxShadow: '0 0 12px 6px rgba(239,68,68,0.6)',
+                  animation: 'laser-pulse 1s infinite',
+                }} />
+            </div>
+          )}
+
+          {/* ── Challenge Timer Overlay ── */}
+          {challengeTimer && (
+            <div className="absolute top-4 left-1/2 -translate-x-1/2 pointer-events-none z-30 animate-bounce-in">
+              <div className="flex items-center gap-3 px-6 py-3 rounded-2xl" style={{
+                background: challengeTimer.remaining <= 10 ? 'rgba(239,68,68,0.9)' : 'rgba(0,0,0,0.85)',
+                backdropFilter: 'blur(10px)', boxShadow: '0 8px 32px rgba(0,0,0,0.5)',
+                animation: challengeTimer.remaining <= 5 ? 'pulse 0.5s ease-in-out infinite' : 'none',
+              }}>
+                <span className="text-2xl">⏳</span>
+                <span className="text-3xl font-black text-white tabular-nums">{challengeTimer.remaining}s</span>
+              </div>
+            </div>
+          )}
+
+          {/* ── Celebration Confetti Overlay ── */}
+          {showCelebration && (
+            <div className="absolute inset-0 pointer-events-none z-40 overflow-hidden">
+              {Array.from({ length: 80 }).map((_, i) => (
+                <div key={i} className="absolute" style={{
+                  left: `${Math.random() * 100}%`, top: '-10%',
+                  width: `${6 + Math.random() * 8}px`, height: `${6 + Math.random() * 8}px`,
+                  background: ['#ff3366', '#00ff88', '#ffdd00', '#4f8fff', '#ff8800', '#8b5cf6', '#ec4899', '#06b6d4'][i % 8],
+                  borderRadius: Math.random() > 0.5 ? '50%' : '2px',
+                  animation: `confetti-fall ${2 + Math.random() * 2.5}s ease-in forwards`,
+                  animationDelay: `${Math.random() * 0.5}s`,
+                  transform: `rotate(${Math.random() * 360}deg)`,
+                }} />
+              ))}
+            </div>
+          )}
+
+          {/* ── Quick Reactions Bar ── */}
+          {iframeUrl && !isPaused && (
+            <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-30 animate-slide-up">
+              <div className="flex items-center gap-2 px-4 py-2 rounded-2xl" style={{
+                background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(12px)', border: '1px solid rgba(255,255,255,0.1)'
+              }}>
+                <button onClick={() => sendReaction('✅', 'Got it!')} disabled={reactionCooldown}
+                  className="px-3 py-1.5 rounded-xl hover:bg-white/10 active:scale-95 transition-all text-sm font-bold flex items-center gap-1">
+                  ✅ <span className="hidden sm:inline">Got it</span>
+                </button>
+                <button onClick={() => sendReaction('😕', 'Confused')} disabled={reactionCooldown}
+                  className="px-3 py-1.5 rounded-xl hover:bg-white/10 active:scale-95 transition-all text-sm font-bold flex items-center gap-1">
+                  😕 <span className="hidden sm:inline">Confused</span>
+                </button>
+                <button onClick={() => sendReaction('🐌', 'Slow down')} disabled={reactionCooldown}
+                  className="px-3 py-1.5 rounded-xl hover:bg-white/10 active:scale-95 transition-all text-sm font-bold flex items-center gap-1">
+                  🐌 <span className="hidden sm:inline">Too fast</span>
+                </button>
+                <button onClick={() => sendReaction('🤯', 'Mind blown')} disabled={reactionCooldown}
+                  className="px-3 py-1.5 rounded-xl hover:bg-white/10 active:scale-95 transition-all text-sm font-bold flex items-center gap-1">
+                  🤯 <span className="hidden sm:inline">Amazing</span>
+                </button>
+              </div>
+            </div>
+          )}
 
           {/* ── Floating Reactions ── */}
-          <div className="absolute inset-0 pointer-events-none overflow-hidden">
+          <div className="absolute inset-0 pointer-events-none overflow-hidden z-20">
             {reactions.map(r => (
               <div key={r.id}
                 className="absolute"
                 style={{
                   left: `${r.x}%`,
-                  bottom: '5%',
+                  bottom: '15%',
                   fontSize: '56px',
                   animation: 'reaction-pop 0.4s cubic-bezier(0.34, 1.56, 0.64, 1) forwards, reaction-float-up 3s ease-out 0.4s forwards',
                 }}>

@@ -215,6 +215,37 @@ async function startServer() {
       socket.to(roomId).emit('draw_clear');
     });
 
+    // ─── LASER POINTER ───
+    socket.on('laser_pointer', ({ roomId, x, y, active }: { roomId: string; x: number; y: number; active: boolean }) => {
+      socket.to(roomId).emit('laser_pointer', { x, y, active });
+    });
+
+    // ─── CHALLENGE TIMER ───
+    socket.on('start_timer', ({ roomId, seconds }: { roomId: string; seconds: number }) => {
+      io.to(roomId).emit('timer_started', { seconds, startedAt: Date.now() });
+    });
+
+    socket.on('stop_timer', ({ roomId }: { roomId: string }) => {
+      io.to(roomId).emit('timer_stopped');
+    });
+
+    // ─── CELEBRATION ───
+    socket.on('trigger_celebration', ({ roomId, type }: { roomId: string; type: string }) => {
+      io.to(roomId).emit('celebration', { type });
+    });
+
+    // ─── STUDENT QUICK REACTIONS ───
+    socket.on('student_reaction', ({ roomId, emoji, label, studentName }: { roomId: string; emoji: string; label: string; studentName: string }) => {
+      const room = rooms.get(roomId);
+      if (!room || !room.teacherSocketId) return;
+      io.to(room.teacherSocketId).emit('student_feedback', { emoji, label, studentName, studentId: socket.id });
+    });
+
+    // ─── FOCUS MODE ───
+    socket.on('focus_mode', ({ roomId, active, x, y, radius }: { roomId: string; active: boolean; x: number; y: number; radius: number }) => {
+      socket.to(roomId).emit('focus_mode', { active, x, y, radius });
+    });
+
     // ─── INTERACTION SYNC ───
     socket.on('interaction', ({ roomId, event }: { roomId: string; event: any }) => {
       event.userId = socket.id;
