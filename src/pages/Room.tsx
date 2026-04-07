@@ -93,7 +93,8 @@ export default function Room() {
   const reactionIdRef = useRef(0);
   const drawCanvasRef = useRef<HTMLCanvasElement>(null);
   const currentStrokeRef = useRef<Array<{x: number; y: number}>>([]);
-  const strokesRef = useRef<Array<{points: Array<{x: number; y: number}>; color: string; width: number; time: number}>>([]);
+  const strokesRef = useRef<Array<{points: Array<{x: number; y: number}>; color: string; width: number; time: number; transient?: boolean}>>([]);
+  const isTransientDrawRef = useRef(false);
   const drawAnimFrameRef = useRef<number>();
   const challengeTimerRef = useRef<ReturnType<typeof setInterval>>();
 
@@ -357,14 +358,19 @@ export default function Room() {
   };
 
   const startDraw = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    if (!drawMode) return;
+    const isRightClick = e.button === 2 || e.buttons === 2;
+    if (!drawMode && !laserMode) return;
+    // If only laser pointer mode is active, left click does nothing for drawing
+    if (!drawMode && !isRightClick) return;
+
     setIsDrawing(true);
     const pt = getCanvasCoords(e);
     currentStrokeRef.current = [pt];
+    isTransientDrawRef.current = isRightClick;
   };
 
   const moveDraw = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    if (!isDrawing || !drawMode) return;
+    if (!isDrawing) return;
     const pt = getCanvasCoords(e);
     currentStrokeRef.current.push(pt);
     renderStrokes();
@@ -375,9 +381,9 @@ export default function Room() {
     setIsDrawing(false);
     const points = currentStrokeRef.current;
     if (points.length > 1 && socket) {
-      const stroke = { points, color: penColor, width: penWidth, time: Date.now() };
+      const stroke = { points, color: penColor, width: penWidth, time: Date.now(), transient: isTransientDrawRef.current };
       strokesRef.current.push(stroke);
-      socket.emit('draw_stroke', { roomId, points, color: penColor, width: penWidth });
+      socket.emit('draw_stroke', { roomId, points, color: penColor, width: penWidth, transient: isTransientDrawRef.current });
     }
     currentStrokeRef.current = [];
   };
@@ -406,11 +412,15 @@ export default function Room() {
     const h = rect.height;
 
     // Render saved strokes with fade
-    strokesRef.current = strokesRef.current.filter(s => now - s.time < 6000);
+    strokesRef.current = strokesRef.current.filter(s => {
+      const maxAge = s.transient ? 1000 : 6000;
+      return (now - s.time) < maxAge;
+    });
     strokesRef.current.forEach(stroke => {
       const age = now - stroke.time;
-      const fadeStart = 4000;
-      const alpha = age > fadeStart ? 1 - (age - fadeStart) / 2000 : 1;
+      const fadeStart = stroke.transient ? 200 : 4000;
+      const fadeDuration = stroke.transient ? 800 : 2000;
+      const alpha = age > fadeStart ? 1 - (age - fadeStart) / fadeDuration : 1;
       if (alpha <= 0) return;
       ctx.globalAlpha = alpha;
       ctx.strokeStyle = stroke.color;
@@ -418,7 +428,7 @@ export default function Room() {
       ctx.lineCap = 'round';
       ctx.lineJoin = 'round';
       ctx.shadowColor = stroke.color;
-      ctx.shadowBlur = 12;
+      ctx.shadowBlur = stroke.transient ? 20 : 12;
       ctx.beginPath();
       stroke.points.forEach((p, i) => {
         if (i === 0) ctx.moveTo(p.x * w, p.y * h);
@@ -912,6 +922,7 @@ export default function Room() {
                 onMouseMove={(e) => { moveDraw(e); handleLaserMove(e); }}
                 onMouseUp={endDraw}
                 onMouseLeave={(e) => { endDraw(); handleLaserLeave(); }}
+                onContextMenu={(e) => e.preventDefault()}
               />
 
               {/* Cursors */}

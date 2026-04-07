@@ -207,8 +207,8 @@ async function startServer() {
     });
 
     // ─── DRAWING / ANNOTATION ───
-    socket.on('draw_stroke', ({ roomId, points, color, width }: { roomId: string; points: Array<{x: number; y: number}>; color: string; width: number }) => {
-      socket.to(roomId).emit('draw_stroke', { points, color, width, senderId: socket.id });
+    socket.on('draw_stroke', ({ roomId, points, color, width, transient }: any) => {
+      socket.to(roomId).emit('draw_stroke', { points, color, width, transient, senderId: socket.id });
     });
 
     socket.on('draw_clear', ({ roomId }: { roomId: string }) => {

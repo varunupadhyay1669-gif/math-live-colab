@@ -59,7 +59,7 @@ export default function StudentView() {
   const reactionIdRef = useRef(0);
   // Drawing
   const drawCanvasRef = useRef<HTMLCanvasElement>(null);
-  const strokesRef = useRef<Array<{points: Array<{x: number; y: number}>; color: string; width: number; time: number}>>([]);
+  const strokesRef = useRef<Array<{points: Array<{x: number; y: number}>; color: string; width: number; time: number; transient?: boolean}>>([]);
   const drawAnimRef = useRef<number>();
 
   // ── Engagement Features ──
@@ -269,11 +269,15 @@ export default function StudentView() {
     const now = Date.now();
     const w = rect.width;
     const h = rect.height;
-    strokesRef.current = strokesRef.current.filter(s => now - s.time < 6000);
+    strokesRef.current = strokesRef.current.filter(s => {
+      const maxAge = s.transient ? 1000 : 6000;
+      return (now - s.time) < maxAge;
+    });
     strokesRef.current.forEach(stroke => {
       const age = now - stroke.time;
-      const fadeStart = 4000;
-      const alpha = age > fadeStart ? 1 - (age - fadeStart) / 2000 : 1;
+      const fadeStart = stroke.transient ? 200 : 4000;
+      const fadeDuration = stroke.transient ? 800 : 2000;
+      const alpha = age > fadeStart ? 1 - (age - fadeStart) / fadeDuration : 1;
       if (alpha <= 0) return;
       ctx.globalAlpha = alpha;
       ctx.strokeStyle = stroke.color;
@@ -281,7 +285,7 @@ export default function StudentView() {
       ctx.lineCap = 'round';
       ctx.lineJoin = 'round';
       ctx.shadowColor = stroke.color;
-      ctx.shadowBlur = 14;
+      ctx.shadowBlur = stroke.transient ? 20 : 14;
       ctx.beginPath();
       stroke.points.forEach((p, i) => {
         if (i === 0) ctx.moveTo(p.x * w, p.y * h);
@@ -324,7 +328,7 @@ export default function StudentView() {
   // Receive drawing events
   useEffect(() => {
     if (!socket) return;
-    const handleStroke = (data: { points: Array<{x:number;y:number}>; color: string; width: number }) => {
+    const handleStroke = (data: { points: Array<{x:number;y:number}>; color: string; width: number; transient?: boolean }) => {
       strokesRef.current.push({ ...data, time: Date.now() });
       renderDrawing();
     };
