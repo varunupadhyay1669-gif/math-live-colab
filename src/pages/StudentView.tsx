@@ -57,6 +57,10 @@ export default function StudentView() {
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
   const reactionIdRef = useRef(0);
+  // Drawing
+  const drawCanvasRef = useRef<HTMLCanvasElement>(null);
+  const strokesRef = useRef<Array<{points: Array<{x: number; y: number}>; color: string; width: number; time: number}>>([]);
+  const drawAnimRef = useRef<number>();
 
   const showNotification = (msg: string) => {
     setNotification(msg);
@@ -217,6 +221,71 @@ export default function StudentView() {
     };
   }, [iframeUrl]);
 
+  // ── Drawing: render strokes on canvas ──
+  const renderDrawing = () => {
+    const canvas = drawCanvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    const rect = canvas.getBoundingClientRect();
+    if (canvas.width !== rect.width * 2 || canvas.height !== rect.height * 2) {
+      canvas.width = rect.width * 2;
+      canvas.height = rect.height * 2;
+      ctx.scale(2, 2);
+    }
+    ctx.clearRect(0, 0, rect.width, rect.height);
+    const now = Date.now();
+    const w = rect.width;
+    const h = rect.height;
+    strokesRef.current = strokesRef.current.filter(s => now - s.time < 6000);
+    strokesRef.current.forEach(stroke => {
+      const age = now - stroke.time;
+      const fadeStart = 4000;
+      const alpha = age > fadeStart ? 1 - (age - fadeStart) / 2000 : 1;
+      if (alpha <= 0) return;
+      ctx.globalAlpha = alpha;
+      ctx.strokeStyle = stroke.color;
+      ctx.lineWidth = stroke.width;
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      ctx.shadowColor = stroke.color;
+      ctx.shadowBlur = 14;
+      ctx.beginPath();
+      stroke.points.forEach((p, i) => {
+        if (i === 0) ctx.moveTo(p.x * w, p.y * h);
+        else ctx.lineTo(p.x * w, p.y * h);
+      });
+      ctx.stroke();
+      ctx.shadowBlur = 0;
+    });
+    ctx.globalAlpha = 1;
+  };
+
+  // Drawing animation loop
+  useEffect(() => {
+    let running = true;
+    const loop = () => {
+      if (!running) return;
+      if (strokesRef.current.length > 0) renderDrawing();
+      drawAnimRef.current = requestAnimationFrame(loop);
+    };
+    loop();
+    return () => { running = false; if (drawAnimRef.current) cancelAnimationFrame(drawAnimRef.current); };
+  }, []);
+
+  // Receive drawing events
+  useEffect(() => {
+    if (!socket) return;
+    const handleStroke = (data: { points: Array<{x:number;y:number}>; color: string; width: number }) => {
+      strokesRef.current.push({ ...data, time: Date.now() });
+      renderDrawing();
+    };
+    const handleClear = () => { strokesRef.current = []; renderDrawing(); };
+    socket.on('draw_stroke', handleStroke);
+    socket.on('draw_clear', handleClear);
+    return () => { socket.off('draw_stroke', handleStroke); socket.off('draw_clear', handleClear); };
+  }, [socket]);
+
   // ── Handlers ──
   const raiseHand = () => {
     if (!socket || handUp) return;
@@ -322,9 +391,14 @@ export default function StudentView() {
             </div>
           )}
 
+          {/* ── Drawing Canvas Overlay ── */}
+          <canvas ref={drawCanvasRef}
+            className="absolute inset-0 w-full h-full pointer-events-none"
+            style={{ zIndex: 10 }} />
+
           {/* ── Teacher Cursor Overlay ── */}
-          <div className="absolute inset-0 pointer-events-none overflow-hidden">
-            {Object.entries(cursors).map(([id, cursor]) => (
+          <div className="absolute inset-0 pointer-events-none overflow-hidden" style={{ zIndex: 11 }}>
+            {(Object.entries(cursors) as [string, Cursor][]).map(([id, cursor]) => (
               <div key={id} className="absolute transition-all duration-100 ease-linear"
                 style={{ left: `${cursor.x * 100}%`, top: `${cursor.y * 100}%`, transform: 'translate(-2px, -2px)' }}>
                 <svg width="22" height="22" viewBox="0 0 24 24" fill={cursor.color} xmlns="http://www.w3.org/2000/svg">

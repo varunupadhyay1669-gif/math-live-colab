@@ -198,6 +198,15 @@ async function startServer() {
       socket.to(roomId).emit('spotlight', { x, y, active, senderId: socket.id });
     });
 
+    // ─── DRAWING / ANNOTATION ───
+    socket.on('draw_stroke', ({ roomId, points, color, width }: { roomId: string; points: Array<{x: number; y: number}>; color: string; width: number }) => {
+      socket.to(roomId).emit('draw_stroke', { points, color, width, senderId: socket.id });
+    });
+
+    socket.on('draw_clear', ({ roomId }: { roomId: string }) => {
+      socket.to(roomId).emit('draw_clear');
+    });
+
     // ─── INTERACTION SYNC ───
     socket.on('interaction', ({ roomId, event }: { roomId: string; event: any }) => {
       event.userId = socket.id;

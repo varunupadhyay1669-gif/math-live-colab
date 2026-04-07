@@ -69,12 +69,22 @@ export default function Room() {
   const [showPasteModal, setShowPasteModal] = useState(false);
   const [pasteCode, setPasteCode] = useState("");
   const [pasteFileName, setPasteFileName] = useState("");
+  // ── Drawing/Annotation State ──
+  const [drawMode, setDrawMode] = useState(false);
+  const [isDrawing, setIsDrawing] = useState(false);
+  const [penColor, setPenColor] = useState('#00ff88');
+  const [penWidth, setPenWidth] = useState(3);
+  const [showPenMenu, setShowPenMenu] = useState(false);
 
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
   const timerRef = useRef<ReturnType<typeof setInterval>>();
   const reactionIdRef = useRef(0);
+  const drawCanvasRef = useRef<HTMLCanvasElement>(null);
+  const currentStrokeRef = useRef<Array<{x: number; y: number}>>([]);
+  const strokesRef = useRef<Array<{points: Array<{x: number; y: number}>; color: string; width: number; time: number}>>([]);
+  const drawAnimFrameRef = useRef<number>();
 
   // ── Session Timer ──
   useEffect(() => {
@@ -205,7 +215,7 @@ export default function Room() {
   const uploadFileFromInput = (e: React.ChangeEvent<HTMLInputElement>) => {
     const uploadedFiles = e.target.files;
     if (!uploadedFiles || !socket) return;
-    Array.from(uploadedFiles).forEach(file => {
+    Array.from(uploadedFiles).forEach((file: File) => {
       const reader = new FileReader();
       reader.onload = (ev) => {
         const content = ev.target?.result as string;
@@ -231,7 +241,7 @@ export default function Room() {
     if (!socket) return;
     const droppedFiles = Array.from(e.dataTransfer.files).filter(f => /\.html?$/i.test(f.name));
     if (droppedFiles.length === 0) { showNotif("⚠️ Only .html files please"); return; }
-    droppedFiles.forEach(file => {
+    droppedFiles.forEach((file: File) => {
       const reader = new FileReader();
       reader.onload = (ev) => {
         const content = ev.target?.result as string;
@@ -303,6 +313,131 @@ export default function Room() {
     setReactions(prev => [...prev, { id, emoji }]);
     setTimeout(() => setReactions(prev => prev.filter(r => r.id !== id)), 2500);
   };
+
+  // ── Drawing Functions ──
+  const getCanvasCoords = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    const canvas = drawCanvasRef.current;
+    if (!canvas) return { x: 0, y: 0 };
+    const rect = canvas.getBoundingClientRect();
+    return { x: (e.clientX - rect.left) / rect.width, y: (e.clientY - rect.top) / rect.height };
+  };
+
+  const startDraw = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (!drawMode) return;
+    setIsDrawing(true);
+    const pt = getCanvasCoords(e);
+    currentStrokeRef.current = [pt];
+  };
+
+  const moveDraw = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (!isDrawing || !drawMode) return;
+    const pt = getCanvasCoords(e);
+    currentStrokeRef.current.push(pt);
+    renderStrokes();
+  };
+
+  const endDraw = () => {
+    if (!isDrawing) return;
+    setIsDrawing(false);
+    const points = currentStrokeRef.current;
+    if (points.length > 1 && socket) {
+      const stroke = { points, color: penColor, width: penWidth, time: Date.now() };
+      strokesRef.current.push(stroke);
+      socket.emit('draw_stroke', { roomId, points, color: penColor, width: penWidth });
+    }
+    currentStrokeRef.current = [];
+  };
+
+  const clearDrawing = () => {
+    strokesRef.current = [];
+    renderStrokes();
+    if (socket) socket.emit('draw_clear', { roomId });
+  };
+
+  const renderStrokes = () => {
+    const canvas = drawCanvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    // Match canvas resolution to display size
+    const rect = canvas.getBoundingClientRect();
+    if (canvas.width !== rect.width * 2 || canvas.height !== rect.height * 2) {
+      canvas.width = rect.width * 2;
+      canvas.height = rect.height * 2;
+      ctx.scale(2, 2);
+    }
+    ctx.clearRect(0, 0, rect.width, rect.height);
+    const now = Date.now();
+    const w = rect.width;
+    const h = rect.height;
+
+    // Render saved strokes with fade
+    strokesRef.current = strokesRef.current.filter(s => now - s.time < 6000);
+    strokesRef.current.forEach(stroke => {
+      const age = now - stroke.time;
+      const fadeStart = 4000;
+      const alpha = age > fadeStart ? 1 - (age - fadeStart) / 2000 : 1;
+      if (alpha <= 0) return;
+      ctx.globalAlpha = alpha;
+      ctx.strokeStyle = stroke.color;
+      ctx.lineWidth = stroke.width;
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      ctx.shadowColor = stroke.color;
+      ctx.shadowBlur = 12;
+      ctx.beginPath();
+      stroke.points.forEach((p, i) => {
+        if (i === 0) ctx.moveTo(p.x * w, p.y * h);
+        else ctx.lineTo(p.x * w, p.y * h);
+      });
+      ctx.stroke();
+      ctx.shadowBlur = 0;
+    });
+
+    // Render current live stroke
+    if (currentStrokeRef.current.length > 1) {
+      ctx.globalAlpha = 1;
+      ctx.strokeStyle = penColor;
+      ctx.lineWidth = penWidth;
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      ctx.shadowColor = penColor;
+      ctx.shadowBlur = 14;
+      ctx.beginPath();
+      currentStrokeRef.current.forEach((p, i) => {
+        if (i === 0) ctx.moveTo(p.x * w, p.y * h);
+        else ctx.lineTo(p.x * w, p.y * h);
+      });
+      ctx.stroke();
+      ctx.shadowBlur = 0;
+    }
+    ctx.globalAlpha = 1;
+  };
+
+  // Auto-fade animation loop
+  useEffect(() => {
+    let running = true;
+    const loop = () => {
+      if (!running) return;
+      if (strokesRef.current.length > 0) renderStrokes();
+      drawAnimFrameRef.current = requestAnimationFrame(loop);
+    };
+    loop();
+    return () => { running = false; if (drawAnimFrameRef.current) cancelAnimationFrame(drawAnimFrameRef.current); };
+  }, [penColor, penWidth]);
+
+  // Receive remote strokes
+  useEffect(() => {
+    if (!socket) return;
+    const handleStroke = (data: { points: Array<{x:number;y:number}>; color: string; width: number }) => {
+      strokesRef.current.push({ ...data, time: Date.now() });
+      renderStrokes();
+    };
+    const handleClear = () => { strokesRef.current = []; renderStrokes(); };
+    socket.on('draw_stroke', handleStroke);
+    socket.on('draw_clear', handleClear);
+    return () => { socket.off('draw_stroke', handleStroke); socket.off('draw_clear', handleClear); };
+  }, [socket]);
 
   const sendChat = (e: React.FormEvent) => {
     e.preventDefault();
@@ -566,6 +701,45 @@ export default function Room() {
                 </span>
               </div>
               <div className="flex items-center gap-1.5">
+                {/* Pen Toggle */}
+                <div className="relative">
+                  <button onClick={() => setDrawMode(!drawMode)} className="transition-all active:scale-95" style={{
+                    padding: '4px 12px', borderRadius: '6px', fontSize: '11px', fontWeight: 600,
+                    background: drawMode ? 'rgba(0,255,136,0.15)' : 'rgba(107,114,128,0.08)',
+                    color: drawMode ? '#00ff88' : '#6b7280', border: drawMode ? '1px solid rgba(0,255,136,0.3)' : '1px solid transparent',
+                    cursor: 'pointer',
+                  }}>
+                    ✏️ {drawMode ? 'Pen ON' : 'Pen'}
+                  </button>
+                </div>
+                {drawMode && (
+                  <>
+                    {/* Color picker */}
+                    {['#00ff88', '#ff3366', '#ffdd00', '#00bbff', '#ff8800', '#ffffff'].map(c => (
+                      <button key={c} onClick={() => setPenColor(c)} className="transition-all active:scale-90" style={{
+                        width: 18, height: 18, borderRadius: '50%', border: penColor === c ? '2px solid white' : '2px solid transparent',
+                        background: c, cursor: 'pointer', boxShadow: penColor === c ? `0 0 8px ${c}` : 'none',
+                      }} />
+                    ))}
+                    {/* Width */}
+                    <select value={penWidth} onChange={(e) => setPenWidth(Number(e.target.value))} style={{
+                      background: '#374151', color: 'white', border: 'none', borderRadius: '4px',
+                      fontSize: '11px', padding: '2px 4px', cursor: 'pointer',
+                    }}>
+                      <option value={2}>Thin</option>
+                      <option value={3}>Medium</option>
+                      <option value={5}>Thick</option>
+                      <option value={8}>Bold</option>
+                    </select>
+                    {/* Clear */}
+                    <button onClick={clearDrawing} className="transition-all active:scale-95" style={{
+                      padding: '4px 10px', borderRadius: '6px', fontSize: '11px', fontWeight: 600,
+                      background: 'rgba(244,63,94,0.08)', color: '#f43f5e', border: 'none', cursor: 'pointer',
+                    }}>
+                      🗑 Clear
+                    </button>
+                  </>
+                )}
                 <button onClick={togglePause} className="transition-all active:scale-95" style={{
                   padding: '4px 12px', borderRadius: '6px', fontSize: '11px', fontWeight: 600,
                   background: isPaused ? 'rgba(52,211,153,0.12)' : 'rgba(244,63,94,0.08)',
@@ -591,9 +765,24 @@ export default function Room() {
                 </div>
               )}
 
+              {/* Drawing Canvas Overlay */}
+              <canvas
+                ref={drawCanvasRef}
+                className="absolute inset-0 w-full h-full"
+                style={{
+                  cursor: drawMode ? 'crosshair' : 'default',
+                  pointerEvents: drawMode ? 'auto' : 'none',
+                  zIndex: 10,
+                }}
+                onMouseDown={startDraw}
+                onMouseMove={moveDraw}
+                onMouseUp={endDraw}
+                onMouseLeave={endDraw}
+              />
+
               {/* Cursors */}
-              <div className="absolute inset-0 pointer-events-none overflow-hidden">
-                {Object.entries(cursors).map(([id, c]) => (
+              <div className="absolute inset-0 pointer-events-none overflow-hidden" style={{ zIndex: 11 }}>
+                {(Object.entries(cursors) as [string, Cursor][]).map(([id, c]) => (
                   <div key={id} className="absolute transition-all duration-100 ease-linear" style={{ left: `${c.x * 100}%`, top: `${c.y * 100}%`, transform: 'translate(-2px,-2px)' }}>
                     <svg width="18" height="18" viewBox="0 0 24 24" fill={c.color}><path d="M5.5 3.21V20.8c0 .45.54.67.85.35l4.86-4.86a.5.5 0 0 1 .35-.15h6.87c.45 0 .67-.54.35-.85L6.35 2.86a.5.5 0 0 0-.85.35Z" stroke="#fff" strokeWidth="1.5" strokeLinejoin="round"/></svg>
                     <span className="absolute left-4 top-3 text-[9px] font-bold px-1.5 py-0.5 rounded-md text-white whitespace-nowrap" style={{ background: c.color }}>{c.name}</span>

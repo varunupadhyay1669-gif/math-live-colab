@@ -105,22 +105,26 @@ export const injectedSyncScript = `
       }
     }, { passive: true });
 
-    // ── Scroll sync (throttled, guarded against loops) ──
+    // ── Scroll sync (heavily throttled, guarded) ──
     let lastScroll = 0;
+    let scrollTimeout = null;
     document.addEventListener('scroll', (e) => {
       if (isRemoteUpdate) return;
       const now = Date.now();
-      if (now - lastScroll > 200) {
+      if (now - lastScroll > 350) {
         lastScroll = now;
-        const maxW = document.documentElement.scrollWidth - window.innerWidth;
-        const maxH = document.documentElement.scrollHeight - window.innerHeight;
-        if (maxW > 0 || maxH > 0) {
-          window.parent.postMessage({ 
-            type: 'SYNC_SCROLL', 
-            scrollX: maxW > 0 ? window.scrollX / maxW : 0, 
-            scrollY: maxH > 0 ? window.scrollY / maxH : 0 
-          }, '*');
-        }
+        if (scrollTimeout) clearTimeout(scrollTimeout);
+        scrollTimeout = setTimeout(() => {
+          const maxW = document.documentElement.scrollWidth - window.innerWidth;
+          const maxH = document.documentElement.scrollHeight - window.innerHeight;
+          if (maxW > 0 || maxH > 0) {
+            window.parent.postMessage({ 
+              type: 'SYNC_SCROLL', 
+              scrollX: maxW > 0 ? window.scrollX / maxW : 0, 
+              scrollY: maxH > 0 ? window.scrollY / maxH : 0 
+            }, '*');
+          }
+        }, 100);
       }
     }, true);
 
@@ -201,8 +205,8 @@ export const injectedSyncScript = `
         isRemoteUpdate = true;
         const maxX = document.documentElement.scrollWidth - window.innerWidth;
         const maxY = document.documentElement.scrollHeight - window.innerHeight;
-        window.scrollTo({ left: data.scrollX * maxX, top: data.scrollY * maxY, behavior: 'instant' });
-        setTimeout(() => { isRemoteUpdate = false; }, 100);
+        window.scrollTo({ left: data.scrollX * maxX, top: data.scrollY * maxY, behavior: 'smooth' });
+        setTimeout(() => { isRemoteUpdate = false; }, 500);
       } else if (data.type === 'REMOTE_MOUSEDOWN') {
         const el = document.querySelector(data.path);
         if (el) {
