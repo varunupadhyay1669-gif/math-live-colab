@@ -1,0 +1,5 @@
+{
+  "name": "Collaborative Sandbox",
+  "description": "A real-time collaborative platform where users can upload and interact with HTML simulations together.",
+  "requestFramePermissions": []
+}
