@@ -19,6 +19,7 @@ interface RoomData {
   isPaused: boolean;
   teacherSocketId: string | null;
   createdAt: number;
+  lastActivityAt: number; // For clearing memory after 48 hours
   chat: Array<{ id: string; userId: string; userName: string; message: string; timestamp: number }>;
 }
 
@@ -34,6 +35,30 @@ async function startServer() {
 
   const rooms = new Map<string, RoomData>();
 
+  // ─── MEMORY MANAGEMENT (Garbage collection) ───
+  // Run every 10 minutes, sweep rooms inactive for > 48 hours
+  setInterval(() => {
+    const now = Date.now();
+    const expiryMs = 48 * 60 * 60 * 1000; // 48 hours
+    let deletedCount = 0;
+    
+    for (const [roomId, room] of rooms.entries()) {
+      if (now - room.lastActivityAt > expiryMs) {
+        rooms.delete(roomId);
+        deletedCount++;
+      }
+    }
+    
+    if (deletedCount > 0) {
+      console.log(`🧹 Memory Sweep: Cleared ${deletedCount} abandoned rooms.`);
+    }
+  }, 10 * 60 * 1000); 
+
+  function updateRoomActivity(roomId: string) {
+    const room = rooms.get(roomId);
+    if (room) room.lastActivityAt = Date.now();
+  }
+
   function createRoom(): RoomData {
     return {
       files: [],
@@ -43,6 +68,7 @@ async function startServer() {
       isPaused: false,
       teacherSocketId: null,
       createdAt: Date.now(),
+      lastActivityAt: Date.now(),
       chat: [],
     };
   }
@@ -60,6 +86,7 @@ async function startServer() {
 
     // ─── JOIN ROOM ───
     socket.on('join_room', ({ roomId, userName, role }: { roomId: string; userName: string; role: 'teacher' | 'student' }) => {
+      updateRoomActivity(roomId);
       socket.join(roomId);
       if (!rooms.has(roomId)) {
         rooms.set(roomId, createRoom());
@@ -87,6 +114,7 @@ async function startServer() {
 
     // ─── FILE MANAGEMENT ───
     socket.on('upload_file', ({ roomId, file }: { roomId: string; file: FileEntry }) => {
+      updateRoomActivity(roomId);
       const room = rooms.get(roomId);
       if (!room) return;
       room.files.push(file);
@@ -132,6 +160,7 @@ async function startServer() {
 
     // ─── RUN / REFRESH PREVIEW ───
     socket.on('run_preview', ({ roomId, fileId, html }: { roomId: string; fileId: string; html: string }) => {
+      updateRoomActivity(roomId);
       const room = rooms.get(roomId);
       if (!room) return;
       // Update the file content
@@ -167,6 +196,7 @@ async function startServer() {
 
     // ─── CHAT ───
     socket.on('send_chat', ({ roomId, message, userName }: { roomId: string; message: string; userName: string }) => {
+      updateRoomActivity(roomId);
       const room = rooms.get(roomId);
       if (!room) return;
       const chatMsg = {
@@ -243,11 +273,13 @@ async function startServer() {
 
     // ─── FOCUS MODE ───
     socket.on('focus_mode', ({ roomId, active, x, y, radius }: { roomId: string; active: boolean; x: number; y: number; radius: number }) => {
+      updateRoomActivity(roomId);
       socket.to(roomId).emit('focus_mode', { active, x, y, radius });
     });
 
     // ─── INTERACTION SYNC ───
     socket.on('interaction', ({ roomId, event }: { roomId: string; event: any }) => {
+      updateRoomActivity(roomId);
       event.userId = socket.id;
       const room = rooms.get(roomId);
       if (room) {
