@@ -1,36 +1,36 @@
 @import "tailwindcss";
 
-/* ===== Design System ===== */
+/* ===== Extreme Minimalist Design System ===== */
 :root {
-  --bg-primary: #07080a;
-  --bg-secondary: #0d0f14;
-  --bg-card: #12151c;
-  --bg-card-hover: #181c26;
-  --bg-elevated: #1a1e2a;
-  --border-subtle: #1e2231;
-  --border-default: #262b3a;
-  --border-active: #3b4262;
-  --text-primary: #f1f3f8;
-  --text-secondary: #8b92a8;
-  --text-muted: #5c6380;
-  --accent-blue: #4f8fff;
-  --accent-blue-glow: rgba(79, 143, 255, 0.15);
-  --accent-emerald: #34d399;
-  --accent-emerald-glow: rgba(52, 211, 153, 0.15);
-  --accent-violet: #8b5cf6;
-  --accent-violet-glow: rgba(139, 92, 246, 0.15);
-  --accent-amber: #fbbf24;
-  --accent-rose: #f43f5e;
-  --gradient-primary: linear-gradient(135deg, #4f8fff 0%, #8b5cf6 50%, #d946ef 100%);
-  --gradient-emerald: linear-gradient(135deg, #34d399 0%, #06b6d4 100%);
-  --gradient-warm: linear-gradient(135deg, #f59e0b 0%, #f43f5e 100%);
-  --shadow-glow-blue: 0 0 40px rgba(79, 143, 255, 0.12), 0 0 80px rgba(79, 143, 255, 0.06);
-  --shadow-glow-emerald: 0 0 40px rgba(52, 211, 153, 0.12), 0 0 80px rgba(52, 211, 153, 0.06);
+  --bg-primary: #000000;
+  --bg-secondary: #0a0a0a;
+  --bg-card: rgba(25, 25, 25, 0.6);
+  --bg-card-hover: rgba(40, 40, 40, 0.8);
+  --bg-elevated: rgba(30, 30, 30, 0.6);
+  --border-subtle: rgba(255, 255, 255, 0.08);
+  --border-default: rgba(255, 255, 255, 0.15);
+  --border-active: rgba(255, 255, 255, 0.3);
+  --text-primary: #ffffff;
+  --text-secondary: rgba(255, 255, 255, 0.6);
+  --text-muted: rgba(255, 255, 255, 0.4);
+  --accent-blue: #ffffff; /* Replaced with stark white for primary actions */
+  --accent-blue-glow: rgba(255, 255, 255, 0.1);
+  --accent-emerald: #34c759;
+  --accent-emerald-glow: rgba(52, 199, 89, 0.15);
+  --accent-violet: #8e8e93;
+  --accent-violet-glow: rgba(142, 142, 147, 0.15);
+  --accent-amber: #ffcc00;
+  --accent-rose: #ff3b30;
+  --gradient-primary: linear-gradient(to right, #111, #333);
+  --gradient-emerald: linear-gradient(135deg, #34c759 0%, #30b04f 100%);
+  --gradient-warm: linear-gradient(135deg, #ff9500 0%, #ff3b30 100%);
+  --shadow-glow-blue: 0 0 20px rgba(255, 255, 255, 0.1);
+  --shadow-glow-emerald: 0 0 20px rgba(52, 199, 89, 0.1);
   --radius-sm: 8px;
-  --radius-md: 12px;
-  --radius-lg: 16px;
-  --radius-xl: 20px;
-  --radius-2xl: 24px;
+  --radius-md: 14px;
+  --radius-lg: 20px;
+  --radius-xl: 32px;
+  --radius-2xl: 40px;
 }
 
 /* ===== Base ===== */

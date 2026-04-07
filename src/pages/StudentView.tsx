@@ -382,43 +382,43 @@ export default function StudentView() {
     <div className="h-screen w-screen flex flex-col overflow-hidden" style={{ background: '#000' }}>
 
       {/* ══════ SLIM TOP BAR ══════ */}
-      <div className="absolute top-4 left-4 right-4 z-40 flex items-center justify-between px-6 glass-ultra rounded-2xl mac-shadow"
-        style={{ height: '56px' }}>
+      <div className="absolute top-6 left-6 right-6 z-40 flex items-center justify-between px-6 glass rounded-full mac-shadow"
+        style={{ height: '60px', border: '1px solid rgba(255,255,255,0.08)' }}>
 
         <div className="flex items-center gap-4">
-          <span className="text-2xl drop-shadow-md">🧮</span>
-          <div className="flex items-center gap-3">
-            <span className="text-sm font-bold tracking-tight text-white/90 drop-shadow-md">
+          <span className="text-[22px]">🧮</span>
+          <div className="flex items-center gap-3 bg-black/20 px-3 py-1.5 rounded-full border border-white/5">
+            <span className="text-[13px] font-semibold tracking-tight text-white/90">
               {currentFileName || 'MathsLive'}
             </span>
-            <div className={`connection-dot ${connected ? 'online' : 'offline'}`} style={{ width: 8, height: 8 }} />
+            <div className={`connection-dot ${connected ? 'online' : 'offline'}`} style={{ width: 6, height: 6 }} />
           </div>
         </div>
 
         <div className="flex items-center gap-3">
           {/* Raise Hand */}
           <button onClick={raiseHand}
-            className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition-all ${handUp ? 'animate-hand-wave' : 'hover:bg-white/10'}`}
+            className={`flex items-center gap-2 px-5 py-2 rounded-full text-[13px] font-bold transition-all ${handUp ? 'animate-hand-wave' : 'hover:bg-white/10'}`}
             style={{
-              background: handUp ? 'rgba(251,191,36,0.15)' : 'rgba(255,255,255,0.05)',
-              border: `1px solid ${handUp ? 'rgba(251,191,36,0.3)' : 'rgba(255,255,255,0.1)'}`,
-              color: handUp ? '#fbbf24' : 'var(--text-secondary)',
+              background: handUp ? '#ffcc00' : 'transparent',
+              color: handUp ? 'black' : 'rgba(255,255,255,0.8)',
+              border: handUp ? 'none' : '1px solid rgba(255,255,255,0.2)'
             }}>
-            ✋ {handUp ? 'Hand Raised' : 'Raise Hand'}
+            {handUp ? '✋ Hand Raised' : '✋ Raise Hand'}
           </button>
 
           {/* Chat Toggle */}
           <button onClick={toggleChat}
-            className="relative flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition-all"
+            className="relative flex items-center gap-2 px-5 py-2 rounded-full text-[13px] font-bold transition-all"
             style={{
-              background: chatOpen ? 'var(--accent-blue)' : 'rgba(255,255,255,0.05)',
-              border: `1px solid ${chatOpen ? 'transparent' : 'rgba(255,255,255,0.1)'}`,
-              color: chatOpen ? 'white' : 'var(--text-secondary)',
+              background: chatOpen ? 'white' : 'rgba(255,255,255,0.1)',
+              color: chatOpen ? 'black' : 'white',
+              border: 'none'
             }}>
             💬 Chat
             {unreadChat > 0 && (
-              <span className="absolute -top-2 -right-2 w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold text-white animate-bounce-in mac-shadow"
-                style={{ background: 'var(--accent-rose)' }}>
+              <span className="absolute -top-1 -right-1 w-5 h-5 rounded-full flex items-center justify-center text-[11px] font-bold text-white animate-bounce-in mac-shadow"
+                style={{ background: '#ff3b30' }}>
                 {unreadChat}
               </span>
             )}
@@ -460,12 +460,7 @@ export default function StudentView() {
           {/* ── Drawing Canvas Overlay ── */}
           <canvas ref={drawCanvasRef}
             className="absolute inset-0 w-full h-full pointer-events-none"
-            style={{ zIndex: 10, pointerEvents: 'auto' }}
-            onWheel={(e) => {
-              if (iframeRef.current?.contentWindow) {
-                iframeRef.current.contentWindow.scrollBy(e.deltaX, e.deltaY);
-              }
-            }} />
+            style={{ zIndex: 10 }} />
 
           {/* ── Teacher Cursor Overlay ── */}
           <div className="absolute inset-0 pointer-events-none overflow-hidden" style={{ zIndex: 11 }}>
