@@ -90,13 +90,12 @@ async function startServer() {
       const room = rooms.get(roomId);
       if (!room) return;
       room.files.push(file);
-      if (!room.activeFileId) {
-        room.activeFileId = file.id;
-      }
-      io.to(roomId).emit('file_uploaded', file);
-      // Auto-activate newly uploaded file
       room.activeFileId = file.id;
+      room.lastRunHtml = file.html;
+      io.to(roomId).emit('file_uploaded', file);
       io.to(roomId).emit('active_file_changed', file.id);
+      // Auto-push HTML to all connected students immediately
+      io.to(roomId).emit('run_preview', { fileId: file.id, html: file.html });
     });
 
     socket.on('update_file', ({ roomId, fileId, html }: { roomId: string; fileId: string; html: string }) => {
@@ -123,6 +122,11 @@ async function startServer() {
       const room = rooms.get(roomId);
       if (!room) return;
       room.activeFileId = fileId;
+      const file = room.files.find(f => f.id === fileId);
+      if (file) {
+        room.lastRunHtml = file.html;
+        io.to(roomId).emit('run_preview', { fileId, html: file.html });
+      }
       io.to(roomId).emit('active_file_changed', fileId);
     });
 
