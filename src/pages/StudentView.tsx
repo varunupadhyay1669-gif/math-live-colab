@@ -103,7 +103,12 @@ export default function StudentView() {
       setActiveFileId(state.activeFileId);
       setIsPaused(state.isPaused);
       setChatMessages(state.chat || []);
-      if (state.activeFileId && state.files) {
+      // Use lastRunHtml (what teacher last ran) — this fixes late-join
+      if (state.lastRunHtml) {
+        const f = state.files?.find((f: FileEntry) => f.id === state.activeFileId);
+        setCurrentFileName(f?.name || 'Simulation');
+        setIframeUrl(buildIframeUrl(state.lastRunHtml));
+      } else if (state.activeFileId && state.files) {
         const f = state.files.find((f: FileEntry) => f.id === state.activeFileId);
         if (f) {
           setCurrentFileName(f.name);

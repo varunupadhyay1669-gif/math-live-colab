@@ -14,6 +14,7 @@ interface FileEntry {
 interface RoomData {
   files: FileEntry[];
   activeFileId: string | null;
+  lastRunHtml: string | null;
   users: Map<string, { name: string; role: 'teacher' | 'student'; joinedAt: number }>;
   isPaused: boolean;
   teacherSocketId: string | null;
@@ -37,6 +38,7 @@ async function startServer() {
     return {
       files: [],
       activeFileId: null,
+      lastRunHtml: null,
       users: new Map(),
       isPaused: false,
       teacherSocketId: null,
@@ -73,6 +75,7 @@ async function startServer() {
       socket.emit('room_state', {
         files: room.files,
         activeFileId: room.activeFileId,
+        lastRunHtml: room.lastRunHtml,
         isPaused: room.isPaused,
         users: getRoomUserList(room),
         chat: room.chat.slice(-50), // Last 50 messages
@@ -133,6 +136,7 @@ async function startServer() {
         file.html = html;
       }
       room.activeFileId = fileId;
+      room.lastRunHtml = html;
       // Send to everyone (including sender for confirmation)
       io.to(roomId).emit('run_preview', { fileId, html });
     });

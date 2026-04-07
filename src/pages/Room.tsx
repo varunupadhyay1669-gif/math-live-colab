@@ -688,66 +688,71 @@ export default function Room() {
           <div className="flex-1 flex flex-col relative" style={{ background: '#ffffff' }}>
 
             {/* Preview Header */}
-            <div className="flex items-center justify-between px-3 shrink-0" style={{ height: '36px', background: '#f5f6f8', borderBottom: '1px solid #e2e4ea' }}>
-              <div className="flex items-center gap-2">
-                {/* Browser dots */}
-                <div className="flex gap-1.5">
-                  <div style={{ width: 10, height: 10, borderRadius: '50%', background: '#ff5f57' }} />
-                  <div style={{ width: 10, height: 10, borderRadius: '50%', background: '#ffbd2e' }} />
-                  <div style={{ width: 10, height: 10, borderRadius: '50%', background: '#28c840' }} />
+            <div className="shrink-0" style={{ background: '#f5f6f8', borderBottom: '1px solid #e2e4ea' }}>
+              <div className="flex items-center justify-between px-3" style={{ minHeight: '38px' }}>
+                <div className="flex items-center gap-2">
+                  {/* Browser dots */}
+                  <div className="flex gap-1.5">
+                    <div style={{ width: 10, height: 10, borderRadius: '50%', background: '#ff5f57' }} />
+                    <div style={{ width: 10, height: 10, borderRadius: '50%', background: '#ffbd2e' }} />
+                    <div style={{ width: 10, height: 10, borderRadius: '50%', background: '#28c840' }} />
+                  </div>
+                  <span className="text-[11px] font-medium ml-2" style={{ color: '#6b7280' }}>
+                    {isPaused && '⏸ PAUSED — '}{files.find(f => f.id === activeFileId)?.name || 'Preview'}
+                  </span>
                 </div>
-                <span className="text-[11px] font-medium ml-2" style={{ color: '#6b7280' }}>
-                  {isPaused && '⏸ PAUSED — '}{files.find(f => f.id === activeFileId)?.name || 'Preview'}
-                </span>
-              </div>
-              <div className="flex items-center gap-1.5">
-                {/* Pen Toggle */}
-                <div className="relative">
+                <div className="flex items-center gap-1.5">
+                  {/* Pen Toggle */}
                   <button onClick={() => setDrawMode(!drawMode)} className="transition-all active:scale-95" style={{
-                    padding: '4px 12px', borderRadius: '6px', fontSize: '11px', fontWeight: 600,
-                    background: drawMode ? 'rgba(0,255,136,0.15)' : 'rgba(107,114,128,0.08)',
-                    color: drawMode ? '#00ff88' : '#6b7280', border: drawMode ? '1px solid rgba(0,255,136,0.3)' : '1px solid transparent',
+                    padding: '5px 14px', borderRadius: '6px', fontSize: '12px', fontWeight: 700,
+                    background: drawMode ? 'rgba(0,255,136,0.2)' : 'rgba(107,114,128,0.1)',
+                    color: drawMode ? '#00cc66' : '#6b7280',
+                    border: drawMode ? '1.5px solid rgba(0,200,100,0.4)' : '1px solid rgba(107,114,128,0.2)',
                     cursor: 'pointer',
                   }}>
                     ✏️ {drawMode ? 'Pen ON' : 'Pen'}
                   </button>
+                  <button onClick={togglePause} className="transition-all active:scale-95" style={{
+                    padding: '5px 14px', borderRadius: '6px', fontSize: '12px', fontWeight: 600,
+                    background: isPaused ? 'rgba(52,211,153,0.12)' : 'rgba(244,63,94,0.08)',
+                    color: isPaused ? '#10b981' : '#f43f5e', border: 'none', cursor: 'pointer',
+                  }}>
+                    {isPaused ? '▶ Resume' : '⏸ Pause'}
+                  </button>
                 </div>
-                {drawMode && (
-                  <>
-                    {/* Color picker */}
-                    {['#00ff88', '#ff3366', '#ffdd00', '#00bbff', '#ff8800', '#ffffff'].map(c => (
-                      <button key={c} onClick={() => setPenColor(c)} className="transition-all active:scale-90" style={{
-                        width: 18, height: 18, borderRadius: '50%', border: penColor === c ? '2px solid white' : '2px solid transparent',
-                        background: c, cursor: 'pointer', boxShadow: penColor === c ? `0 0 8px ${c}` : 'none',
-                      }} />
-                    ))}
-                    {/* Width */}
-                    <select value={penWidth} onChange={(e) => setPenWidth(Number(e.target.value))} style={{
-                      background: '#374151', color: 'white', border: 'none', borderRadius: '4px',
-                      fontSize: '11px', padding: '2px 4px', cursor: 'pointer',
-                    }}>
-                      <option value={2}>Thin</option>
-                      <option value={3}>Medium</option>
-                      <option value={5}>Thick</option>
-                      <option value={8}>Bold</option>
-                    </select>
-                    {/* Clear */}
-                    <button onClick={clearDrawing} className="transition-all active:scale-95" style={{
-                      padding: '4px 10px', borderRadius: '6px', fontSize: '11px', fontWeight: 600,
-                      background: 'rgba(244,63,94,0.08)', color: '#f43f5e', border: 'none', cursor: 'pointer',
-                    }}>
-                      🗑 Clear
-                    </button>
-                  </>
-                )}
-                <button onClick={togglePause} className="transition-all active:scale-95" style={{
-                  padding: '4px 12px', borderRadius: '6px', fontSize: '11px', fontWeight: 600,
-                  background: isPaused ? 'rgba(52,211,153,0.12)' : 'rgba(244,63,94,0.08)',
-                  color: isPaused ? '#10b981' : '#f43f5e', border: 'none', cursor: 'pointer',
-                }}>
-                  {isPaused ? '▶ Resume' : '⏸ Pause'}
-                </button>
               </div>
+              {/* Pen Controls Row */}
+              {drawMode && (
+                <div className="flex items-center gap-2 px-3 py-1.5 animate-fade-in" style={{ borderTop: '1px solid #e2e4ea', background: '#1a1a2e' }}>
+                  <span className="text-[10px] font-bold" style={{ color: '#6b7280', letterSpacing: '0.05em' }}>COLOR</span>
+                  {['#00ff88', '#ff3366', '#ffdd00', '#00bbff', '#ff8800', '#ffffff'].map(c => (
+                    <button key={c} onClick={() => setPenColor(c)} className="transition-all active:scale-90" style={{
+                      width: 20, height: 20, borderRadius: '50%',
+                      border: penColor === c ? '2.5px solid #fff' : '2px solid rgba(255,255,255,0.2)',
+                      background: c, cursor: 'pointer',
+                      boxShadow: penColor === c ? `0 0 10px ${c}` : 'none',
+                    }} />
+                  ))}
+                  <div style={{ width: '1px', height: '16px', background: 'rgba(255,255,255,0.1)', margin: '0 4px' }} />
+                  <span className="text-[10px] font-bold" style={{ color: '#6b7280', letterSpacing: '0.05em' }}>SIZE</span>
+                  <select value={penWidth} onChange={(e) => setPenWidth(Number(e.target.value))} style={{
+                    background: '#2d2d44', color: 'white', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '6px',
+                    fontSize: '11px', padding: '3px 8px', cursor: 'pointer',
+                  }}>
+                    <option value={2}>Thin</option>
+                    <option value={3}>Medium</option>
+                    <option value={5}>Thick</option>
+                    <option value={8}>Bold</option>
+                  </select>
+                  <div className="flex-1" />
+                  <button onClick={clearDrawing} className="transition-all active:scale-95" style={{
+                    padding: '4px 12px', borderRadius: '6px', fontSize: '11px', fontWeight: 600,
+                    background: 'rgba(244,63,94,0.15)', color: '#ff6b8a', border: 'none', cursor: 'pointer',
+                  }}>
+                    🗑 Clear All
+                  </button>
+                </div>
+              )}
             </div>
 
             {/* Iframe */}
