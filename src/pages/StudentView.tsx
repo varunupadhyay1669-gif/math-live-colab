@@ -379,46 +379,36 @@ export default function StudentView() {
   };
 
   return (
-    <div className="h-screen w-screen flex flex-col overflow-hidden" style={{ background: '#000' }}>
+    <div className="h-screen w-screen flex flex-col overflow-hidden" style={{ background: '#0F0F11' }}>
 
       {/* ══════ SLIM TOP BAR ══════ */}
-      <div className="absolute top-6 left-6 right-6 z-40 flex items-center justify-between px-6 glass rounded-full mac-shadow"
-        style={{ height: '60px', border: '1px solid rgba(255,255,255,0.08)' }}>
+      <div className="absolute top-6 left-8 right-8 z-40 flex items-center justify-between px-8 lux-glass rounded-2xl"
+        style={{ height: '72px' }}>
 
-        <div className="flex items-center gap-4">
-          <span className="text-[22px]">🧮</span>
-          <div className="flex items-center gap-3 bg-black/20 px-3 py-1.5 rounded-full border border-white/5">
-            <span className="text-[13px] font-semibold tracking-tight text-white/90">
+        <div className="flex items-center gap-6">
+          <span className="text-2xl" style={{ textShadow: '0 2px 10px rgba(212,175,55,0.4)' }}>🧮</span>
+          <div className="flex items-center gap-3 bg-[rgba(212,175,55,0.05)] px-4 py-2 rounded-lg border border-[rgba(212,175,55,0.1)]">
+            <span className="text-[14px] font-serif tracking-wide text-[var(--accent-gold)]">
               {currentFileName || 'MathsLive'}
             </span>
-            <div className={`connection-dot ${connected ? 'online' : 'offline'}`} style={{ width: 6, height: 6 }} />
+            <div className={`connection-dot ${connected ? 'online' : 'offline'}`} style={{ width: 8, height: 8, background: connected ? '#d4af37' : 'gray', boxShadow: connected ? '0 0 10px #d4af37' : 'none' }} />
           </div>
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-4">
           {/* Raise Hand */}
           <button onClick={raiseHand}
-            className={`flex items-center gap-2 px-5 py-2 rounded-full text-[13px] font-bold transition-all ${handUp ? 'animate-hand-wave' : 'hover:bg-white/10'}`}
-            style={{
-              background: handUp ? '#ffcc00' : 'transparent',
-              color: handUp ? 'black' : 'rgba(255,255,255,0.8)',
-              border: handUp ? 'none' : '1px solid rgba(255,255,255,0.2)'
-            }}>
+            className={`flex items-center gap-2 px-6 py-2 rounded-lg text-[13px] font-bold transition-all hover:scale-[1.02] ${handUp ? 'animate-hand-wave lux-button-active' : 'lux-button'}`}>
             {handUp ? '✋ Hand Raised' : '✋ Raise Hand'}
           </button>
 
           {/* Chat Toggle */}
           <button onClick={toggleChat}
-            className="relative flex items-center gap-2 px-5 py-2 rounded-full text-[13px] font-bold transition-all"
-            style={{
-              background: chatOpen ? 'white' : 'rgba(255,255,255,0.1)',
-              color: chatOpen ? 'black' : 'white',
-              border: 'none'
-            }}>
-            💬 Chat
+            className={`relative flex items-center gap-2 px-6 py-2 rounded-lg text-[13px] transition-all hover:scale-[1.02] ${chatOpen ? 'lux-button-active' : 'lux-button'}`}>
+            💬 Classroom Chat
             {unreadChat > 0 && (
-              <span className="absolute -top-1 -right-1 w-5 h-5 rounded-full flex items-center justify-center text-[11px] font-bold text-white animate-bounce-in mac-shadow"
-                style={{ background: '#ff3b30' }}>
+              <span className="absolute -top-2 -right-2 w-6 h-6 rounded-full flex items-center justify-center text-[11px] font-bold text-white animate-bounce-in shadow-lg"
+                style={{ background: 'var(--accent-rose)' }}>
                 {unreadChat}
               </span>
             )}
@@ -441,13 +431,13 @@ export default function StudentView() {
             />
           ) : (
             <div className="flex items-center justify-center h-full" style={{ background: 'var(--bg-primary)' }}>
-              <div className="text-center animate-slide-up">
-                <div className="text-6xl mb-6 animate-float">⏳</div>
-                <h2 className="text-2xl font-bold mb-3 gradient-text">Waiting for teacher...</h2>
-                <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
-                  Your teacher will load a simulation shortly
+              <div className="text-center animate-slide-up bg-[rgba(212,175,55,0.02)] p-12 rounded-2xl border border-[var(--border-subtle)] shadow-[var(--shadow-lux)]">
+                <div className="text-6xl mb-6 animate-float" style={{ filter: 'drop-shadow(0 0 15px rgba(212,175,55,0.3))' }}>⏳</div>
+                <h2 className="text-3xl font-serif font-bold mb-4 text-[var(--accent-gold)]">Waiting for teacher...</h2>
+                <p className="text-[14px] leading-relaxed text-white/50">
+                  Your teacher will load a simulation shortly.
                 </p>
-                <div className="flex items-center justify-center gap-1 mt-6">
+                <div className="flex items-center justify-center gap-2 mt-8">
                   {[0, 1, 2].map(i => (
                     <div key={i} className="w-2 h-2 rounded-full"
                       style={{ background: 'var(--accent-blue)', animation: `dot-pulse 1.5s ease-in-out infinite`, animationDelay: `${i * 0.3}s` }} />

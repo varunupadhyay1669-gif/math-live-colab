@@ -621,48 +621,48 @@ export default function Room() {
         </div>
       )}
 
-      {/* ═══ MINIMALIST APPLE-STYLE HEADER ═══ */}
-      <div className="pt-6 px-6 shrink-0 z-40">
-        <header className="flex items-center justify-between px-6 glass rounded-full"
-          style={{ height: '60px', border: '1px solid rgba(255,255,255,0.08)' }}>
+      {/* ═══ LUXURIOUS CLASSICAL HEADER ═══ */}
+      <div className="pt-6 px-8 shrink-0 z-40">
+        <header className="flex items-center justify-between px-8 lux-glass rounded-2xl"
+          style={{ height: '72px' }}>
 
           {/* Left: Logo + Room */}
-          <div className="flex items-center gap-6">
-            <button onClick={() => navigate('/')} className="flex items-center gap-3 transition-opacity hover:opacity-70" style={{ background: 'none', border: 'none', cursor: 'pointer' }}>
-              <span className="text-xl">🧮</span>
-              <span className="font-semibold tracking-tight text-white/90 text-[17px]">MathsLive</span>
+          <div className="flex items-center gap-8">
+            <button onClick={() => navigate('/')} className="flex items-center gap-3 transition-opacity hover:opacity-80" style={{ background: 'none', border: 'none', cursor: 'pointer' }}>
+              <span className="text-2xl" style={{ textShadow: '0 2px 10px rgba(212,175,55,0.4)' }}>🧮</span>
+              <span className="font-serif font-bold tracking-wide text-white text-xl">MathsLive</span>
             </button>
             
-            <div className="hidden sm:flex items-center gap-2 px-3 py-1 rounded-full" style={{ background: 'rgba(255,255,255,0.06)' }}>
-              <span className="text-[10px] font-medium text-white/40 uppercase tracking-widest">Room</span>
-              <span className="text-[13px] font-mono font-medium text-white/90">{roomId}</span>
+            <div className="hidden sm:flex items-center gap-3 px-4 py-2 rounded-lg" style={{ background: 'rgba(212,175,55,0.05)', border: '1px solid rgba(212,175,55,0.1)' }}>
+              <span className="text-[11px] font-semibold text-[var(--accent-gold)] uppercase tracking-widest">Room</span>
+              <span className="text-[14px] font-mono font-medium text-white/90">{roomId}</span>
             </div>
             
             {/* View Mode Toggles */}
-            <div className="flex items-center rounded-full overflow-hidden p-1 ml-2" style={{ background: 'rgba(255,255,255,0.06)' }}>
-              <button onClick={() => setViewMode('code')} className="px-5 py-1.5 rounded-full text-[13px] font-medium transition-all" style={{ background: viewMode === 'code' ? 'white' : 'transparent', color: viewMode === 'code' ? 'black' : 'rgba(255,255,255,0.6)' }}>Code</button>
-              <button onClick={() => setViewMode('split')} className="px-5 py-1.5 rounded-full text-[13px] font-medium transition-all" style={{ background: viewMode === 'split' ? 'white' : 'transparent', color: viewMode === 'split' ? 'black' : 'rgba(255,255,255,0.6)' }}>Split</button>
-              <button onClick={() => setViewMode('preview')} className="px-5 py-1.5 rounded-full text-[13px] font-medium transition-all" style={{ background: viewMode === 'preview' ? 'white' : 'transparent', color: viewMode === 'preview' ? 'black' : 'rgba(255,255,255,0.6)' }}>Preview</button>
+            <div className="flex items-center gap-2 ml-4">
+              <button onClick={() => setViewMode('code')} className={`px-6 py-2 rounded-lg text-[13px] transition-all ${viewMode === 'code' ? 'lux-button-active' : 'lux-button'}`}>Code</button>
+              <button onClick={() => setViewMode('split')} className={`px-6 py-2 rounded-lg text-[13px] transition-all ${viewMode === 'split' ? 'lux-button-active' : 'lux-button'}`}>Split</button>
+              <button onClick={() => setViewMode('preview')} className={`px-6 py-2 rounded-lg text-[13px] transition-all ${viewMode === 'preview' ? 'lux-button-active' : 'lux-button'}`}>Preview</button>
             </div>
           </div>
 
           {/* Right: Status + Actions */}
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-5">
             {/* Challenge Timer */}
             <div className="relative">
-              <button onClick={() => setShowTimerMenu(!showTimerMenu)} className="transition-all active:scale-95 px-4 py-1.5 rounded-full text-[13px] font-medium flex items-center gap-2"
-                style={{ background: challengeTimer ? 'rgba(255,204,0,0.15)' : 'transparent', color: challengeTimer ? '#ffcc00' : 'rgba(255,255,255,0.8)' }}>
+              <button onClick={() => setShowTimerMenu(!showTimerMenu)} className="transition-all active:scale-95 px-6 py-2 rounded-lg text-[13px] font-medium flex items-center gap-2 lux-button"
+                style={{ color: challengeTimer ? 'var(--accent-gold)' : 'var(--text-primary)', borderColor: challengeTimer ? 'var(--accent-gold)' : 'var(--border-default)' }}>
                 {challengeTimer ? `⏱ ${challengeTimer.remaining}s` : 'Timer ⏱'}
               </button>
               {showTimerMenu && (
-                <div className="absolute top-full right-0 mt-3 z-50 animate-slide-down glass rounded-2xl p-2 min-w-[140px] mac-shadow" style={{ border: '1px solid rgba(255,255,255,0.1)' }}>
+                <div className="absolute top-full right-0 mt-3 z-50 animate-slide-down lux-glass rounded-xl p-2 min-w-[140px]">
                   {[30, 60, 90, 120, 180].map(sec => (
-                    <button key={sec} onClick={() => startChallengeTimer(sec)} className="w-full text-left px-4 py-2 rounded-xl text-[13px] font-medium hover:bg-white/10 transition-all text-white/90">
+                    <button key={sec} onClick={() => startChallengeTimer(sec)} className="w-full text-left px-4 py-3 rounded-lg text-[13px] font-medium hover:bg-[rgba(212,175,55,0.1)] transition-all text-white/90">
                       ⏱ {sec >= 60 ? `${sec / 60} min` : `${sec}s`}
                     </button>
                   ))}
                   {challengeTimer && (
-                    <button onClick={stopChallengeTimer} className="w-full text-left px-4 py-2 rounded-xl text-[13px] font-medium hover:bg-red-500/20 transition-all text-red-500 mt-1">
+                    <button onClick={stopChallengeTimer} className="w-full text-left px-4 py-3 rounded-lg text-[13px] font-medium hover:bg-red-500/10 transition-all text-[var(--accent-rose)] mt-1">
                       ✕ Stop Timer
                     </button>
                   )}
@@ -671,23 +671,22 @@ export default function Room() {
             </div>
 
             {/* Celebration */}
-            <button onClick={triggerCelebration} className="transition-all active:scale-95 hover:bg-white/10 flex items-center justify-center w-8 h-8 rounded-full" style={{ fontSize: '15px' }}>
+            <button onClick={triggerCelebration} className="transition-all active:scale-95 px-4 py-2 rounded-lg lux-button" style={{ fontSize: '15px' }}>
               🎉
             </button>
 
-            <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-full text-[13px] font-mono font-medium text-white/50">
+            <div className="hidden sm:flex items-center gap-2 px-4 py-2 rounded-lg text-[14px] font-mono font-medium text-white/60">
               {formatTime(sessionTimer)}
             </div>
 
-            <div className="flex items-center gap-2 px-3 py-1.5 rounded-full text-[13px] font-medium"
-              style={{ color: studentCount > 0 ? '#34c759' : 'rgba(255,255,255,0.4)', background: studentCount > 0 ? 'rgba(52,199,89,0.1)' : 'transparent' }}>
-              <div className={`connection-dot ${studentCount > 0 ? 'online' : 'offline'}`} style={{ width: 6, height: 6 }} />
+            <div className="flex items-center gap-3 px-4 py-2 rounded-lg text-[13px] font-medium"
+              style={{ color: studentCount > 0 ? '#d4af37' : 'rgba(255,255,255,0.4)', border: '1px solid var(--border-subtle)' }}>
+              <div className={`connection-dot ${studentCount > 0 ? 'online' : 'offline'}`} style={{ width: 8, height: 8, background: studentCount > 0 ? '#d4af37' : 'gray', boxShadow: studentCount > 0 ? '0 0 10px #d4af37' : 'none' }} />
               {studentCount}
             </div>
 
-            <button onClick={copyStudentLink} className="transition-all active:scale-95 px-5 py-1.5 rounded-full text-[13px] font-medium flex items-center gap-2 ml-2"
-              style={{ background: linkCopied ? '#34c759' : 'white', color: linkCopied ? 'white' : 'black', border: 'none' }}>
-              {linkCopied ? 'Copied ✓' : 'Share 🔗'}
+            <button onClick={copyStudentLink} className={`transition-all active:scale-95 px-6 py-2 rounded-lg text-[13px] flex items-center gap-2 ml-2 ${linkCopied ? 'lux-button-active' : 'lux-button'}`}>
+              {linkCopied ? 'Copied ✓' : 'Share Link 🔗'}
             </button>
           </div>
         </header>
@@ -705,22 +704,20 @@ export default function Room() {
 
         {/* ──── LEFT: Files + Code Editor ──── */}
         {showLeftPanel && (
-          <div className="flex flex-col glass rounded-2xl overflow-hidden mac-shadow" style={{
+          <div className="flex flex-col lux-panel rounded-2xl overflow-hidden" style={{
             width: viewMode === 'code' ? '100%' : '40%', minWidth: viewMode === 'split' ? '320px' : undefined,
             transition: 'width 0.4s cubic-bezier(0.16, 1, 0.3, 1)',
           }}>
 
             {/* Upload Bar */}
-            <div className="flex items-center gap-3 px-5 py-4 shrink-0" style={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+            <div className="flex items-center gap-4 px-6 py-4 shrink-0" style={{ borderBottom: '1px solid var(--border-subtle)', background: 'rgba(0,0,0,0.5)' }}>
               <input type="file" accept=".html,.htm" ref={fileInputRef} onChange={uploadFileFromInput} className="hidden" multiple />
 
-              <button onClick={() => fileInputRef.current?.click()} className="flex items-center gap-2 px-5 py-2 rounded-full text-[13px] font-medium transition-all hover:bg-white/90 active:scale-95"
-                style={{ background: 'white', color: 'black' }}>
+              <button onClick={() => fileInputRef.current?.click()} className="flex items-center gap-2 px-6 py-2.5 rounded-lg text-[13px] lux-button-active hover:scale-[1.02]">
                 Upload HTML
               </button>
 
-              <button onClick={() => setShowPasteModal(true)} className="flex items-center gap-2 px-5 py-2 rounded-full text-[13px] font-medium transition-all hover:bg-white/10 active:scale-95"
-                style={{ background: 'rgba(255,255,255,0.05)', color: 'white' }}>
+              <button onClick={() => setShowPasteModal(true)} className="flex items-center gap-2 px-6 py-2.5 rounded-lg text-[13px] lux-button hover:scale-[1.02]">
                 Paste Code
               </button>
 
@@ -729,18 +726,19 @@ export default function Room() {
 
             {/* File Tabs */}
             {files.length > 0 && (
-              <div className="flex gap-2 px-4 py-2 overflow-x-auto shrink-0 scrollbar-hide" style={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+              <div className="flex gap-2 px-5 py-3 overflow-x-auto shrink-0 scrollbar-hide" style={{ borderBottom: '1px solid var(--border-subtle)', background: 'rgba(212,175,55,0.03)' }}>
                 {files.map(f => (
                   <button key={f.id} onClick={() => switchFile(f.id)}
-                    className="flex items-center gap-2 px-4 py-1.5 rounded-full text-[13px] shrink-0 transition-all group"
+                    className="flex items-center gap-2 px-5 py-2 rounded-lg text-[13px] shrink-0 transition-all group"
                     style={{
-                      background: activeFileId === f.id ? 'rgba(255,255,255,0.1)' : 'transparent',
-                      color: activeFileId === f.id ? 'white' : 'rgba(255,255,255,0.5)',
+                      background: activeFileId === f.id ? 'var(--gradient-gold)' : 'transparent',
+                      color: activeFileId === f.id ? '#000' : 'var(--text-secondary)',
+                      border: activeFileId === f.id ? '1px solid #aa8c2c' : '1px solid transparent',
                       fontWeight: activeFileId === f.id ? 600 : 400,
                     }}>
                     <span className="max-w-[120px] truncate">{f.name}</span>
                     <span onClick={(e) => { e.stopPropagation(); deleteFile(f.id); }}
-                      className="opacity-0 group-hover:opacity-100 ml-1 hover:text-white cursor-pointer text-lg leading-none transition-opacity" style={{ color: 'rgba(255,255,255,0.3)' }}>
+                      className={`opacity-0 group-hover:opacity-100 ml-2 cursor-pointer text-lg leading-none transition-opacity ${activeFileId === f.id ? 'text-black/60 hover:text-black' : 'text-white/30 hover:text-white'}`}>
                       ×
                     </span>
                   </button>
@@ -753,19 +751,17 @@ export default function Room() {
               {files.length === 0 ? (
                 // Empty state: Upload prompt
                 <div className="absolute inset-0 flex items-center justify-center p-8 bg-transparent">
-                  <div className="text-center max-w-sm glass p-10 rounded-[32px] mac-shadow animate-slide-up" style={{ border: '1px solid rgba(255,255,255,0.1)' }}>
-                    <div className="text-5xl mb-6 animate-float opacity-80" style={{ filter: 'grayscale(100%)' }}>📄</div>
-                    <h3 className="text-2xl font-bold mb-3 text-white tracking-tight">No Simulation</h3>
-                    <p className="text-[13px] mb-8 text-white/40 leading-relaxed font-medium">
-                      Select a file from your device or paste an HTML snippet to begin.
+                  <div className="text-center max-w-sm lux-glass p-12 rounded-2xl animate-slide-up">
+                    <div className="text-5xl mb-6 animate-float" style={{ filter: 'drop-shadow(0 0 15px rgba(212,175,55,0.3))' }}>📄</div>
+                    <h3 className="text-2xl font-serif font-bold mb-4 text-white tracking-wide">Empty Canvas</h3>
+                    <p className="text-[14px] mb-10 text-white/50 leading-relaxed">
+                      Begin by uploading an HTML file or pasting an interactive code snippet.
                     </p>
-                    <div className="flex flex-col gap-3 justify-center">
-                      <button onClick={() => fileInputRef.current?.click()} className="py-3 px-6 rounded-full font-medium transition-all active:scale-95 text-black text-[14px]"
-                        style={{ background: 'white' }}>
+                    <div className="flex flex-col gap-4 justify-center">
+                      <button onClick={() => fileInputRef.current?.click()} className="py-3 px-8 rounded-lg text-[14px] transition-all hover:scale-[1.02] lux-button-active">
                         Browse Files
                       </button>
-                      <button onClick={() => setShowPasteModal(true)} className="py-3 px-6 rounded-full font-medium transition-all active:scale-95 hover:bg-white/10 text-[14px]"
-                        style={{ background: 'rgba(255,255,255,0.05)', color: 'white' }}>
+                      <button onClick={() => setShowPasteModal(true)} className="py-3 px-8 rounded-lg text-[14px] transition-all hover:scale-[1.02] lux-button">
                         Paste Snippet
                       </button>
                     </div>
@@ -774,15 +770,14 @@ export default function Room() {
               ) : (
                 <>
                   {/* Editor header with Run button */}
-                  <div className="flex items-center justify-between px-5 py-3 shrink-0" style={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
-                    <span className="text-[11px] font-medium tracking-widest text-white/30 uppercase">
+                  <div className="flex items-center justify-between px-6 py-3 shrink-0" style={{ borderBottom: '1px solid var(--border-subtle)', background: 'rgba(0,0,0,0.3)' }}>
+                    <span className="text-[12px] font-semibold tracking-widest text-[var(--accent-gold)] uppercase">
                       {files.find(f => f.id === activeFileId)?.name || 'Editor'}
                     </span>
-                    <div className="flex items-center gap-4">
+                    <div className="flex items-center gap-5">
                       <span className="text-[11px] font-mono text-white/20 hidden sm:inline">⌘ + Enter</span>
-                      <button onClick={runPreview} className="flex items-center gap-1.5 px-5 py-1.5 rounded-full text-[13px] font-bold text-black transition-all hover:scale-105 active:scale-95"
-                        style={{ background: 'white' }}>
-                        ▶ Run
+                      <button onClick={runPreview} className="flex items-center gap-2 px-6 py-1.5 rounded-lg text-[13px] transition-all hover:scale-[1.03] active:scale-95 lux-button-active">
+                        ▶ Run Code
                       </button>
                     </div>
                   </div>
@@ -817,89 +812,83 @@ export default function Room() {
           <div className="flex-1 flex flex-col relative rounded-[32px] overflow-hidden bg-white mac-shadow" style={{ border: '1px solid rgba(0,0,0,0.05)' }}>
 
             {/* Preview Header */}
-            <div className="shrink-0" style={{ background: '#ffffff', borderBottom: '1px solid rgba(0,0,0,0.05)' }}>
-              <div className="flex items-center justify-between px-6 py-3" style={{ minHeight: '50px' }}>
+            <div className="shrink-0" style={{ background: '#1c1c1c', borderBottom: '1px solid var(--border-subtle)' }}>
+              <div className="flex flex-wrap items-center justify-between px-8 py-5 gap-4">
                 <div className="flex items-center gap-4">
-                  {/* Browser dots - Modern flat style */}
-                  <div className="flex gap-2">
-                    <div className="w-3 h-3 rounded-full bg-[#ff5f56]" />
-                    <div className="w-3 h-3 rounded-full bg-[#ffbd2e]" />
-                    <div className="w-3 h-3 rounded-full bg-[#27c93f]" />
+                  <div className="flex flex-col">
+                    <span className="text-[14px] font-serif font-bold tracking-wide text-[var(--accent-gold)]">
+                      Teacher Operations
+                    </span>
+                    <span className="text-[12px] text-white/50">
+                      {isPaused ? <span className="text-[var(--accent-rose)] font-semibold mb-1">Session Paused</span> : files.find(f => f.id === activeFileId)?.name || 'Preview Active'}
+                    </span>
                   </div>
-                  <span className="text-[13px] font-semibold tracking-tight text-black/60">
-                    {isPaused && <span className="text-red-500 mr-2 animate-pulse">⏸ Paused</span>}
-                    {files.find(f => f.id === activeFileId)?.name || 'Preview'}
-                  </span>
                 </div>
                 
-                <div className="flex items-center gap-1 p-1 rounded-full" style={{ background: 'rgba(0,0,0,0.04)' }}>
-                  {/* Cursor Toggle (Removes Pen/Laser so you can interact) */}
+                {/* ──── DRAWING ARSENAL DOCK ──── */}
+                <div className="flex flex-wrap items-center gap-2 p-1.5 rounded-lg border" style={{ background: 'rgba(0,0,0,0.5)', borderColor: 'var(--border-subtle)' }}>
+                  {/* Cursor */}
                   <button onClick={() => { setDrawMode(false); setLaserMode(false); }} 
-                    className="transition-all active:scale-95 px-5 py-1.5 rounded-full text-[12px] font-bold" style={{
-                    background: (!drawMode && !laserMode) ? 'white' : 'transparent',
-                    color: (!drawMode && !laserMode) ? 'black' : 'rgba(0,0,0,0.5)', cursor: 'pointer',
-                    boxShadow: (!drawMode && !laserMode) ? '0 1px 3px rgba(0,0,0,0.1)' : 'none'
-                  }}>
+                    className={`transition-all active:scale-95 px-6 py-2 rounded-md text-[13px] ${(!drawMode && !laserMode) ? 'lux-button-active' : 'lux-button border-transparent'}`}>
                     Cursor
                   </button>
-                  {/* Disappearing Pen Toggle */}
+
+                  <div className="w-[1px] h-6 bg-white/10 mx-1"></div>
+
+                  {/* Disappearing Pen */}
                   <button onClick={() => { setDrawMode(true); setPenType('transient'); setLaserMode(false); }} 
-                    className="transition-all active:scale-95 px-5 py-1.5 rounded-full text-[12px] font-bold" style={{
-                    background: (drawMode && penType === 'transient') ? 'black' : 'transparent',
-                    color: (drawMode && penType === 'transient') ? 'white' : 'rgba(0,0,0,0.5)', cursor: 'pointer',
-                  }}>
-                    Pen
+                    className={`transition-all active:scale-95 px-6 py-2 rounded-md text-[13px] ${(drawMode && penType === 'transient') ? 'lux-button-active' : 'lux-button border-transparent'}`}>
+                    Highlight Pen
                   </button>
-                  {/* Permanent Pen Toggle */}
+
+                  {/* Permanent Pen */}
                   <button onClick={() => { setDrawMode(true); setPenType('permanent'); setLaserMode(false); }} 
-                    className="transition-all active:scale-95 px-5 py-1.5 rounded-full text-[12px] font-bold" style={{
-                    background: (drawMode && penType === 'permanent') ? 'black' : 'transparent',
-                    color: (drawMode && penType === 'permanent') ? 'white' : 'rgba(0,0,0,0.5)', cursor: 'pointer',
-                  }}>
-                    PP
+                    className={`transition-all active:scale-95 px-6 py-2 rounded-md text-[13px] ${(drawMode && penType === 'permanent') ? 'lux-button-active' : 'lux-button border-transparent'}`}>
+                    Permanent Pen
                   </button>
-                  {/* Laser Pointer Toggle */}
+
+                  <div className="w-[1px] h-6 bg-white/10 mx-1"></div>
+
+                  {/* Laser Pointer */}
                   <button onClick={() => { setLaserMode(true); setDrawMode(false); }} 
-                    className="transition-all active:scale-95 px-5 py-1.5 rounded-full text-[12px] font-bold" style={{
-                    background: laserMode ? '#ef4444' : 'transparent',
-                    color: laserMode ? 'white' : 'rgba(0,0,0,0.5)', cursor: 'pointer',
-                  }}>
-                    Laser
+                    className={`transition-all active:scale-95 px-6 py-2 rounded-md text-[13px] ${laserMode ? 'lux-button-active' : 'lux-button border-transparent'}`}
+                    style={laserMode ? { background: 'var(--accent-rose)', border: '1px solid #7a1526', color: 'white' } : {}}>
+                    Laser Tracker
                   </button>
+
+                  <div className="w-[1px] h-6 bg-white/10 mx-1"></div>
+
                   {/* Pause Button */}
-                  <button onClick={togglePause} className="transition-all active:scale-95 px-5 py-1.5 rounded-full text-[12px] font-bold" style={{
-                    background: isPaused ? 'rgba(0,0,0,0.06)' : 'transparent',
-                    color: isPaused ? '#ef4444' : 'rgba(0,0,0,0.5)', cursor: 'pointer',
-                  }}>
-                    {isPaused ? '▶ Play' : '⏸ Pause'}
+                  <button onClick={togglePause} className={`transition-all active:scale-95 px-6 py-2 rounded-md text-[13px] ${isPaused ? 'lux-button-active' : 'lux-button border-transparent'}`}
+                    style={isPaused ? { background: 'transparent', border: '1px solid var(--accent-rose)', color: 'var(--accent-rose)' } : {}}>
+                    {isPaused ? '▶ Resume Student View' : '⏸ Pause Students'}
                   </button>
                 </div>
               </div>
               
-              {/* Pen Controls Row */}
+              {/* Pen Color/Width Controls Row */}
               {drawMode && (
-                <div className="flex items-center gap-4 px-6 py-2 animate-slide-down" style={{ background: '#fafafa', borderTop: '1px solid rgba(0,0,0,0.02)' }}>
-                  <div className="flex gap-2">
-                    {['#34c759', '#ff3b30', '#ffcc00', '#007aff', '#af52de', '#000000'].map(c => (
+                <div className="flex items-center gap-6 px-8 py-3 animate-slide-down" style={{ background: '#0F0F11', borderTop: '1px solid var(--border-subtle)' }}>
+                  <div className="flex gap-3">
+                    {['#d4af37', '#ffffff', '#34c759', '#007aff', '#ff3b30'].map(c => (
                       <button key={c} onClick={() => setPenColor(c)} className="transition-all active:scale-90" style={{
-                        width: 20, height: 20, borderRadius: '50%',
+                        width: 24, height: 24, borderRadius: '50%',
                         background: c, cursor: 'pointer',
-                        transform: penColor === c ? 'scale(1.2)' : 'scale(1)',
-                        boxShadow: penColor === c ? '0 0 0 2px white, 0 0 0 4px rgba(0,0,0,0.1)' : 'none',
+                        transform: penColor === c ? 'scale(1.15)' : 'scale(1)',
+                        boxShadow: penColor === c ? '0 0 0 2px #0F0F11, 0 0 0 4px var(--accent-gold)' : '0 0 0 1px rgba(255,255,255,0.2)',
                       }} />
                     ))}
                   </div>
-                  <div style={{ width: '1px', height: '16px', background: 'rgba(0,0,0,0.1)', margin: '0 4px' }} />
-                  <select value={penWidth} onChange={(e) => setPenWidth(Number(e.target.value))} className="font-semibold outline-none" style={{
-                    background: 'transparent', color: 'black', border: 'none',
-                    fontSize: '12px', cursor: 'pointer'
+                  <div style={{ width: '1px', height: '20px', background: 'var(--border-subtle)' }} />
+                  <select value={penWidth} onChange={(e) => setPenWidth(Number(e.target.value))} className="font-medium outline-none px-2" style={{
+                    background: 'transparent', color: 'var(--text-primary)', border: 'none', cursor: 'pointer'
                   }}>
-                    <option value={2}>Thin</option>
-                    <option value={4}>Medium</option>
-                    <option value={7}>Thick</option>
+                    <option value={2}>Thin Line</option>
+                    <option value={4}>Medium Stroke</option>
+                    <option value={7}>Thick Marker</option>
                   </select>
                   <div className="flex-1" />
-                  <button onClick={clearDrawing} className="transition-all active:scale-95 px-4 py-1.5 rounded-full text-[12px] font-semibold text-black hover:bg-black/5" style={{ cursor: 'pointer' }}>
+                  <button onClick={clearDrawing} className="transition-all active:scale-95 px-6 py-2 rounded-lg text-[13px] lux-button">
                     Clear Board
                   </button>
                 </div>
