@@ -174,10 +174,10 @@ export default function Home() {
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium mb-1.5" style={{ color: 'var(--text-secondary)' }}>Room Code</label>
+                <label className="block text-sm font-medium mb-1.5" style={{ color: 'var(--text-secondary)' }}>Room Password (ID)</label>
                 <input
                   type="text"
-                  placeholder="Paste room code"
+                  placeholder="Paste room password"
                   value={roomCode}
                   onChange={(e) => setRoomCode(e.target.value)}
                   className="input-field text-center"

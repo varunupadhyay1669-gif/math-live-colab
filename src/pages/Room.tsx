@@ -337,7 +337,7 @@ export default function Room() {
   };
 
   const copyStudentLink = () => {
-    navigator.clipboard.writeText(`${window.location.origin}/live/${roomId}`);
+    navigator.clipboard.writeText(`${window.location.origin}/`);
     setLinkCopied(true);
     setTimeout(() => setLinkCopied(false), 2000);
   };
@@ -686,7 +686,7 @@ export default function Room() {
             </div>
 
             <button onClick={copyStudentLink} className={`transition-all active:scale-95 px-6 py-2 rounded-lg text-[13px] flex items-center gap-2 ml-2 ${linkCopied ? 'lux-button-active' : 'lux-button'}`}>
-              {linkCopied ? 'Copied ✓' : 'Share Link 🔗'}
+              {linkCopied ? 'Copied ✓' : 'Share Portal Link 🔗'}
             </button>
           </div>
         </header>
