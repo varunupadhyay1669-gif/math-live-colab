@@ -37,6 +37,7 @@ export default function StudentView() {
   const [socket, setSocket] = useState<Socket | null>(null);
   const [connected, setConnected] = useState(false);
   const [iframeUrl, setIframeUrl] = useState("");
+  const [currentHtml, setCurrentHtml] = useState("");
   const [currentFileName, setCurrentFileName] = useState("");
   const [isPaused, setIsPaused] = useState(false);
   const [cursors, setCursors] = useState<Record<string, Cursor>>({});
@@ -74,9 +75,13 @@ export default function StudentView() {
     setTimeout(() => setNotification(""), 4000);
   };
 
-  // ── Build iframe from html content ──
-  const buildIframeUrl = (html: string) => {
-    let content = html;
+  // ── Build iframe URL safely preventing strict-mode unmount clears ──
+  useEffect(() => {
+    if (!currentHtml) {
+      setIframeUrl("");
+      return;
+    }
+    let content = currentHtml;
     if (content.includes("<head>")) {
       content = content.replace("<head>", "<head>" + injectedSyncScript);
     } else if (content.includes("<html>")) {
@@ -85,8 +90,12 @@ export default function StudentView() {
       content = injectedSyncScript + content;
     }
     const blob = new Blob([content], { type: "text/html" });
-    return URL.createObjectURL(blob);
-  };
+    const url = URL.createObjectURL(blob);
+    setIframeUrl(url);
+    return () => {
+      URL.revokeObjectURL(url);
+    };
+  }, [currentHtml]);
 
   // ── Socket Connection ──
   useEffect(() => {
@@ -114,12 +123,12 @@ export default function StudentView() {
       if (state.lastRunHtml) {
         const f = state.files?.find((f: FileEntry) => f.id === state.activeFileId);
         setCurrentFileName(f?.name || 'Simulation');
-        setIframeUrl(buildIframeUrl(state.lastRunHtml));
+        setCurrentHtml(state.lastRunHtml);
       } else if (state.activeFileId && state.files) {
         const f = state.files.find((f: FileEntry) => f.id === state.activeFileId);
         if (f) {
           setCurrentFileName(f.name);
-          setIframeUrl(buildIframeUrl(f.html));
+          setCurrentHtml(f.html);
         }
       }
     });
@@ -135,7 +144,7 @@ export default function StudentView() {
         const f = prev.find(f => f.id === fileId);
         if (f) {
           setCurrentFileName(f.name);
-          setIframeUrl(buildIframeUrl(f.html));
+          setCurrentHtml(f.html);
           showNotification(`📂 Switched to: ${f.name}`);
         }
         return prev;
@@ -143,7 +152,7 @@ export default function StudentView() {
     });
 
     newSocket.on("run_preview", ({ html }: { fileId: string; html: string }) => {
-      setIframeUrl(buildIframeUrl(html));
+      setCurrentHtml(html);
     });
 
     newSocket.on("file_deleted", ({ fileId, newActiveId }: { fileId: string; newActiveId: string | null }) => {
@@ -246,12 +255,7 @@ export default function StudentView() {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [chatMessages]);
 
-  // ── Cleanup old iframe URLs ──
-  useEffect(() => {
-    return () => {
-      if (iframeUrl) URL.revokeObjectURL(iframeUrl);
-    };
-  }, [iframeUrl]);
+  // ── (Old cleanup effect removed to prevent strict mode bugs) ──
 
   // ── Drawing: render strokes on canvas ──
   const renderDrawing = () => {
