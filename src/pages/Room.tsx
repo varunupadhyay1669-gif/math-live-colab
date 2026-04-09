@@ -31,7 +31,7 @@ interface UserInfo {
   role: string;
 }
 
-const CURSOR_COLORS = ["#ef4444", "#3b82f6", "#10b981", "#f59e0b", "#8b5cf6", "#ec4899", "#06b6d4", "#f97316"];
+const CURSOR_COLORS = ["#6366F1", "#10B981", "#F59E0B", "#F43F5E", "#8B5CF6", "#EC4899", "#0EA5E9", "#F97316"];
 
 export default function Room() {
   const { roomId } = useParams<{ roomId: string }>();
@@ -72,7 +72,7 @@ export default function Room() {
   // ── Drawing/Annotation State ──
   const [drawMode, setDrawMode] = useState(false);
   const [isDrawing, setIsDrawing] = useState(false);
-  const [penColor, setPenColor] = useState('#00ff88');
+  const [penColor, setPenColor] = useState('#6366F1');
   const [penWidth, setPenWidth] = useState(3);
   const [showPenMenu, setShowPenMenu] = useState(false);
   // ── Laser Pointer ──
@@ -86,6 +86,8 @@ export default function Room() {
   const feedbackIdRef = useRef(0);
   // ── Celebration ──
   const [showCelebration, setShowCelebration] = useState(false);
+  // ── Sync Status ──
+  const [lastSyncTime, setLastSyncTime] = useState<number | null>(null);
 
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -150,7 +152,9 @@ export default function Room() {
       setFiles(prev => prev.filter(f => f.id !== fileId));
       if (newActiveId) setActiveFileId(newActiveId);
     });
-    newSocket.on("active_file_changed", (fileId: string) => setActiveFileId(fileId));
+    newSocket.on("active_file_changed", (data: { fileId: string; fileName?: string; html?: string }) => {
+      setActiveFileId(data.fileId);
+    });
     newSocket.on("run_preview", ({ html }: { fileId: string; html: string }) => setPreviewHtml(html));
     newSocket.on("chat_message", (msg: ChatMessage) => setChatMessages(prev => [...prev, msg]));
     newSocket.on("hand_raised", ({ studentName }: { studentName: string }) => {
@@ -205,14 +209,35 @@ export default function Room() {
       setTimeout(() => setShowCelebration(false), 4000);
     });
 
+    // ── State Sync ──
+    newSocket.on("request_html_sync", () => {
+      if (iframeRef.current?.contentWindow) {
+        iframeRef.current.contentWindow.postMessage({ type: 'REQUEST_HTML' }, "*");
+      }
+    });
+
+    // ── Force Sync State ──
+    newSocket.on("force_sync_state", (state: any) => {
+      if (state.activeFileId && state.lastRunHtml) {
+        setPreviewHtml(state.lastRunHtml);
+        setActiveFileId(state.activeFileId);
+      }
+      if (state.files) setFiles(state.files);
+      setLastSyncTime(Date.now());
+    });
+
     return () => { newSocket.disconnect(); };
   }, [roomId, navigate, teacherName]);
 
   // ── Relay iframe messages to socket ──
   useEffect(() => {
     const handler = (e: MessageEvent) => {
-      if (!socket || !e.data?.type?.startsWith("SYNC_")) return;
-      socket.emit("interaction", { roomId, event: e.data });
+      if (!socket) return;
+      if (e.data?.type === 'SYNC_PROVIDE_HTML') {
+        socket.emit("sync_html_update", { roomId, html: e.data.html });
+      } else if (e.data?.type?.startsWith("SYNC_")) {
+        socket.emit("interaction", { roomId, event: e.data });
+      }
     };
     window.addEventListener("message", handler);
     return () => window.removeEventListener("message", handler);
@@ -275,7 +300,7 @@ export default function Room() {
     e.preventDefault();
     setIsDragging(false);
     if (!socket) return;
-    const droppedFiles = Array.from(e.dataTransfer.files).filter(f => /\.html?$/i.test(f.name));
+    const droppedFiles = (Array.from(e.dataTransfer.files) as File[]).filter(f => /\.html?$/i.test(f.name));
     if (droppedFiles.length === 0) { showNotif("⚠️ Only .html files please"); return; }
     droppedFiles.forEach((file: File) => {
       const reader = new FileReader();
@@ -318,7 +343,7 @@ export default function Room() {
     if (!socket || !activeFileId) return;
     socket.emit("run_preview", { roomId, fileId: activeFileId, html: htmlCode });
     setPreviewHtml(htmlCode);
-    showNotif("▶ Preview updated");
+    showNotif("▶ Preview updated & synced");
   };
 
   const switchFile = (fileId: string) => {
@@ -350,6 +375,21 @@ export default function Room() {
     setTimeout(() => setReactions(prev => prev.filter(r => r.id !== id)), 2500);
   };
 
+  // ── Force Sync (server-authoritative) ──
+  const handleForceSync = () => {
+    if (!socket) return;
+    // First, capture the teacher's live DOM state
+    if (iframeRef.current?.contentWindow) {
+      iframeRef.current.contentWindow.postMessage({ type: 'REQUEST_HTML' }, "*");
+    }
+    // Then trigger server-authoritative sync
+    setTimeout(() => {
+      socket.emit("force_sync", { roomId });
+      setLastSyncTime(Date.now());
+      showNotif("🔄 Force Synced — all students updated");
+    }, 300);
+  };
+
   const [penType, setPenType] = useState<'transient' | 'permanent'>('transient');
 
   // ── Drawing Functions ──
@@ -363,11 +403,7 @@ export default function Room() {
   const startDraw = (e: React.MouseEvent<HTMLCanvasElement>) => {
     const isRightClick = e.button === 2 || e.buttons === 2;
     if (!drawMode && !laserMode) return;
-    
-    // In laser mode, left click does nothing. Only right click draws transient ink.
-    // In draw mode, left click draws based on penType. Right click draws transient ink.
     if (!drawMode && !isRightClick) return;
-
     setIsDrawing(true);
     const pt = getCanvasCoords(e);
     currentStrokeRef.current = [pt];
@@ -404,7 +440,6 @@ export default function Room() {
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
-    // Match canvas resolution to display size
     const rect = canvas.getBoundingClientRect();
     if (canvas.width !== rect.width * 2 || canvas.height !== rect.height * 2) {
       canvas.width = rect.width * 2;
@@ -416,21 +451,20 @@ export default function Room() {
     const w = rect.width;
     const h = rect.height;
 
-    // Render saved strokes with fade
     strokesRef.current = strokesRef.current.filter(s => {
-      if (!s.transient) return true; // Permanent strokes live forever
-      return (now - s.time) < 1000;  // Transient strokes die at 1000ms
+      if (!s.transient) return true;
+      return (now - s.time) < 1000;
     });
     strokesRef.current.forEach(stroke => {
       const age = now - stroke.time;
       let alpha = 1;
       let blur = 0;
-      
+
       if (stroke.transient) {
         const fadeStart = 200;
         const fadeDuration = 800;
         alpha = age > fadeStart ? 1 - (age - fadeStart) / fadeDuration : 1;
-        blur = 20; // Neon blur
+        blur = 20;
       }
 
       if (alpha <= 0) return;
@@ -443,7 +477,7 @@ export default function Room() {
         ctx.shadowColor = stroke.color;
         ctx.shadowBlur = blur;
       } else {
-        ctx.shadowBlur = 0; // Solid whiteboard pen
+        ctx.shadowBlur = 0;
       }
       ctx.beginPath();
       stroke.points.forEach((p, i) => {
@@ -454,7 +488,6 @@ export default function Room() {
       ctx.shadowBlur = 0;
     });
 
-    // Render current live stroke
     if (currentStrokeRef.current.length > 1) {
       ctx.globalAlpha = 1;
       ctx.strokeStyle = penColor;
@@ -577,170 +610,135 @@ export default function Room() {
   const showLeftPanel = viewMode === 'split' || viewMode === 'code';
   const showPreview = viewMode === 'split' || viewMode === 'preview';
 
-  // ── Styles as objects for cleanliness ──
-  const s = {
-    headerBtn: (active?: boolean, color?: string): React.CSSProperties => ({
-      display: 'flex', alignItems: 'center', gap: '6px',
-      padding: '6px 14px', borderRadius: '8px',
-      fontSize: '12px', fontWeight: 600,
-      border: `1px solid ${active ? (color || 'rgba(79,143,255,0.3)') : 'var(--border-subtle)'}`,
-      background: active ? (color === 'emerald' ? 'rgba(52,211,153,0.12)' : 'rgba(79,143,255,0.1)') : 'var(--bg-card)',
-      color: active ? (color === 'emerald' ? '#34d399' : '#4f8fff') : 'var(--text-secondary)',
-      cursor: 'pointer', transition: 'all 0.2s',
-    }),
-    viewBtn: (active: boolean): React.CSSProperties => ({
-      padding: '5px 12px', borderRadius: '6px',
-      fontSize: '11px', fontWeight: 600,
-      background: active ? 'rgba(79,143,255,0.15)' : 'transparent',
-      color: active ? '#4f8fff' : 'var(--text-muted)',
-      border: 'none', cursor: 'pointer', transition: 'all 0.2s',
-    }),
-    sidebarBtn: (highlight?: boolean): React.CSSProperties => ({
-      width: '42px', height: '42px', borderRadius: '12px',
-      display: 'flex', alignItems: 'center', justifyContent: 'center',
-      fontSize: '18px', border: `1px solid ${highlight ? 'rgba(139,92,246,0.3)' : 'var(--border-subtle)'}`,
-      background: highlight ? 'rgba(139,92,246,0.1)' : 'var(--bg-card)',
-      cursor: 'pointer', transition: 'all 0.15s',
-    }),
-  };
-
   return (
-    <div className="h-screen flex flex-col overflow-hidden" style={{ background: 'var(--bg-primary)', color: 'var(--text-primary)' }}
+    <div className="h-screen flex flex-col overflow-hidden"
+      style={{ background: 'var(--bg-primary)', color: 'var(--text-primary)' }}
       onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
       onDragLeave={(e) => { if (e.currentTarget === e.target) setIsDragging(false); }}
       onDrop={handleDrop}>
 
-      {/* ═══ GLOBAL DROP OVERLAY ═══ */}
+      {/* ═══ DROP OVERLAY ═══ */}
       {isDragging && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ background: 'rgba(7,8,10,0.92)' }}>
+        <div className="fixed inset-0 z-50 flex items-center justify-center"
+          style={{ background: 'rgba(249,250,251,0.95)', backdropFilter: 'blur(8px)' }}>
           <div className="text-center animate-bounce-in">
             <div className="text-7xl mb-4">📂</div>
-            <div className="text-2xl font-bold" style={{ color: '#4f8fff' }}>Drop HTML files here</div>
+            <div className="text-2xl font-bold" style={{ color: 'var(--accent-indigo)' }}>Drop HTML files here</div>
             <div className="text-sm mt-2" style={{ color: 'var(--text-muted)' }}>They'll be added to your file library</div>
           </div>
         </div>
       )}
 
-      {/* ═══ LUXURIOUS CLASSICAL HEADER ═══ */}
-      <div className="pt-6 px-8 shrink-0 z-40">
-        <header className="flex items-center justify-between px-8 lux-glass rounded-2xl"
-          style={{ height: '72px' }}>
+      {/* ═══ HEADER ═══ */}
+      <header className="flex items-center justify-between px-5 shrink-0"
+        style={{ height: '56px', borderBottom: '1px solid var(--border-subtle)', background: 'var(--bg-secondary)' }}>
 
-          {/* Left: Logo + Room */}
-          <div className="flex items-center gap-8">
-            <button onClick={() => navigate('/')} className="flex items-center gap-3 transition-opacity hover:opacity-80" style={{ background: 'none', border: 'none', cursor: 'pointer' }}>
-              <span className="text-2xl" style={{ textShadow: '0 2px 10px rgba(212,175,55,0.4)' }}>🧮</span>
-              <span className="font-serif font-bold tracking-wide text-white text-xl">MathsLive</span>
-            </button>
-            
-            <div className="hidden sm:flex items-center gap-3 px-4 py-2 rounded-lg" style={{ background: 'rgba(212,175,55,0.05)', border: '1px solid rgba(212,175,55,0.1)' }}>
-              <span className="text-[11px] font-semibold text-[var(--accent-gold)] uppercase tracking-widest">Room</span>
-              <span className="text-[14px] font-mono font-medium text-white/90">{roomId}</span>
-            </div>
-            
-            {/* View Mode Toggles */}
-            <div className="flex items-center gap-2 ml-4">
-              <button onClick={() => setViewMode('code')} className={`px-6 py-2 rounded-lg text-[13px] transition-all ${viewMode === 'code' ? 'lux-button-active' : 'lux-button'}`}>Code</button>
-              <button onClick={() => setViewMode('split')} className={`px-6 py-2 rounded-lg text-[13px] transition-all ${viewMode === 'split' ? 'lux-button-active' : 'lux-button'}`}>Split</button>
-              <button onClick={() => setViewMode('preview')} className={`px-6 py-2 rounded-lg text-[13px] transition-all ${viewMode === 'preview' ? 'lux-button-active' : 'lux-button'}`}>Preview</button>
-            </div>
+        {/* Left: Logo + Room + Views */}
+        <div className="flex items-center gap-4">
+          <button onClick={() => navigate('/')} className="flex items-center gap-2 hover:opacity-80 transition-opacity"
+            style={{ background: 'none', border: 'none', cursor: 'pointer' }}>
+            <span className="text-xl">🧮</span>
+            <span className="font-display font-bold text-base" style={{ color: 'var(--text-primary)' }}>MathsLive</span>
+          </button>
+
+          <div className="h-5 w-px" style={{ background: 'var(--border-subtle)' }} />
+
+          <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg"
+            style={{ background: 'var(--bg-surface)', border: '1px solid var(--border-subtle)' }}>
+            <span className="text-[11px] font-semibold" style={{ color: 'var(--text-muted)' }}>ROOM</span>
+            <span className="text-[13px] font-mono font-semibold" style={{ color: 'var(--accent-indigo)' }}>{roomId}</span>
           </div>
 
-          {/* Right: Status + Actions */}
-          <div className="flex items-center gap-5">
-            {/* Challenge Timer */}
-            <div className="relative">
-              <button onClick={() => setShowTimerMenu(!showTimerMenu)} className="transition-all active:scale-95 px-6 py-2 rounded-lg text-[13px] font-medium flex items-center gap-2 lux-button"
-                style={{ color: challengeTimer ? 'var(--accent-gold)' : 'var(--text-primary)', borderColor: challengeTimer ? 'var(--accent-gold)' : 'var(--border-default)' }}>
-                {challengeTimer ? `⏱ ${challengeTimer.remaining}s` : 'Timer ⏱'}
+          {/* View Mode Toggles */}
+          <div className="flex items-center rounded-lg overflow-hidden" style={{ border: '1px solid var(--border-subtle)', background: 'var(--bg-surface)' }}>
+            {(['code', 'split', 'preview'] as ViewMode[]).map(mode => (
+              <button key={mode} onClick={() => setViewMode(mode)}
+                className="px-4 py-1.5 text-[12px] font-semibold transition-all capitalize"
+                style={{
+                  background: viewMode === mode ? 'var(--bg-secondary)' : 'transparent',
+                  color: viewMode === mode ? 'var(--accent-indigo)' : 'var(--text-muted)',
+                  border: 'none', cursor: 'pointer',
+                  boxShadow: viewMode === mode ? 'var(--shadow-sm)' : 'none',
+                }}>
+                {mode}
               </button>
-              {showTimerMenu && (
-                <div className="absolute top-full right-0 mt-3 z-50 animate-slide-down lux-glass rounded-xl p-2 min-w-[140px]">
-                  {[30, 60, 90, 120, 180].map(sec => (
-                    <button key={sec} onClick={() => startChallengeTimer(sec)} className="w-full text-left px-4 py-3 rounded-lg text-[13px] font-medium hover:bg-[rgba(212,175,55,0.1)] transition-all text-white/90">
-                      ⏱ {sec >= 60 ? `${sec / 60} min` : `${sec}s`}
-                    </button>
-                  ))}
-                  {challengeTimer && (
-                    <button onClick={stopChallengeTimer} className="w-full text-left px-4 py-3 rounded-lg text-[13px] font-medium hover:bg-red-500/10 transition-all text-[var(--accent-rose)] mt-1">
-                      ✕ Stop Timer
-                    </button>
-                  )}
-                </div>
-              )}
-            </div>
-
-            {/* Celebration */}
-            <button onClick={triggerCelebration} className="transition-all active:scale-95 px-4 py-2 rounded-lg lux-button" style={{ fontSize: '15px' }}>
-              🎉
-            </button>
-
-            <div className="hidden sm:flex items-center gap-2 px-4 py-2 rounded-lg text-[14px] font-mono font-medium text-white/60">
-              {formatTime(sessionTimer)}
-            </div>
-
-            <div className="flex items-center gap-3 px-4 py-2 rounded-lg text-[13px] font-medium"
-              style={{ color: studentCount > 0 ? '#d4af37' : 'rgba(255,255,255,0.4)', border: '1px solid var(--border-subtle)' }}>
-              <div className={`connection-dot ${studentCount > 0 ? 'online' : 'offline'}`} style={{ width: 8, height: 8, background: studentCount > 0 ? '#d4af37' : 'gray', boxShadow: studentCount > 0 ? '0 0 10px #d4af37' : 'none' }} />
-              {studentCount}
-            </div>
-
-            <button onClick={copyStudentLink} className={`transition-all active:scale-95 px-6 py-2 rounded-lg text-[13px] flex items-center gap-2 ml-2 ${linkCopied ? 'lux-button-active' : 'lux-button'}`}>
-              {linkCopied ? 'Copied ✓' : 'Share Portal Link 🔗'}
-            </button>
+            ))}
           </div>
-        </header>
-      </div>
+        </div>
+
+        {/* Right: Status + Actions */}
+        <div className="flex items-center gap-3">
+          <span className="text-[13px] font-mono hidden sm:block" style={{ color: 'var(--text-muted)' }}>
+            {formatTime(sessionTimer)}
+          </span>
+
+          <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-[12px] font-semibold"
+            style={{
+              background: studentCount > 0 ? 'var(--accent-emerald-light)' : 'var(--bg-surface)',
+              color: studentCount > 0 ? 'var(--accent-emerald)' : 'var(--text-muted)',
+              border: '1px solid var(--border-subtle)',
+            }}>
+            <div className={`connection-dot ${studentCount > 0 ? 'online' : 'offline'}`}
+              style={{ width: 7, height: 7 }} />
+            {studentCount} {studentCount === 1 ? 'student' : 'students'}
+          </div>
+
+          <button onClick={copyStudentLink}
+            className={`btn text-[12px] ${linkCopied ? 'btn-toolbar-active' : ''}`}>
+            {linkCopied ? '✓ Copied' : '🔗 Share Link'}
+          </button>
+        </div>
+      </header>
 
       {/* ═══ HAND RAISED BANNER ═══ */}
       {handRaised && (
-        <div className="animate-slide-down px-4 py-2 text-center text-sm font-semibold" style={{ background: 'rgba(251,191,36,0.12)', color: '#fbbf24', borderBottom: '1px solid rgba(251,191,36,0.2)' }}>
+        <div className="animate-slide-down px-4 py-2 text-center text-sm font-semibold"
+          style={{ background: 'var(--accent-amber-light)', color: '#B45309', borderBottom: '1px solid rgba(245,158,11,0.2)' }}>
           ✋ {handRaised.studentName} raised their hand!
         </div>
       )}
 
       {/* ═══ MAIN CONTENT ═══ */}
-      <div className="flex-1 flex overflow-hidden px-4 pb-4 pt-2 gap-4">
+      <div className="flex-1 flex overflow-hidden">
 
         {/* ──── LEFT: Files + Code Editor ──── */}
         {showLeftPanel && (
-          <div className="flex flex-col lux-panel rounded-2xl overflow-hidden" style={{
+          <div className="flex flex-col overflow-hidden" style={{
             width: viewMode === 'code' ? '100%' : '40%', minWidth: viewMode === 'split' ? '320px' : undefined,
-            transition: 'width 0.4s cubic-bezier(0.16, 1, 0.3, 1)',
+            transition: 'width 0.3s ease',
+            borderRight: '1px solid var(--border-subtle)',
+            background: 'var(--bg-secondary)',
           }}>
 
             {/* Upload Bar */}
-            <div className="flex items-center gap-4 px-6 py-4 shrink-0" style={{ borderBottom: '1px solid var(--border-subtle)', background: 'rgba(0,0,0,0.5)' }}>
+            <div className="flex items-center gap-3 px-4 py-3 shrink-0" style={{ borderBottom: '1px solid var(--border-subtle)' }}>
               <input type="file" accept=".html,.htm" ref={fileInputRef} onChange={uploadFileFromInput} className="hidden" multiple />
-
-              <button onClick={() => fileInputRef.current?.click()} className="flex items-center gap-2 px-6 py-2.5 rounded-lg text-[13px] lux-button-active hover:scale-[1.02]">
-                Upload HTML
+              <button onClick={() => fileInputRef.current?.click()} className="btn-accent text-[12px]">
+                📤 Upload HTML
               </button>
-
-              <button onClick={() => setShowPasteModal(true)} className="flex items-center gap-2 px-6 py-2.5 rounded-lg text-[13px] lux-button hover:scale-[1.02]">
-                Paste Code
+              <button onClick={() => setShowPasteModal(true)} className="btn text-[12px]">
+                📋 Paste Code
               </button>
-
-              <div className="flex-1" />
             </div>
 
             {/* File Tabs */}
             {files.length > 0 && (
-              <div className="flex gap-2 px-5 py-3 overflow-x-auto shrink-0 scrollbar-hide" style={{ borderBottom: '1px solid var(--border-subtle)', background: 'rgba(212,175,55,0.03)' }}>
+              <div className="flex gap-1.5 px-4 py-2 overflow-x-auto shrink-0 scrollbar-hide"
+                style={{ borderBottom: '1px solid var(--border-subtle)', background: 'var(--bg-surface)' }}>
                 {files.map(f => (
                   <button key={f.id} onClick={() => switchFile(f.id)}
-                    className="flex items-center gap-2 px-5 py-2 rounded-lg text-[13px] shrink-0 transition-all group"
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12px] shrink-0 transition-all group"
                     style={{
-                      background: activeFileId === f.id ? 'var(--gradient-gold)' : 'transparent',
-                      color: activeFileId === f.id ? '#000' : 'var(--text-secondary)',
-                      border: activeFileId === f.id ? '1px solid #aa8c2c' : '1px solid transparent',
+                      background: activeFileId === f.id ? 'var(--bg-secondary)' : 'transparent',
+                      color: activeFileId === f.id ? 'var(--accent-indigo)' : 'var(--text-secondary)',
+                      border: activeFileId === f.id ? '1px solid var(--border-default)' : '1px solid transparent',
                       fontWeight: activeFileId === f.id ? 600 : 400,
+                      boxShadow: activeFileId === f.id ? 'var(--shadow-sm)' : 'none',
                     }}>
                     <span className="max-w-[120px] truncate">{f.name}</span>
                     <span onClick={(e) => { e.stopPropagation(); deleteFile(f.id); }}
-                      className={`opacity-0 group-hover:opacity-100 ml-2 cursor-pointer text-lg leading-none transition-opacity ${activeFileId === f.id ? 'text-black/60 hover:text-black' : 'text-white/30 hover:text-white'}`}>
-                      ×
-                    </span>
+                      className="opacity-0 group-hover:opacity-100 ml-1 cursor-pointer text-base leading-none transition-opacity"
+                      style={{ color: 'var(--text-muted)' }}>×</span>
                   </button>
                 ))}
               </div>
@@ -749,19 +747,19 @@ export default function Room() {
             {/* Code Area */}
             <div className="flex-1 flex flex-col overflow-hidden relative">
               {files.length === 0 ? (
-                // Empty state: Upload prompt
-                <div className="absolute inset-0 flex items-center justify-center p-8 bg-transparent">
-                  <div className="text-center max-w-sm lux-glass p-12 rounded-2xl animate-slide-up">
-                    <div className="text-5xl mb-6 animate-float" style={{ filter: 'drop-shadow(0 0 15px rgba(212,175,55,0.3))' }}>📄</div>
-                    <h3 className="text-2xl font-serif font-bold mb-4 text-white tracking-wide">Empty Canvas</h3>
-                    <p className="text-[14px] mb-10 text-white/50 leading-relaxed">
-                      Begin by uploading an HTML file or pasting an interactive code snippet.
+                <div className="absolute inset-0 flex items-center justify-center p-8">
+                  <div className="text-center max-w-sm p-10 rounded-2xl animate-slide-up"
+                    style={{ background: 'var(--bg-surface)', border: '1px solid var(--border-subtle)' }}>
+                    <div className="text-5xl mb-5 animate-gentle-bounce">📄</div>
+                    <h3 className="font-display text-xl font-bold mb-3" style={{ color: 'var(--text-primary)' }}>Empty Canvas</h3>
+                    <p className="text-sm mb-8" style={{ color: 'var(--text-muted)', lineHeight: '1.6' }}>
+                      Upload an HTML file or paste a code snippet to get started.
                     </p>
-                    <div className="flex flex-col gap-4 justify-center">
-                      <button onClick={() => fileInputRef.current?.click()} className="py-3 px-8 rounded-lg text-[14px] transition-all hover:scale-[1.02] lux-button-active">
+                    <div className="flex flex-col gap-3">
+                      <button onClick={() => fileInputRef.current?.click()} className="btn-primary justify-center text-sm">
                         Browse Files
                       </button>
-                      <button onClick={() => setShowPasteModal(true)} className="py-3 px-8 rounded-lg text-[14px] transition-all hover:scale-[1.02] lux-button">
+                      <button onClick={() => setShowPasteModal(true)} className="btn-secondary justify-center text-sm">
                         Paste Snippet
                       </button>
                     </div>
@@ -770,14 +768,15 @@ export default function Room() {
               ) : (
                 <>
                   {/* Editor header with Run button */}
-                  <div className="flex items-center justify-between px-6 py-3 shrink-0" style={{ borderBottom: '1px solid var(--border-subtle)', background: 'rgba(0,0,0,0.3)' }}>
-                    <span className="text-[12px] font-semibold tracking-widest text-[var(--accent-gold)] uppercase">
+                  <div className="flex items-center justify-between px-4 py-2.5 shrink-0"
+                    style={{ borderBottom: '1px solid var(--border-subtle)' }}>
+                    <span className="badge badge-indigo">
                       {files.find(f => f.id === activeFileId)?.name || 'Editor'}
                     </span>
-                    <div className="flex items-center gap-5">
-                      <span className="text-[11px] font-mono text-white/20 hidden sm:inline">⌘ + Enter</span>
-                      <button onClick={runPreview} className="flex items-center gap-2 px-6 py-1.5 rounded-lg text-[13px] transition-all hover:scale-[1.03] active:scale-95 lux-button-active">
-                        ▶ Run Code
+                    <div className="flex items-center gap-3">
+                      <span className="text-[11px] font-mono hidden sm:inline" style={{ color: 'var(--text-muted)' }}>⌘+Enter</span>
+                      <button onClick={runPreview} className="btn-primary text-[12px]" style={{ padding: '6px 14px' }}>
+                        ▶ Run & Sync
                       </button>
                     </div>
                   </div>
@@ -785,8 +784,12 @@ export default function Room() {
                   <textarea
                     value={htmlCode}
                     onChange={(e) => setHtmlCode(e.target.value)}
-                    className="flex-1 w-full p-5 resize-none focus:outline-none code-editor"
-                    style={{ background: 'rgba(0,0,0,0.2)', color: '#e2e8f0', caretColor: 'var(--accent-blue)', fontFamily: "'JetBrains Mono', monospace", fontSize: '13px', lineHeight: '1.6' }}
+                    className="flex-1 w-full p-4 resize-none focus:outline-none code-editor"
+                    style={{
+                      background: 'var(--bg-code)', color: '#D4D4D8',
+                      caretColor: 'var(--accent-indigo)',
+                      fontFamily: "'JetBrains Mono', monospace", fontSize: '13px', lineHeight: '1.6',
+                    }}
                     spellCheck={false}
                     placeholder="Paste or write your HTML code here..."
                     onKeyDown={(e) => {
@@ -809,102 +812,143 @@ export default function Room() {
 
         {/* ──── CENTER: Preview ──── */}
         {showPreview && (
-          <div className="flex-1 flex flex-col relative rounded-[32px] overflow-hidden bg-white mac-shadow" style={{ border: '1px solid rgba(0,0,0,0.05)' }}>
+          <div className="flex-1 flex flex-col relative overflow-hidden" style={{ background: 'var(--bg-primary)' }}>
 
-            {/* Preview Header */}
-            <div className="shrink-0" style={{ background: '#1c1c1c', borderBottom: '1px solid var(--border-subtle)' }}>
-              <div className="flex flex-wrap items-center justify-between px-8 py-5 gap-4">
-                <div className="flex items-center gap-4">
-                  <div className="flex flex-col">
-                    <span className="text-[14px] font-serif font-bold tracking-wide text-[var(--accent-gold)]">
-                      Teacher Operations
-                    </span>
-                    <span className="text-[12px] text-white/50">
-                      {isPaused ? <span className="text-[var(--accent-rose)] font-semibold mb-1">Session Paused</span> : files.find(f => f.id === activeFileId)?.name || 'Preview Active'}
-                    </span>
-                  </div>
-                </div>
-                
-                {/* ──── DRAWING ARSENAL DOCK ──── */}
-                <div className="flex flex-wrap items-center gap-2 p-1.5 rounded-lg border" style={{ background: 'rgba(0,0,0,0.5)', borderColor: 'var(--border-subtle)' }}>
-                  {/* Cursor */}
-                  <button onClick={() => { setDrawMode(false); setLaserMode(false); }} 
-                    className={`transition-all active:scale-95 px-6 py-2 rounded-md text-[13px] ${(!drawMode && !laserMode) ? 'lux-button-active' : 'lux-button border-transparent'}`}>
-                    Cursor
-                  </button>
+            {/* Toolbar */}
+            <div className="shrink-0 flex flex-wrap items-center gap-2 px-4 py-2.5"
+              style={{ borderBottom: '1px solid var(--border-subtle)', background: 'var(--bg-secondary)' }}>
 
-                  <div className="w-[1px] h-6 bg-white/10 mx-1"></div>
-
-                  {/* Disappearing Pen */}
-                  <button onClick={() => { setDrawMode(true); setPenType('transient'); setLaserMode(false); }} 
-                    className={`transition-all active:scale-95 px-6 py-2 rounded-md text-[13px] ${(drawMode && penType === 'transient') ? 'lux-button-active' : 'lux-button border-transparent'}`}>
-                    Highlight Pen
-                  </button>
-
-                  {/* Permanent Pen */}
-                  <button onClick={() => { setDrawMode(true); setPenType('permanent'); setLaserMode(false); }} 
-                    className={`transition-all active:scale-95 px-6 py-2 rounded-md text-[13px] ${(drawMode && penType === 'permanent') ? 'lux-button-active' : 'lux-button border-transparent'}`}>
-                    Permanent Pen
-                  </button>
-
-                  <div className="w-[1px] h-6 bg-white/10 mx-1"></div>
-
-                  {/* Laser Pointer */}
-                  <button onClick={() => { setLaserMode(true); setDrawMode(false); }} 
-                    className={`transition-all active:scale-95 px-6 py-2 rounded-md text-[13px] ${laserMode ? 'lux-button-active' : 'lux-button border-transparent'}`}
-                    style={laserMode ? { background: 'var(--accent-rose)', border: '1px solid #7a1526', color: 'white' } : {}}>
-                    Laser Tracker
-                  </button>
-
-                  <div className="w-[1px] h-6 bg-white/10 mx-1"></div>
-
-                  {/* Pause Button */}
-                  <button onClick={togglePause} className={`transition-all active:scale-95 px-6 py-2 rounded-md text-[13px] ${isPaused ? 'lux-button-active' : 'lux-button border-transparent'}`}
-                    style={isPaused ? { background: 'transparent', border: '1px solid var(--accent-rose)', color: 'var(--accent-rose)' } : {}}>
-                    {isPaused ? '▶ Resume Student View' : '⏸ Pause Students'}
-                  </button>
-                </div>
-              </div>
-              
-              {/* Pen Color/Width Controls Row */}
-              {drawMode && (
-                <div className="flex items-center gap-6 px-8 py-3 animate-slide-down" style={{ background: '#0F0F11', borderTop: '1px solid var(--border-subtle)' }}>
-                  <div className="flex gap-3">
-                    {['#d4af37', '#ffffff', '#34c759', '#007aff', '#ff3b30'].map(c => (
-                      <button key={c} onClick={() => setPenColor(c)} className="transition-all active:scale-90" style={{
-                        width: 24, height: 24, borderRadius: '50%',
-                        background: c, cursor: 'pointer',
-                        transform: penColor === c ? 'scale(1.15)' : 'scale(1)',
-                        boxShadow: penColor === c ? '0 0 0 2px #0F0F11, 0 0 0 4px var(--accent-gold)' : '0 0 0 1px rgba(255,255,255,0.2)',
-                      }} />
-                    ))}
-                  </div>
-                  <div style={{ width: '1px', height: '20px', background: 'var(--border-subtle)' }} />
-                  <select value={penWidth} onChange={(e) => setPenWidth(Number(e.target.value))} className="font-medium outline-none px-2" style={{
-                    background: 'transparent', color: 'var(--text-primary)', border: 'none', cursor: 'pointer'
+              {/* Tool group: Cursor / Draw / Laser */}
+              <div className="flex items-center gap-1 p-1 rounded-lg" style={{ background: 'var(--bg-surface)' }}>
+                <button onClick={() => { setDrawMode(false); setLaserMode(false); }}
+                  className={`btn-ghost text-[12px] ${(!drawMode && !laserMode) ? 'btn-toolbar-active' : ''}`}
+                  style={{ padding: '5px 12px', borderRadius: '6px' }}>
+                  🖱 Cursor
+                </button>
+                <button onClick={() => { setDrawMode(true); setPenType('transient'); setLaserMode(false); }}
+                  className={`btn-ghost text-[12px] ${(drawMode && penType === 'transient') ? 'btn-toolbar-active' : ''}`}
+                  style={{ padding: '5px 12px', borderRadius: '6px' }}>
+                  ✏️ Highlight
+                </button>
+                <button onClick={() => { setDrawMode(true); setPenType('permanent'); setLaserMode(false); }}
+                  className={`btn-ghost text-[12px] ${(drawMode && penType === 'permanent') ? 'btn-toolbar-active' : ''}`}
+                  style={{ padding: '5px 12px', borderRadius: '6px' }}>
+                  🖊 Permanent
+                </button>
+                <button onClick={() => { setLaserMode(true); setDrawMode(false); }}
+                  className={`btn-ghost text-[12px] ${laserMode ? 'btn-toolbar-active' : ''}`}
+                  style={{
+                    padding: '5px 12px', borderRadius: '6px',
+                    ...(laserMode ? { background: 'var(--accent-rose-light)', color: 'var(--accent-rose)', borderColor: 'rgba(244,63,94,0.3)' } : {}),
                   }}>
-                    <option value={2}>Thin Line</option>
-                    <option value={4}>Medium Stroke</option>
-                    <option value={7}>Thick Marker</option>
-                  </select>
-                  <div className="flex-1" />
-                  <button onClick={clearDrawing} className="transition-all active:scale-95 px-6 py-2 rounded-lg text-[13px] lux-button">
-                    Clear Board
-                  </button>
-                </div>
+                  🔴 Laser
+                </button>
+              </div>
+
+              <div className="h-5 w-px" style={{ background: 'var(--border-subtle)' }} />
+
+              {/* Force Sync */}
+              <button onClick={handleForceSync}
+                className="btn-accent text-[12px] font-bold"
+                style={{ padding: '6px 14px' }}>
+                🔄 Force Sync
+              </button>
+
+              {/* Timer */}
+              <div className="relative">
+                <button onClick={() => setShowTimerMenu(!showTimerMenu)}
+                  className={`btn text-[12px] ${challengeTimer ? 'btn-toolbar-active' : ''}`}>
+                  {challengeTimer ? `⏱ ${challengeTimer.remaining}s` : '⏱ Timer'}
+                </button>
+                {showTimerMenu && (
+                  <div className="absolute top-full right-0 mt-2 z-50 animate-slide-down rounded-xl p-1.5 min-w-[130px]"
+                    style={{ background: 'var(--bg-card)', border: '1px solid var(--border-subtle)', boxShadow: 'var(--shadow-lg)' }}>
+                    {[30, 60, 90, 120, 180].map(sec => (
+                      <button key={sec} onClick={() => startChallengeTimer(sec)}
+                        className="w-full text-left px-3 py-2 rounded-lg text-[12px] font-medium transition-all"
+                        style={{ color: 'var(--text-primary)' }}
+                        onMouseEnter={e => (e.currentTarget.style.background = 'var(--bg-surface)')}
+                        onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
+                        ⏱ {sec >= 60 ? `${sec / 60} min` : `${sec}s`}
+                      </button>
+                    ))}
+                    {challengeTimer && (
+                      <button onClick={stopChallengeTimer}
+                        className="w-full text-left px-3 py-2 rounded-lg text-[12px] font-medium transition-all mt-1"
+                        style={{ color: 'var(--accent-rose)' }}
+                        onMouseEnter={e => (e.currentTarget.style.background = 'var(--accent-rose-light)')}
+                        onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
+                        ✕ Stop Timer
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {/* Celebrate */}
+              <button onClick={triggerCelebration} className="btn text-[12px]" title="Celebrate!">
+                🎉
+              </button>
+
+              {/* Pause */}
+              <button onClick={togglePause}
+                className={`btn text-[12px] ${isPaused ? '' : ''}`}
+                style={isPaused ? { background: 'var(--accent-rose-light)', color: 'var(--accent-rose)', borderColor: 'rgba(244,63,94,0.3)' } : {}}>
+                {isPaused ? '▶ Resume' : '⏸ Pause'}
+              </button>
+
+              {/* Spacer */}
+              <div className="flex-1" />
+
+              {/* Sync indicator */}
+              {lastSyncTime && (
+                <span className="badge badge-emerald text-[10px]">
+                  ✓ Synced
+                </span>
               )}
             </div>
 
+            {/* Pen color/width controls */}
+            {drawMode && (
+              <div className="flex items-center gap-4 px-4 py-2 animate-slide-down shrink-0"
+                style={{ background: 'var(--bg-surface)', borderBottom: '1px solid var(--border-subtle)' }}>
+                <div className="flex gap-2">
+                  {['#6366F1', '#111827', '#10B981', '#0EA5E9', '#F43F5E'].map(c => (
+                    <button key={c} onClick={() => setPenColor(c)} className="transition-all active:scale-90" style={{
+                      width: 22, height: 22, borderRadius: '50%',
+                      background: c, cursor: 'pointer',
+                      transform: penColor === c ? 'scale(1.15)' : 'scale(1)',
+                      boxShadow: penColor === c ? `0 0 0 2px var(--bg-surface), 0 0 0 4px ${c}` : '0 0 0 1px var(--border-default)',
+                    }} />
+                  ))}
+                </div>
+                <div className="h-5 w-px" style={{ background: 'var(--border-subtle)' }} />
+                <select value={penWidth} onChange={(e) => setPenWidth(Number(e.target.value))}
+                  className="text-[12px] font-medium outline-none px-2 py-1 rounded-md"
+                  style={{ background: 'var(--bg-secondary)', color: 'var(--text-primary)', border: '1px solid var(--border-subtle)', cursor: 'pointer' }}>
+                  <option value={2}>Thin</option>
+                  <option value={4}>Medium</option>
+                  <option value={7}>Thick</option>
+                </select>
+                <div className="flex-1" />
+                <button onClick={clearDrawing} className="btn text-[12px]">
+                  🗑 Clear Board
+                </button>
+              </div>
+            )}
+
             {/* Iframe */}
-            <div className="flex-1 relative overflow-hidden bg-[#fafafa]">
+            <div className="flex-1 relative overflow-hidden m-3 rounded-xl preview-frame">
               {iframeUrl ? (
                 <iframe ref={iframeRef} src={iframeUrl} className="w-full h-full border-none"
+                  style={{ background: '#ffffff' }}
                   sandbox="allow-scripts allow-same-origin allow-forms allow-modals allow-popups allow-pointer-lock" />
               ) : (
-                <div className="flex items-center justify-center h-full">
-                  <div className="text-center opacity-40">
-                    <div className="text-6xl mb-4" style={{ filter: 'grayscale(100%)' }}>🎯</div>
-                    <h3 className="text-xl font-bold tracking-tight text-black">Preview Environment</h3>
+                <div className="flex items-center justify-center h-full" style={{ background: 'var(--bg-surface)' }}>
+                  <div className="text-center">
+                    <div className="text-5xl mb-3 opacity-30">🎯</div>
+                    <h3 className="font-display text-lg font-bold" style={{ color: 'var(--text-muted)' }}>Preview</h3>
+                    <p className="text-sm mt-1" style={{ color: 'var(--text-muted)' }}>Upload or paste HTML to preview</p>
                   </div>
                 </div>
               )}
@@ -930,7 +974,7 @@ export default function Room() {
                 }}
               />
 
-              {/* Teacher's Own Laser Pointer Overlay */}
+              {/* Teacher Laser Pointer */}
               {laserMode && (
                 <div className="absolute inset-0 pointer-events-none z-20">
                   <div className="absolute w-4 h-4 rounded-full"
@@ -947,9 +991,14 @@ export default function Room() {
               {/* Cursors */}
               <div className="absolute inset-0 pointer-events-none overflow-hidden" style={{ zIndex: 11 }}>
                 {(Object.entries(cursors) as [string, Cursor][]).map(([id, c]) => (
-                  <div key={id} className="absolute transition-all duration-100 ease-linear" style={{ left: `${c.x * 100}%`, top: `${c.y * 100}%`, transform: 'translate(-2px,-2px)' }}>
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill={c.color}><path d="M5.5 3.21V20.8c0 .45.54.67.85.35l4.86-4.86a.5.5 0 0 1 .35-.15h6.87c.45 0 .67-.54.35-.85L6.35 2.86a.5.5 0 0 0-.85.35Z" stroke="#fff" strokeWidth="1.5" strokeLinejoin="round"/></svg>
-                    <span className="absolute left-4 top-3 text-[9px] font-bold px-1.5 py-0.5 rounded-md text-white whitespace-nowrap" style={{ background: c.color }}>{c.name}</span>
+                  <div key={id} className="absolute transition-all duration-100 ease-linear"
+                    style={{ left: `${c.x * 100}%`, top: `${c.y * 100}%`, transform: 'translate(-2px,-2px)' }}>
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill={c.color}>
+                      <path d="M5.5 3.21V20.8c0 .45.54.67.85.35l4.86-4.86a.5.5 0 0 1 .35-.15h6.87c.45 0 .67-.54.35-.85L6.35 2.86a.5.5 0 0 0-.85.35Z"
+                        stroke="#fff" strokeWidth="1.5" strokeLinejoin="round"/>
+                    </svg>
+                    <span className="absolute left-4 top-3 text-[9px] font-bold px-1.5 py-0.5 rounded-md text-white whitespace-nowrap"
+                      style={{ background: c.color }}>{c.name}</span>
                   </div>
                 ))}
               </div>
@@ -957,53 +1006,55 @@ export default function Room() {
               {/* Reactions */}
               <div className="absolute inset-0 pointer-events-none overflow-hidden">
                 {reactions.map(r => (
-                  <div key={r.id} className="absolute" style={{ left: `${20 + Math.random() * 60}%`, bottom: '10%', fontSize: '44px', animation: 'reaction-float-up 2.5s ease-out forwards' }}>{r.emoji}</div>
+                  <div key={r.id} className="absolute"
+                    style={{ left: `${20 + Math.random() * 60}%`, bottom: '10%', fontSize: '44px', animation: 'reaction-float-up 2.5s ease-out forwards' }}>
+                    {r.emoji}
+                  </div>
                 ))}
               </div>
 
-              {/* ── Challenge Timer Overlay ── */}
+              {/* Challenge Timer */}
               {challengeTimer && (
                 <div className="absolute top-4 left-1/2 -translate-x-1/2 pointer-events-none z-20 animate-bounce-in">
-                  <div className="flex items-center gap-3 px-6 py-3 rounded-2xl" style={{
-                    background: challengeTimer.remaining <= 10 ? 'rgba(239,68,68,0.9)' : 'rgba(0,0,0,0.8)',
-                    backdropFilter: 'blur(10px)', boxShadow: '0 8px 32px rgba(0,0,0,0.4)',
+                  <div className="flex items-center gap-3 px-5 py-2.5 rounded-xl" style={{
+                    background: challengeTimer.remaining <= 10 ? 'rgba(244,63,94,0.95)' : 'rgba(17,24,39,0.9)',
+                    backdropFilter: 'blur(10px)', boxShadow: 'var(--shadow-xl)',
                     animation: challengeTimer.remaining <= 5 ? 'pulse 0.5s ease-in-out infinite' : 'none',
                   }}>
-                    <span className="text-2xl">⏱</span>
-                    <span className="text-3xl font-black text-white tabular-nums">{challengeTimer.remaining}s</span>
-                    <div className="w-24 h-2 rounded-full overflow-hidden" style={{ background: 'rgba(255,255,255,0.2)' }}>
+                    <span className="text-xl">⏱</span>
+                    <span className="text-2xl font-black text-white tabular-nums">{challengeTimer.remaining}s</span>
+                    <div className="w-20 h-1.5 rounded-full overflow-hidden" style={{ background: 'rgba(255,255,255,0.2)' }}>
                       <div className="h-full rounded-full transition-all duration-1000 ease-linear" style={{
                         width: `${(challengeTimer.remaining / challengeTimer.seconds) * 100}%`,
-                        background: challengeTimer.remaining <= 10 ? '#fbbf24' : '#10b981',
+                        background: challengeTimer.remaining <= 10 ? '#FBBF24' : '#10B981',
                       }} />
                     </div>
                   </div>
                 </div>
               )}
 
-              {/* ── Student Feedback Alerts ── */}
+              {/* Student Feedback Alerts */}
               <div className="absolute top-4 right-4 z-20 flex flex-col gap-2 pointer-events-none">
                 {studentFeedback.map(f => (
-                  <div key={f.id} className="animate-slide-in-right flex items-center gap-2 px-4 py-2 rounded-xl" style={{
-                    background: 'rgba(0,0,0,0.85)', backdropFilter: 'blur(10px)', boxShadow: '0 4px 20px rgba(0,0,0,0.3)',
-                  }}>
-                    <span className="text-xl">{f.emoji}</span>
+                  <div key={f.id} className="animate-slide-in-right flex items-center gap-2 px-3 py-2 rounded-xl"
+                    style={{ background: 'var(--bg-card)', border: '1px solid var(--border-subtle)', boxShadow: 'var(--shadow-lg)' }}>
+                    <span className="text-lg">{f.emoji}</span>
                     <div>
-                      <div className="text-[10px] font-bold" style={{ color: '#4f8fff' }}>{f.studentName}</div>
-                      <div className="text-xs font-semibold text-white">{f.label}</div>
+                      <div className="text-[10px] font-bold" style={{ color: 'var(--accent-indigo)' }}>{f.studentName}</div>
+                      <div className="text-xs font-semibold" style={{ color: 'var(--text-primary)' }}>{f.label}</div>
                     </div>
                   </div>
                 ))}
               </div>
 
-              {/* ── Celebration Confetti ── */}
+              {/* Celebration Confetti */}
               {showCelebration && (
                 <div className="absolute inset-0 pointer-events-none z-30 overflow-hidden">
                   {Array.from({ length: 60 }).map((_, i) => (
                     <div key={i} className="absolute" style={{
                       left: `${Math.random() * 100}%`, top: '-5%',
                       width: `${6 + Math.random() * 8}px`, height: `${6 + Math.random() * 8}px`,
-                      background: ['#ff3366', '#00ff88', '#ffdd00', '#4f8fff', '#ff8800', '#8b5cf6', '#ec4899', '#06b6d4'][i % 8],
+                      background: ['#6366F1', '#10B981', '#F59E0B', '#F43F5E', '#8B5CF6', '#EC4899', '#0EA5E9', '#F97316'][i % 8],
                       borderRadius: Math.random() > 0.5 ? '50%' : '2px',
                       animation: `confetti-fall ${2 + Math.random() * 2}s ease-in forwards`,
                       animationDelay: `${Math.random() * 0.8}s`,
@@ -1015,10 +1066,12 @@ export default function Room() {
 
               {/* Paused Overlay */}
               {isPaused && (
-                <div className="absolute inset-0 flex items-center justify-center" style={{ background: 'rgba(0,0,0,0.5)', backdropFilter: 'blur(4px)' }}>
+                <div className="absolute inset-0 flex items-center justify-center z-30"
+                  style={{ background: 'rgba(249,250,251,0.85)', backdropFilter: 'blur(6px)' }}>
                   <div className="text-center">
                     <div className="text-5xl mb-2">⏸</div>
-                    <div className="text-lg font-bold text-white">Session Paused</div>
+                    <div className="font-display text-lg font-bold" style={{ color: 'var(--text-primary)' }}>Session Paused</div>
+                    <p className="text-sm mt-1" style={{ color: 'var(--text-muted)' }}>Students see a paused screen</p>
                   </div>
                 </div>
               )}
@@ -1026,7 +1079,7 @@ export default function Room() {
           </div>
         )}
 
-        {/* ──── RIGHT: Engagement Sidebar ──── */}
+        {/* ──── RIGHT: Sidebar ──── */}
         <div className="flex flex-col shrink-0" style={{
           width: chatOpen ? '280px' : '52px',
           borderLeft: '1px solid var(--border-subtle)',
@@ -1035,16 +1088,26 @@ export default function Room() {
         }}>
           {chatOpen ? (
             <div className="flex flex-col h-full animate-fade-in">
-              <div className="flex items-center justify-between px-3 py-2 shrink-0" style={{ borderBottom: '1px solid var(--border-subtle)' }}>
-                <span className="text-[10px] font-bold" style={{ color: 'var(--text-muted)', letterSpacing: '0.08em' }}>CHAT</span>
-                <button onClick={() => setChatOpen(false)} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '16px' }}>✕</button>
+              <div className="flex items-center justify-between px-3 py-2.5 shrink-0"
+                style={{ borderBottom: '1px solid var(--border-subtle)' }}>
+                <span className="badge badge-indigo text-[10px]">💬 CHAT</span>
+                <button onClick={() => setChatOpen(false)}
+                  style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '16px' }}>✕</button>
               </div>
               <div className="flex-1 overflow-y-auto p-3 space-y-2">
-                {chatMessages.length === 0 && <p className="text-center text-xs py-8" style={{ color: 'var(--text-muted)' }}>No messages yet</p>}
+                {chatMessages.length === 0 && (
+                  <p className="text-center text-xs py-8" style={{ color: 'var(--text-muted)' }}>No messages yet</p>
+                )}
                 {chatMessages.map(msg => (
                   <div key={msg.id}>
-                    <div className="text-[10px] font-bold mb-0.5" style={{ color: '#4f8fff' }}>{msg.userName}</div>
-                    <div className="text-[13px] px-3 py-2" style={{ background: 'var(--bg-card)', color: 'var(--text-primary)', borderRadius: '4px 12px 12px 12px' }}>{msg.message}</div>
+                    <div className="text-[10px] font-bold mb-0.5" style={{ color: 'var(--accent-indigo)' }}>{msg.userName}</div>
+                    <div className="text-[13px] px-3 py-2"
+                      style={{
+                        background: 'var(--bg-surface)', color: 'var(--text-primary)',
+                        borderRadius: '4px 12px 12px 12px',
+                      }}>
+                      {msg.message}
+                    </div>
                   </div>
                 ))}
                 <div ref={chatEndRef} />
@@ -1053,23 +1116,29 @@ export default function Room() {
                 <div className="flex gap-2">
                   <input value={chatInput} onChange={(e) => setChatInput(e.target.value)} placeholder="Message..."
                     className="input-field text-[13px]" style={{ padding: '7px 10px' }} />
-                  <button type="submit" style={{
-                    padding: '7px 12px', borderRadius: '8px', fontSize: '14px', fontWeight: 700,
-                    background: 'rgba(79,143,255,0.12)', color: '#4f8fff', border: 'none', cursor: 'pointer',
-                  }}>↑</button>
+                  <button type="submit" className="btn-primary" style={{ padding: '7px 12px', fontSize: '14px' }}>↑</button>
                 </div>
               </form>
             </div>
           ) : (
             <div className="flex flex-col items-center py-3 gap-1.5">
-              <button onClick={() => setChatOpen(true)} style={s.sidebarBtn()} title="Chat">💬</button>
+              <button onClick={() => setChatOpen(true)}
+                className="w-[40px] h-[40px] rounded-xl flex items-center justify-center text-[17px] transition-all hover:scale-110"
+                style={{ background: 'var(--bg-surface)', border: '1px solid var(--border-subtle)', cursor: 'pointer' }}
+                title="Chat">💬</button>
               <div style={{ width: '24px', height: '1px', background: 'var(--border-subtle)', margin: '4px 0' }} />
               {['🎉', '✅', '🤔', '❌', '👏', '🔥'].map(emoji => (
-                <button key={emoji} onClick={() => sendReaction(emoji)} style={s.sidebarBtn()}
-                  className="hover:scale-110 active:scale-90 transition-transform">{emoji}</button>
+                <button key={emoji} onClick={() => sendReaction(emoji)}
+                  className="w-[40px] h-[40px] rounded-xl flex items-center justify-center text-[17px] hover:scale-110 active:scale-90 transition-transform"
+                  style={{ background: 'var(--bg-surface)', border: '1px solid var(--border-subtle)', cursor: 'pointer' }}>
+                  {emoji}
+                </button>
               ))}
               <div style={{ width: '24px', height: '1px', background: 'var(--border-subtle)', margin: '4px 0' }} />
-              <button onClick={() => setShowQuizModal(true)} style={s.sidebarBtn(true)} title="Pop Quiz">❓</button>
+              <button onClick={() => setShowQuizModal(true)}
+                className="w-[40px] h-[40px] rounded-xl flex items-center justify-center text-[17px] transition-all hover:scale-110"
+                style={{ background: 'var(--accent-indigo-light)', border: '1px solid rgba(99,102,241,0.2)', cursor: 'pointer' }}
+                title="Pop Quiz">❓</button>
             </div>
           )}
         </div>
@@ -1078,16 +1147,21 @@ export default function Room() {
       {/* ═══ NOTIFICATION ═══ */}
       {notification && (
         <div className="fixed top-16 left-1/2 -translate-x-1/2 z-50 animate-slide-down">
-          <div className="glass px-5 py-2.5 rounded-xl text-sm font-medium shadow-xl" style={{ color: 'var(--text-primary)' }}>{notification}</div>
+          <div className="px-5 py-2.5 rounded-xl text-sm font-medium"
+            style={{ background: 'var(--bg-card)', color: 'var(--text-primary)', border: '1px solid var(--border-subtle)', boxShadow: 'var(--shadow-lg)' }}>
+            {notification}
+          </div>
         </div>
       )}
 
       {/* ═══ PASTE CODE MODAL ═══ */}
       {showPasteModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: 'rgba(0,0,0,0.75)' }}>
-          <div className="w-full max-w-2xl animate-bounce-in" style={{ background: 'var(--bg-card)', borderRadius: '16px', border: '1px solid var(--border-default)' }}>
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4"
+          style={{ background: 'rgba(0,0,0,0.3)', backdropFilter: 'blur(4px)' }}>
+          <div className="w-full max-w-2xl animate-bounce-in"
+            style={{ background: 'var(--bg-card)', borderRadius: 'var(--radius-xl)', border: '1px solid var(--border-subtle)', boxShadow: 'var(--shadow-xl)' }}>
             <div className="flex items-center justify-between p-5 pb-0">
-              <h3 className="text-lg font-bold">📋 Paste HTML Code</h3>
+              <h3 className="font-display text-lg font-bold">📋 Paste HTML Code</h3>
               <button onClick={() => { setShowPasteModal(false); setPasteCode(''); setPasteFileName(''); }}
                 style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '20px' }}>✕</button>
             </div>
@@ -1098,10 +1172,12 @@ export default function Room() {
               <textarea value={pasteCode} onChange={(e) => setPasteCode(e.target.value)}
                 placeholder="Paste your HTML code here..."
                 className="input-field code-editor"
-                style={{ minHeight: '250px', resize: 'vertical', lineHeight: '1.6' }} />
+                style={{ minHeight: '250px', resize: 'vertical', lineHeight: '1.6', background: 'var(--bg-code)', color: '#D4D4D8' }} />
               <div className="flex gap-3 justify-end">
-                <button onClick={() => { setShowPasteModal(false); setPasteCode(''); setPasteFileName(''); }} className="btn-secondary">Cancel</button>
-                <button onClick={handlePasteSubmit} disabled={!pasteCode.trim()} className="btn-primary disabled:opacity-40">
+                <button onClick={() => { setShowPasteModal(false); setPasteCode(''); setPasteFileName(''); }}
+                  className="btn-secondary">Cancel</button>
+                <button onClick={handlePasteSubmit} disabled={!pasteCode.trim()}
+                  className="btn-primary disabled:opacity-40">
                   Add & Run ▶
                 </button>
               </div>
@@ -1112,18 +1188,22 @@ export default function Room() {
 
       {/* ═══ QUIZ MODAL ═══ */}
       {showQuizModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: 'rgba(0,0,0,0.75)' }}>
-          <div className="w-full max-w-md animate-bounce-in" style={{ background: 'var(--bg-card)', borderRadius: '16px', border: '1px solid var(--border-default)' }}>
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4"
+          style={{ background: 'rgba(0,0,0,0.3)', backdropFilter: 'blur(4px)' }}>
+          <div className="w-full max-w-md animate-bounce-in"
+            style={{ background: 'var(--bg-card)', borderRadius: 'var(--radius-xl)', border: '1px solid var(--border-subtle)', boxShadow: 'var(--shadow-xl)' }}>
             <div className="p-5">
-              <h3 className="text-lg font-bold mb-4">🎯 Pop Quiz</h3>
+              <h3 className="font-display text-lg font-bold mb-4">🎯 Pop Quiz</h3>
               <textarea value={quizQuestion} onChange={(e) => setQuizQuestion(e.target.value)}
                 placeholder="Type your question... e.g. What is 3/4 + 1/2?"
                 className="input-field mb-4" style={{ minHeight: '90px', resize: 'vertical' }} />
               {quizAnswers.length > 0 && (
-                <div className="mb-4 p-3 rounded-xl" style={{ background: 'var(--bg-primary)' }}>
+                <div className="mb-4 p-3 rounded-xl" style={{ background: 'var(--bg-surface)' }}>
                   <div className="text-[10px] font-bold mb-2" style={{ color: 'var(--text-muted)', letterSpacing: '0.05em' }}>ANSWERS RECEIVED</div>
                   {quizAnswers.map((a, i) => (
-                    <div key={i} className="text-sm mb-1"><span style={{ color: '#4f8fff' }}>{a.studentName}:</span> {a.answer}</div>
+                    <div key={i} className="text-sm mb-1">
+                      <span style={{ color: 'var(--accent-indigo)', fontWeight: 600 }}>{a.studentName}:</span> {a.answer}
+                    </div>
                   ))}
                 </div>
               )}

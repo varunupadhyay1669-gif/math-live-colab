@@ -10,6 +10,31 @@ export const injectedSyncScript = `
 
   (function() {
     let isRemoteUpdate = false;
+
+    // ── Deterministic Randomness ──
+    // Overriding Math.random so that both Teacher and Student generate the exact same sequences
+    // of questions/numbers when interacting with the simulation.
+    (function() {
+      function hashCode(str) {
+        let hash = 0;
+        for (let i = 0; i < str.length; i++) {
+          let char = str.charCodeAt(i);
+          hash = ((hash << 5) - hash) + char;
+          hash = hash & hash;
+        }
+        return Math.abs(hash) || 12345;
+      }
+      // Seed based on initial HTML structure (which matches exactly when loaded)
+      let seed = hashCode(document.documentElement.innerHTML);
+      if (seed < 1000) seed += 123456789;
+      
+      Math.random = function() {
+        let t = seed += 0x6D2B79F5;
+        t = Math.imul(t ^ t >>> 15, t | 1);
+        t ^= t + Math.imul(t ^ t >>> 7, t | 61);
+        return ((t ^ t >>> 14) >>> 0) / 4294967296;
+      };
+    })();
     
     function getElementPath(el) {
       if (!el || el.nodeType !== 1) return '';
@@ -238,6 +263,30 @@ export const injectedSyncScript = `
           key: data.key, code: data.code, bubbles: true 
         }));
         isRemoteUpdate = false;
+      } else if (data.type === 'REQUEST_HTML') {
+        const inputs = document.querySelectorAll('input, select, textarea');
+        inputs.forEach(el => {
+            if (el.tagName === 'INPUT') {
+                if (el.type === 'checkbox' || el.type === 'radio') {
+                    if (el.checked) el.setAttribute('checked', 'checked');
+                    else el.removeAttribute('checked');
+                } else {
+                    el.setAttribute('value', el.value);
+                }
+            } else if (el.tagName === 'TEXTAREA') {
+                el.innerHTML = el.value;
+            } else if (el.tagName === 'SELECT') {
+                Array.from(el.options).forEach(opt => {
+                    if (opt.selected) opt.setAttribute('selected', 'selected');
+                    else opt.removeAttribute('selected');
+                });
+            }
+        });
+        
+        window.parent.postMessage({ 
+            type: 'SYNC_PROVIDE_HTML', 
+            html: '<!DOCTYPE html>\n<html>' + document.documentElement.innerHTML + '</html>' 
+        }, '*');
       }
     });
   })();

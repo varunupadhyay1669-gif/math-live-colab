@@ -25,7 +25,7 @@ interface Cursor {
   name: string;
 }
 
-const CURSOR_COLORS = ["#ef4444", "#3b82f6", "#10b981", "#f59e0b", "#8b5cf6", "#ec4899"];
+const CURSOR_COLORS = ["#6366F1", "#10B981", "#F59E0B", "#F43F5E", "#8B5CF6", "#EC4899"];
 
 export default function StudentView() {
   const { roomId } = useParams<{ roomId: string }>();
@@ -75,7 +75,7 @@ export default function StudentView() {
     setTimeout(() => setNotification(""), 4000);
   };
 
-  // ── Build iframe URL safely preventing strict-mode unmount clears ──
+  // ── Build iframe URL ──
   useEffect(() => {
     if (!currentHtml) {
       setIframeUrl("");
@@ -111,7 +111,14 @@ export default function StudentView() {
 
     newSocket.on("disconnect", () => {
       setConnected(false);
-      showNotification("⚠️ Disconnected from teacher. Reconnecting...");
+      showNotification("⚠️ Disconnected. Reconnecting...");
+    });
+
+    // On reconnect, automatically request fresh state
+    newSocket.on("reconnect" as any, () => {
+      setConnected(true);
+      newSocket.emit("join_room", { roomId, userName: studentName, role: 'student' });
+      showNotification("✅ Reconnected!");
     });
 
     newSocket.on("room_state", (state: any) => {
@@ -119,7 +126,7 @@ export default function StudentView() {
       setActiveFileId(state.activeFileId);
       setIsPaused(state.isPaused);
       setChatMessages(state.chat || []);
-      // Use lastRunHtml (what teacher last ran) — this fixes late-join
+      // Use lastRunHtml — this fixes late-join sync
       if (state.lastRunHtml) {
         const f = state.files?.find((f: FileEntry) => f.id === state.activeFileId);
         setCurrentFileName(f?.name || 'Simulation');
@@ -138,21 +145,31 @@ export default function StudentView() {
       showNotification(`📄 Teacher uploaded: ${file.name}`);
     });
 
-    newSocket.on("active_file_changed", (fileId: string) => {
-      setActiveFileId(fileId);
-      setFiles(prev => {
-        const f = prev.find(f => f.id === fileId);
-        if (f) {
-          setCurrentFileName(f.name);
-          setCurrentHtml(f.html);
-          showNotification(`📂 Switched to: ${f.name}`);
-        }
-        return prev;
-      });
+    // ──── FIXED: active_file_changed now includes html payload from server ────
+    newSocket.on("active_file_changed", (data: { fileId: string; fileName?: string; html?: string }) => {
+      setActiveFileId(data.fileId);
+      if (data.html) {
+        setCurrentFileName(data.fileName || 'Simulation');
+        setCurrentHtml(data.html);
+        showNotification(`📂 Switched to: ${data.fileName || 'new file'}`);
+      }
     });
 
     newSocket.on("run_preview", ({ html }: { fileId: string; html: string }) => {
       setCurrentHtml(html);
+    });
+
+    // ──── FORCE SYNC: Server-authoritative state push ────
+    newSocket.on("force_sync_state", (state: any) => {
+      if (state.files) setFiles(state.files);
+      if (state.activeFileId) setActiveFileId(state.activeFileId);
+      if (state.lastRunHtml) {
+        setCurrentHtml(state.lastRunHtml);
+        const f = state.files?.find((f: FileEntry) => f.id === state.activeFileId);
+        setCurrentFileName(f?.name || 'Simulation');
+      }
+      if (typeof state.isPaused === 'boolean') setIsPaused(state.isPaused);
+      showNotification("🔄 Synced with teacher");
     });
 
     newSocket.on("file_deleted", ({ fileId, newActiveId }: { fileId: string; newActiveId: string | null }) => {
@@ -255,8 +272,6 @@ export default function StudentView() {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [chatMessages]);
 
-  // ── (Old cleanup effect removed to prevent strict mode bugs) ──
-
   // ── Drawing: render strokes on canvas ──
   const renderDrawing = () => {
     const canvas = drawCanvasRef.current;
@@ -353,13 +368,12 @@ export default function StudentView() {
   const sendReaction = (emoji: string, label: string) => {
     if (!socket || reactionCooldown) return;
     socket.emit("student_reaction", { roomId, emoji, label, studentName });
-    
-    // Also show local bubble
+
     const id = reactionIdRef.current++;
     const x = 15 + Math.random() * 70;
     setReactions(prev => [...prev, { id, emoji, x }]);
     setTimeout(() => setReactions(prev => prev.filter(r => r.id !== id)), 3000);
-    
+
     setReactionCooldown(true);
     setTimeout(() => setReactionCooldown(false), 2000);
   };
@@ -383,46 +397,48 @@ export default function StudentView() {
   };
 
   return (
-    <div className="h-screen w-screen flex flex-col overflow-hidden" style={{ background: '#0F0F11' }}>
+    <div className="h-screen w-screen flex flex-col overflow-hidden" style={{ background: 'var(--bg-primary)' }}>
 
-      {/* ══════ SLIM TOP BAR ══════ */}
-      <div className="absolute top-6 left-8 right-8 z-40 flex items-center justify-between px-8 lux-glass rounded-2xl"
-        style={{ height: '72px' }}>
+      {/* ══════ HEADER BAR ══════ */}
+      <header className="flex items-center justify-between px-5 shrink-0"
+        style={{ height: '52px', borderBottom: '1px solid var(--border-subtle)', background: 'var(--bg-secondary)' }}>
 
-        <div className="flex items-center gap-6">
-          <span className="text-2xl" style={{ textShadow: '0 2px 10px rgba(212,175,55,0.4)' }}>🧮</span>
-          <div className="flex items-center gap-3 bg-[rgba(212,175,55,0.05)] px-4 py-2 rounded-lg border border-[rgba(212,175,55,0.1)]">
-            <span className="text-[14px] font-serif tracking-wide text-[var(--accent-gold)]">
+        <div className="flex items-center gap-4">
+          <span className="text-lg">🧮</span>
+          <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg"
+            style={{ background: 'var(--bg-surface)', border: '1px solid var(--border-subtle)' }}>
+            <span className="text-[13px] font-display font-semibold" style={{ color: 'var(--text-primary)' }}>
               {currentFileName || 'MathsLive'}
             </span>
-            <div className={`connection-dot ${connected ? 'online' : 'offline'}`} style={{ width: 8, height: 8, background: connected ? '#d4af37' : 'gray', boxShadow: connected ? '0 0 10px #d4af37' : 'none' }} />
+            <div className={`connection-dot ${connected ? 'online' : 'offline'}`}
+              style={{ width: 7, height: 7 }} />
           </div>
         </div>
 
-        <div className="flex items-center gap-4">
+        <div className="flex items-center gap-3">
           {/* Raise Hand */}
           <button onClick={raiseHand}
-            className={`flex items-center gap-2 px-6 py-2 rounded-lg text-[13px] font-bold transition-all hover:scale-[1.02] ${handUp ? 'animate-hand-wave lux-button-active' : 'lux-button'}`}>
+            className={`btn text-[12px] ${handUp ? 'animate-hand-wave btn-toolbar-active' : ''}`}>
             {handUp ? '✋ Hand Raised' : '✋ Raise Hand'}
           </button>
 
           {/* Chat Toggle */}
           <button onClick={toggleChat}
-            className={`relative flex items-center gap-2 px-6 py-2 rounded-lg text-[13px] transition-all hover:scale-[1.02] ${chatOpen ? 'lux-button-active' : 'lux-button'}`}>
-            💬 Classroom Chat
+            className={`btn text-[12px] relative ${chatOpen ? 'btn-toolbar-active' : ''}`}>
+            💬 Chat
             {unreadChat > 0 && (
-              <span className="absolute -top-2 -right-2 w-6 h-6 rounded-full flex items-center justify-center text-[11px] font-bold text-white animate-bounce-in shadow-lg"
-                style={{ background: 'var(--accent-rose)' }}>
+              <span className="absolute -top-2 -right-2 w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold text-white animate-bounce-in"
+                style={{ background: 'var(--accent-rose)', boxShadow: '0 2px 6px rgba(244,63,94,0.4)' }}>
                 {unreadChat}
               </span>
             )}
           </button>
         </div>
-      </div>
+      </header>
 
       {/* ══════ MAIN AREA ══════ */}
       <div className="flex-1 flex overflow-hidden relative">
-        
+
         {/* Full-Screen Iframe */}
         <div className="flex-1 relative">
           {iframeUrl ? (
@@ -435,28 +451,29 @@ export default function StudentView() {
             />
           ) : (
             <div className="flex items-center justify-center h-full" style={{ background: 'var(--bg-primary)' }}>
-              <div className="text-center animate-slide-up bg-[rgba(212,175,55,0.02)] p-12 rounded-2xl border border-[var(--border-subtle)] shadow-[var(--shadow-lux)]">
-                <div className="text-6xl mb-6 animate-float" style={{ filter: 'drop-shadow(0 0 15px rgba(212,175,55,0.3))' }}>⏳</div>
-                <h2 className="text-3xl font-serif font-bold mb-4 text-[var(--accent-gold)]">Waiting for teacher...</h2>
-                <p className="text-[14px] leading-relaxed text-white/50">
+              <div className="text-center animate-slide-up p-12 rounded-2xl"
+                style={{ background: 'var(--bg-card)', border: '1px solid var(--border-subtle)', boxShadow: 'var(--shadow-lg)' }}>
+                <div className="text-5xl mb-5 animate-gentle-bounce">⏳</div>
+                <h2 className="font-display text-2xl font-bold mb-3" style={{ color: 'var(--text-primary)' }}>Waiting for teacher...</h2>
+                <p className="text-sm" style={{ color: 'var(--text-muted)', lineHeight: '1.6' }}>
                   Your teacher will load a simulation shortly.
                 </p>
-                <div className="flex items-center justify-center gap-2 mt-8">
+                <div className="flex items-center justify-center gap-2 mt-6">
                   {[0, 1, 2].map(i => (
                     <div key={i} className="w-2 h-2 rounded-full"
-                      style={{ background: 'var(--accent-blue)', animation: `dot-pulse 1.5s ease-in-out infinite`, animationDelay: `${i * 0.3}s` }} />
+                      style={{ background: 'var(--accent-indigo)', animation: `dot-pulse 1.5s ease-in-out infinite`, animationDelay: `${i * 0.3}s` }} />
                   ))}
                 </div>
               </div>
             </div>
           )}
 
-          {/* ── Drawing Canvas Overlay ── */}
+          {/* Drawing Canvas Overlay */}
           <canvas ref={drawCanvasRef}
             className="absolute inset-0 w-full h-full pointer-events-none"
             style={{ zIndex: 10 }} />
 
-          {/* ── Teacher Cursor Overlay ── */}
+          {/* Teacher Cursor Overlay */}
           <div className="absolute inset-0 pointer-events-none overflow-hidden" style={{ zIndex: 11 }}>
             {(Object.entries(cursors) as [string, Cursor][]).map(([id, cursor]) => (
               <div key={id} className="absolute transition-all duration-100 ease-linear"
@@ -473,7 +490,7 @@ export default function StudentView() {
             ))}
           </div>
 
-          {/* ── Spotlight Overlay ── */}
+          {/* Spotlight Overlay */}
           {spotlight && (
             <div className="absolute inset-0 pointer-events-none">
               <div className="absolute w-20 h-20 rounded-full border-4 animate-pulse-glow"
@@ -481,12 +498,12 @@ export default function StudentView() {
                   left: `${spotlight.x * 100}%`, top: `${spotlight.y * 100}%`,
                   transform: 'translate(-50%, -50%)',
                   borderColor: 'var(--accent-amber)',
-                  boxShadow: '0 0 30px rgba(251,191,36,0.3)',
+                  boxShadow: '0 0 30px rgba(245,158,11,0.3)',
                 }} />
             </div>
           )}
-          
-          {/* ── Laser Pointer Overlay ── */}
+
+          {/* Laser Pointer Overlay */}
           {laserPointer.active && (
             <div className="absolute inset-0 pointer-events-none z-20">
               <div className="absolute w-4 h-4 rounded-full"
@@ -500,28 +517,28 @@ export default function StudentView() {
             </div>
           )}
 
-          {/* ── Challenge Timer Overlay ── */}
+          {/* Challenge Timer Overlay */}
           {challengeTimer && (
             <div className="absolute top-4 left-1/2 -translate-x-1/2 pointer-events-none z-30 animate-bounce-in">
-              <div className="flex items-center gap-3 px-6 py-3 rounded-2xl" style={{
-                background: challengeTimer.remaining <= 10 ? 'rgba(239,68,68,0.9)' : 'rgba(0,0,0,0.85)',
-                backdropFilter: 'blur(10px)', boxShadow: '0 8px 32px rgba(0,0,0,0.5)',
+              <div className="flex items-center gap-3 px-5 py-2.5 rounded-xl" style={{
+                background: challengeTimer.remaining <= 10 ? 'rgba(244,63,94,0.95)' : 'rgba(17,24,39,0.9)',
+                backdropFilter: 'blur(10px)', boxShadow: 'var(--shadow-xl)',
                 animation: challengeTimer.remaining <= 5 ? 'pulse 0.5s ease-in-out infinite' : 'none',
               }}>
-                <span className="text-2xl">⏳</span>
-                <span className="text-3xl font-black text-white tabular-nums">{challengeTimer.remaining}s</span>
+                <span className="text-xl">⏳</span>
+                <span className="text-2xl font-black text-white tabular-nums">{challengeTimer.remaining}s</span>
               </div>
             </div>
           )}
 
-          {/* ── Celebration Confetti Overlay ── */}
+          {/* Celebration Confetti */}
           {showCelebration && (
             <div className="absolute inset-0 pointer-events-none z-40 overflow-hidden">
               {Array.from({ length: 80 }).map((_, i) => (
                 <div key={i} className="absolute" style={{
                   left: `${Math.random() * 100}%`, top: '-10%',
                   width: `${6 + Math.random() * 8}px`, height: `${6 + Math.random() * 8}px`,
-                  background: ['#ff3366', '#00ff88', '#ffdd00', '#4f8fff', '#ff8800', '#8b5cf6', '#ec4899', '#06b6d4'][i % 8],
+                  background: ['#6366F1', '#10B981', '#F59E0B', '#F43F5E', '#8B5CF6', '#EC4899', '#0EA5E9', '#F97316'][i % 8],
                   borderRadius: Math.random() > 0.5 ? '50%' : '2px',
                   animation: `confetti-fall ${2 + Math.random() * 2.5}s ease-in forwards`,
                   animationDelay: `${Math.random() * 0.5}s`,
@@ -531,33 +548,30 @@ export default function StudentView() {
             </div>
           )}
 
-          {/* ── Quick Reactions Bar ── */}
+          {/* Quick Reactions Bar */}
           {iframeUrl && !isPaused && (
-            <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-30 animate-slide-up">
-              <div className="flex items-center gap-2 px-4 py-2 rounded-2xl" style={{
-                background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(12px)', border: '1px solid rgba(255,255,255,0.1)'
-              }}>
-                <button onClick={() => sendReaction('✅', 'Got it!')} disabled={reactionCooldown}
-                  className="px-3 py-1.5 rounded-xl hover:bg-white/10 active:scale-95 transition-all text-sm font-bold flex items-center gap-1">
-                  ✅ <span className="hidden sm:inline">Got it</span>
-                </button>
-                <button onClick={() => sendReaction('😕', 'Confused')} disabled={reactionCooldown}
-                  className="px-3 py-1.5 rounded-xl hover:bg-white/10 active:scale-95 transition-all text-sm font-bold flex items-center gap-1">
-                  😕 <span className="hidden sm:inline">Confused</span>
-                </button>
-                <button onClick={() => sendReaction('🐌', 'Slow down')} disabled={reactionCooldown}
-                  className="px-3 py-1.5 rounded-xl hover:bg-white/10 active:scale-95 transition-all text-sm font-bold flex items-center gap-1">
-                  🐌 <span className="hidden sm:inline">Too fast</span>
-                </button>
-                <button onClick={() => sendReaction('🤯', 'Mind blown')} disabled={reactionCooldown}
-                  className="px-3 py-1.5 rounded-xl hover:bg-white/10 active:scale-95 transition-all text-sm font-bold flex items-center gap-1">
-                  🤯 <span className="hidden sm:inline">Amazing</span>
-                </button>
+            <div className="absolute bottom-5 left-1/2 -translate-x-1/2 z-30 animate-slide-up">
+              <div className="flex items-center gap-1.5 px-3 py-2 rounded-2xl"
+                style={{ background: 'rgba(255,255,255,0.9)', backdropFilter: 'blur(12px)', border: '1px solid var(--border-subtle)', boxShadow: 'var(--shadow-lg)' }}>
+                {[
+                  { emoji: '✅', label: 'Got it!' },
+                  { emoji: '😕', label: 'Confused' },
+                  { emoji: '🐌', label: 'Slow down' },
+                  { emoji: '🤯', label: 'Mind blown' },
+                ].map(r => (
+                  <button key={r.emoji} onClick={() => sendReaction(r.emoji, r.label)} disabled={reactionCooldown}
+                    className="px-3 py-1.5 rounded-xl active:scale-95 transition-all text-sm font-semibold flex items-center gap-1"
+                    style={{ color: 'var(--text-primary)', background: 'transparent' }}
+                    onMouseEnter={e => (e.currentTarget.style.background = 'var(--bg-surface)')}
+                    onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
+                    {r.emoji} <span className="hidden sm:inline text-[12px]" style={{ color: 'var(--text-secondary)' }}>{r.label}</span>
+                  </button>
+                ))}
               </div>
             </div>
           )}
 
-          {/* ── Floating Reactions ── */}
+          {/* Floating Reactions */}
           <div className="absolute inset-0 pointer-events-none overflow-hidden z-20">
             {reactions.map(r => (
               <div key={r.id}
@@ -565,7 +579,7 @@ export default function StudentView() {
                 style={{
                   left: `${r.x}%`,
                   bottom: '15%',
-                  fontSize: '56px',
+                  fontSize: '48px',
                   animation: 'reaction-pop 0.4s cubic-bezier(0.34, 1.56, 0.64, 1) forwards, reaction-float-up 3s ease-out 0.4s forwards',
                 }}>
                 {r.emoji}
@@ -573,14 +587,14 @@ export default function StudentView() {
             ))}
           </div>
 
-          {/* ── Paused Overlay ── */}
+          {/* Paused Overlay */}
           {isPaused && (
-            <div className="absolute inset-0 flex items-center justify-center animate-fade-in"
-              style={{ background: 'rgba(0,0,0,0.75)', backdropFilter: 'blur(8px)' }}>
+            <div className="absolute inset-0 flex items-center justify-center animate-fade-in z-30"
+              style={{ background: 'rgba(249,250,251,0.9)', backdropFilter: 'blur(8px)' }}>
               <div className="text-center animate-bounce-in">
-                <div className="text-7xl mb-4">⏸</div>
-                <h2 className="text-3xl font-bold text-white mb-2">Session Paused</h2>
-                <p className="text-lg" style={{ color: 'var(--text-secondary)' }}>
+                <div className="text-6xl mb-4">⏸</div>
+                <h2 className="font-display text-2xl font-bold mb-2" style={{ color: 'var(--text-primary)' }}>Session Paused</h2>
+                <p className="text-base" style={{ color: 'var(--text-secondary)' }}>
                   Your teacher is explaining something...
                 </p>
               </div>
@@ -588,14 +602,15 @@ export default function StudentView() {
           )}
         </div>
 
-        {/* ── Chat Panel ── */}
+        {/* Chat Panel */}
         {chatOpen && (
           <div className="flex flex-col shrink-0 animate-slide-in-right"
             style={{ width: '280px', background: 'var(--bg-secondary)', borderLeft: '1px solid var(--border-subtle)' }}>
             <div className="flex items-center justify-between px-3 py-2.5 shrink-0"
               style={{ borderBottom: '1px solid var(--border-subtle)' }}>
-              <span className="text-xs font-semibold" style={{ color: 'var(--text-muted)', letterSpacing: '0.05em' }}>💬 CHAT</span>
-              <button onClick={() => setChatOpen(false)} className="text-xs" style={{ color: 'var(--text-muted)' }}>✕</button>
+              <span className="badge badge-indigo text-[10px]">💬 CHAT</span>
+              <button onClick={() => setChatOpen(false)}
+                style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '14px' }}>✕</button>
             </div>
             <div className="flex-1 overflow-y-auto p-3 space-y-2.5">
               {chatMessages.length === 0 ? (
@@ -606,12 +621,12 @@ export default function StudentView() {
               ) : chatMessages.map(msg => (
                 <div key={msg.id} className="animate-fade-in">
                   <div className="text-[10px] font-bold mb-0.5"
-                    style={{ color: msg.userName === studentName ? 'var(--accent-emerald)' : 'var(--accent-blue)' }}>
+                    style={{ color: msg.userName === studentName ? 'var(--accent-emerald)' : 'var(--accent-indigo)' }}>
                     {msg.userName}
                   </div>
                   <div className="text-sm px-3 py-2 rounded-xl"
                     style={{
-                      background: msg.userName === studentName ? 'var(--accent-blue-glow)' : 'var(--bg-card)',
+                      background: msg.userName === studentName ? 'var(--accent-indigo-light)' : 'var(--bg-surface)',
                       color: 'var(--text-primary)',
                       borderRadius: msg.userName === studentName ? '12px 12px 4px 12px' : '4px 12px 12px 12px',
                     }}>
@@ -626,8 +641,7 @@ export default function StudentView() {
                 <input value={chatInput} onChange={(e) => setChatInput(e.target.value)}
                   placeholder="Type a message..."
                   className="input-field text-sm" style={{ padding: '8px 12px' }} />
-                <button type="submit" className="px-3 py-2 rounded-lg text-sm font-bold shrink-0 transition-all"
-                  style={{ background: 'var(--accent-blue-glow)', color: 'var(--accent-blue)' }}>
+                <button type="submit" className="btn-primary" style={{ padding: '8px 12px', fontSize: '14px' }}>
                   ↑
                 </button>
               </div>
@@ -638,9 +652,9 @@ export default function StudentView() {
 
       {/* ══════ NOTIFICATION TOAST ══════ */}
       {notification && (
-        <div className="fixed top-16 left-1/2 -translate-x-1/2 z-50 animate-slide-down">
-          <div className="glass px-5 py-3 rounded-xl text-sm font-medium shadow-xl"
-            style={{ color: 'var(--text-primary)', maxWidth: '90vw' }}>
+        <div className="fixed top-14 left-1/2 -translate-x-1/2 z-50 animate-slide-down">
+          <div className="px-5 py-2.5 rounded-xl text-sm font-medium"
+            style={{ background: 'var(--bg-card)', color: 'var(--text-primary)', border: '1px solid var(--border-subtle)', boxShadow: 'var(--shadow-lg)', maxWidth: '90vw' }}>
             {notification}
           </div>
         </div>
@@ -648,14 +662,16 @@ export default function StudentView() {
 
       {/* ══════ QUIZ MODAL ══════ */}
       {quizModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: 'rgba(0,0,0,0.8)' }}>
-          <div className="w-full max-w-md animate-bounce-in" style={{ background: 'var(--bg-card)', borderRadius: 'var(--radius-xl)', border: '1px solid var(--border-default)' }}>
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4"
+          style={{ background: 'rgba(0,0,0,0.3)', backdropFilter: 'blur(4px)' }}>
+          <div className="w-full max-w-md animate-bounce-in"
+            style={{ background: 'var(--bg-card)', borderRadius: 'var(--radius-xl)', border: '1px solid var(--border-subtle)', boxShadow: 'var(--shadow-xl)' }}>
             <div className="p-6">
-              <div className="text-center mb-6">
+              <div className="text-center mb-5">
                 <div className="text-4xl mb-3 animate-reaction-pop">🎯</div>
-                <h3 className="text-lg font-bold" style={{ color: 'var(--text-primary)' }}>Pop Quiz!</h3>
+                <h3 className="font-display text-lg font-bold" style={{ color: 'var(--text-primary)' }}>Pop Quiz!</h3>
               </div>
-              <div className="p-4 rounded-xl mb-4" style={{ background: 'var(--bg-primary)', border: '1px solid var(--border-subtle)' }}>
+              <div className="p-4 rounded-xl mb-4" style={{ background: 'var(--bg-surface)', border: '1px solid var(--border-subtle)' }}>
                 <p className="text-base font-medium text-center" style={{ color: 'var(--text-primary)', lineHeight: 1.6 }}>
                   {quizModal.question}
                 </p>

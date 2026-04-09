@@ -19,7 +19,8 @@ interface RoomData {
   isPaused: boolean;
   teacherSocketId: string | null;
   createdAt: number;
-  lastActivityAt: number; // For clearing memory after 48 hours
+  lastActivityAt: number;
+  studentLeftAt: number | null; // When the last student disconnected (for 2hr expiry)
   chat: Array<{ id: string; userId: string; userName: string; message: string; timestamp: number }>;
 }
 
@@ -35,24 +36,40 @@ async function startServer() {
 
   const rooms = new Map<string, RoomData>();
 
-  // ─── MEMORY MANAGEMENT (Garbage collection) ───
-  // Run every 10 minutes, sweep rooms inactive for > 48 hours
+  // ─── MEMORY MANAGEMENT ───
+  // Sweep every 10 minutes:
+  //  - Rooms inactive for > 48 hours (no activity at all)
+  //  - Rooms where last student left > 2 hours ago AND no students currently connected
   setInterval(() => {
     const now = Date.now();
-    const expiryMs = 48 * 60 * 60 * 1000; // 48 hours
+    const absoluteExpiryMs = 48 * 60 * 60 * 1000; // 48 hours hard cap
+    const studentLeftExpiryMs = 2 * 60 * 60 * 1000; // 2 hours after last student leaves
     let deletedCount = 0;
-    
+
     for (const [roomId, room] of rooms.entries()) {
-      if (now - room.lastActivityAt > expiryMs) {
+      // Hard expiry: 48 hours of no activity at all
+      if (now - room.lastActivityAt > absoluteExpiryMs) {
         rooms.delete(roomId);
         deletedCount++;
+        continue;
+      }
+
+      // Student-left expiry: 2 hours after last student disconnected
+      if (room.studentLeftAt && (now - room.studentLeftAt > studentLeftExpiryMs)) {
+        // Only expire if no students are currently connected
+        const hasStudents = Array.from(room.users.values()).some(u => u.role === 'student');
+        if (!hasStudents) {
+          rooms.delete(roomId);
+          deletedCount++;
+          continue;
+        }
       }
     }
-    
+
     if (deletedCount > 0) {
-      console.log(`🧹 Memory Sweep: Cleared ${deletedCount} abandoned rooms.`);
+      console.log(`🧹 Memory Sweep: Cleared ${deletedCount} expired rooms.`);
     }
-  }, 10 * 60 * 1000); 
+  }, 10 * 60 * 1000);
 
   function updateRoomActivity(roomId: string) {
     const room = rooms.get(roomId);
@@ -69,6 +86,7 @@ async function startServer() {
       teacherSocketId: null,
       createdAt: Date.now(),
       lastActivityAt: Date.now(),
+      studentLeftAt: null,
       chat: [],
     };
   }
@@ -94,8 +112,16 @@ async function startServer() {
       const room = rooms.get(roomId)!;
       room.users.set(socket.id, { name: userName || 'Anonymous', role, joinedAt: Date.now() });
 
+      // If a student just joined, clear the studentLeftAt timer
+      if (role === 'student') {
+        room.studentLeftAt = null;
+      }
+
       if (role === 'teacher') {
         room.teacherSocketId = socket.id;
+      } else if (role === 'student' && room.teacherSocketId) {
+        // Auto-request the teacher to send their live DOM state to catch up this student
+        io.to(room.teacherSocketId).emit('request_html_sync');
       }
 
       // Send current state to the newly joined user
@@ -121,8 +147,8 @@ async function startServer() {
       room.activeFileId = file.id;
       room.lastRunHtml = file.html;
       io.to(roomId).emit('file_uploaded', file);
-      io.to(roomId).emit('active_file_changed', file.id);
-      // Auto-push HTML to all connected students immediately
+      io.to(roomId).emit('active_file_changed', { fileId: file.id, fileName: file.name, html: file.html });
+      // Auto-push HTML to all connected clients immediately
       io.to(roomId).emit('run_preview', { fileId: file.id, html: file.html });
     });
 
@@ -153,9 +179,10 @@ async function startServer() {
       const file = room.files.find(f => f.id === fileId);
       if (file) {
         room.lastRunHtml = file.html;
+        // Send file content WITH the active_file_changed so student never reads stale state
+        io.to(roomId).emit('active_file_changed', { fileId, fileName: file.name, html: file.html });
         io.to(roomId).emit('run_preview', { fileId, html: file.html });
       }
-      io.to(roomId).emit('active_file_changed', fileId);
     });
 
     // ─── RUN / REFRESH PREVIEW ───
@@ -172,6 +199,33 @@ async function startServer() {
       room.lastRunHtml = html;
       // Send to everyone (including sender for confirmation)
       io.to(roomId).emit('run_preview', { fileId, html });
+    });
+
+    socket.on('sync_html_update', ({ roomId, html }: { roomId: string; html: string }) => {
+      const room = rooms.get(roomId);
+      if (!room || !room.activeFileId) return;
+      room.lastRunHtml = html;
+      // Force all students to match the teacher's current live DOM
+      io.to(roomId).emit('run_preview', { fileId: room.activeFileId, html });
+    });
+
+    // ─── FORCE SYNC (Server-authoritative) ───
+    socket.on('force_sync', ({ roomId }: { roomId: string }) => {
+      const room = rooms.get(roomId);
+      if (!room) return;
+      updateRoomActivity(roomId);
+
+      // Build the authoritative state snapshot
+      const syncPayload = {
+        files: room.files,
+        activeFileId: room.activeFileId,
+        lastRunHtml: room.lastRunHtml,
+        isPaused: room.isPaused,
+      };
+
+      // Broadcast to all clients in the room
+      io.to(roomId).emit('force_sync_state', syncPayload);
+      console.log(`🔄 Force Sync triggered for room ${roomId}`);
     });
 
     // ─── TEACHER CONTROLS ───
@@ -304,12 +358,21 @@ async function startServer() {
             room.teacherSocketId = null;
           }
 
-          // Clean up empty rooms after 5 minutes
+          // Check if any students remain — if not, start the 2hr expiry countdown
+          if (user?.role === 'student') {
+            const hasStudents = Array.from(room.users.values()).some(u => u.role === 'student');
+            if (!hasStudents) {
+              room.studentLeftAt = Date.now();
+              console.log(`⏰ Room ${roomId}: Last student left. 2hr expiry countdown started.`);
+            }
+          }
+
+          // Clean up truly empty rooms after 5 minutes
           if (room.users.size === 0) {
             setTimeout(() => {
               if (rooms.has(roomId) && rooms.get(roomId)!.users.size === 0) {
                 rooms.delete(roomId);
-                console.log(`Room ${roomId} cleaned up`);
+                console.log(`Room ${roomId} cleaned up (empty)`);
               }
             }, 5 * 60 * 1000);
           }
