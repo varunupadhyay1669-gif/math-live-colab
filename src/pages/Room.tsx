@@ -2,7 +2,27 @@ import React, { useEffect, useState, useRef, useCallback } from "react";
 import { useParams, useNavigate, useSearchParams } from "react-router-dom";
 import { io, Socket } from "socket.io-client";
 import { injectedSyncScript } from "../lib/syncScript";
+import { stepLockScript } from "../lib/stepLockScript";
+import { sessionRecorder } from "../lib/sessionRecorder";
+import { sounds } from "../lib/sounds";
 
+// ── Components ──
+import TeacherControls from "../components/TeacherControls";
+import ChatPanel from "../components/ChatPanel";
+import FeedbackToasts from "../components/FeedbackToasts";
+import PausedOverlay from "../components/PausedOverlay";
+import TimerDisplay from "../components/TimerDisplay";
+import Celebrations from "../components/Celebrations";
+import CursorOverlay from "../components/CursorOverlay";
+import AnnotationLayer from "../components/AnnotationLayer";
+import StepControls from "../components/StepControls";
+import StepGate from "../components/StepGate";
+import AttentionIndicator from "../components/AttentionIndicator";
+import UserList from "../components/UserList";
+import SimulationLibrary from "../components/SimulationLibrary";
+import ConnectionStatus from "../components/ConnectionStatus";
+
+// ── Types ──
 interface FileEntry {
   id: string;
   name: string;
@@ -31,6 +51,19 @@ interface UserInfo {
   role: string;
 }
 
+interface StudentAttention {
+  studentId: string;
+  studentName: string;
+  isAttentive: boolean;
+  lastSeen: number;
+}
+
+interface GateData {
+  question: string;
+  options: string[];
+  correctIndex: number;
+}
+
 const CURSOR_COLORS = ["#6366F1", "#10B981", "#F59E0B", "#F43F5E", "#8B5CF6", "#EC4899", "#0EA5E9", "#F97316"];
 
 export default function Room() {
@@ -43,7 +76,7 @@ export default function Room() {
   type ViewMode = 'split' | 'code' | 'preview';
   const [viewMode, setViewMode] = useState<ViewMode>('split');
 
-  // ── State ──
+  // ── Core State ──
   const [socket, setSocket] = useState<Socket | null>(null);
   const [connected, setConnected] = useState(false);
   const [files, setFiles] = useState<FileEntry[]>([]);
@@ -53,10 +86,11 @@ export default function Room() {
   const [iframeUrl, setIframeUrl] = useState("");
   const [users, setUsers] = useState<UserInfo[]>([]);
   const [cursors, setCursors] = useState<Record<string, Cursor>>({});
+
+  // ── Feature State ──
   const [isPaused, setIsPaused] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
-  const [chatInput, setChatInput] = useState("");
   const [showQuizModal, setShowQuizModal] = useState(false);
   const [quizQuestion, setQuizQuestion] = useState("");
   const [quizAnswers, setQuizAnswers] = useState<Array<{ answer: string; studentName: string }>>([]);
@@ -69,37 +103,53 @@ export default function Room() {
   const [showPasteModal, setShowPasteModal] = useState(false);
   const [pasteCode, setPasteCode] = useState("");
   const [pasteFileName, setPasteFileName] = useState("");
-  // ── Drawing/Annotation State ──
+
+  // ── Drawing & Annotation ──
   const [drawMode, setDrawMode] = useState(false);
-  const [isDrawing, setIsDrawing] = useState(false);
+  const [laserMode, setLaserMode] = useState(false);
+  const [penType, setPenType] = useState<'transient' | 'permanent'>('transient');
   const [penColor, setPenColor] = useState('#6366F1');
   const [penWidth, setPenWidth] = useState(3);
-  const [showPenMenu, setShowPenMenu] = useState(false);
-  // ── Laser Pointer ──
-  const [laserMode, setLaserMode] = useState(false);
-  const [localMousePos, setLocalMousePos] = useState({ x: 0, y: 0 });
+
   // ── Challenge Timer ──
   const [challengeTimer, setChallengeTimer] = useState<{ seconds: number; remaining: number } | null>(null);
-  const [showTimerMenu, setShowTimerMenu] = useState(false);
+  const challengeTimerRef = useRef<ReturnType<typeof setInterval>>();
+
   // ── Student Feedback ──
   const [studentFeedback, setStudentFeedback] = useState<Array<{ id: number; emoji: string; label: string; studentName: string }>>([]);
   const feedbackIdRef = useRef(0);
+
   // ── Celebration ──
   const [showCelebration, setShowCelebration] = useState(false);
+  const [celebrationType, setCelebrationType] = useState<'confetti' | 'fireworks' | 'stars'>('confetti');
+
   // ── Sync Status ──
   const [lastSyncTime, setLastSyncTime] = useState<number | null>(null);
 
+  // ── Step-Lock ──
+  const [stepLockEnabled, setStepLockEnabled] = useState(false);
+  const [currentStep, setCurrentStep] = useState(1);
+  const [maxStep, setMaxStep] = useState(0);
+  const [gates, setGates] = useState<Record<number, GateData>>({});
+  const [showGateModal, setShowGateModal] = useState(false);
+
+  // ── Attention Detection ──
+  const [attention, setAttention] = useState<Record<string, StudentAttention>>({});
+
+  // ── Simulation Library ──
+  const [showLibrary, setShowLibrary] = useState(false);
+
+  // ── Recording ──
+  const [isRecording, setIsRecording] = useState(false);
+
+  // ── Sound ──
+  const [soundMuted, setSoundMuted] = useState(false);
+
+  // ── Refs ──
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const chatEndRef = useRef<HTMLDivElement>(null);
   const timerRef = useRef<ReturnType<typeof setInterval>>();
   const reactionIdRef = useRef(0);
-  const drawCanvasRef = useRef<HTMLCanvasElement>(null);
-  const currentStrokeRef = useRef<Array<{x: number; y: number}>>([]);
-  const strokesRef = useRef<Array<{points: Array<{x: number; y: number}>; color: string; width: number; time: number; transient?: boolean}>>([]);
-  const isTransientDrawRef = useRef(false);
-  const drawAnimFrameRef = useRef<number>();
-  const challengeTimerRef = useRef<ReturnType<typeof setInterval>>();
 
   // ── Session Timer ──
   useEffect(() => {
@@ -142,9 +192,13 @@ export default function Room() {
     newSocket.on("user_list", (list: UserInfo[]) => setUsers(list));
     newSocket.on("user_left", (data: { userId: string; userName: string }) => {
       setCursors(prev => { const n = { ...prev }; delete n[data.userId]; return n; });
+      setAttention(prev => { const n = { ...prev }; delete n[data.userId]; return n; });
       showNotif(`${data.userName} left the session`);
     });
-    newSocket.on("file_uploaded", (file: FileEntry) => setFiles(prev => [...prev, file]));
+    newSocket.on("file_uploaded", (file: FileEntry) => {
+      setFiles(prev => [...prev, file]);
+      sounds.tick();
+    });
     newSocket.on("file_updated", ({ fileId, html }: { fileId: string; html: string }) => {
       setFiles(prev => prev.map(f => f.id === fileId ? { ...f, html } : f));
     });
@@ -156,15 +210,21 @@ export default function Room() {
       setActiveFileId(data.fileId);
     });
     newSocket.on("run_preview", ({ html }: { fileId: string; html: string }) => setPreviewHtml(html));
-    newSocket.on("chat_message", (msg: ChatMessage) => setChatMessages(prev => [...prev, msg]));
+    newSocket.on("chat_message", (msg: ChatMessage) => {
+      setChatMessages(prev => [...prev, msg]);
+      sounds.message();
+      if (isRecording) sessionRecorder.record('chat_message', msg);
+    });
     newSocket.on("hand_raised", ({ studentName }: { studentName: string }) => {
       setHandRaised({ studentName });
       showNotif(`✋ ${studentName} raised their hand!`);
+      sounds.raiseHand();
       setTimeout(() => setHandRaised(null), 8000);
     });
     newSocket.on("quiz_answer_received", ({ answer, studentName }: { answer: string; studentName: string }) => {
       setQuizAnswers(prev => [...prev, { answer, studentName }]);
       showNotif(`📝 ${studentName} answered!`);
+      sounds.success();
     });
     newSocket.on("reaction", ({ emoji }: { emoji: string }) => {
       const id = reactionIdRef.current++;
@@ -184,17 +244,19 @@ export default function Room() {
       } else if (iframeRef.current?.contentWindow) {
         iframeRef.current.contentWindow.postMessage({ ...event, type: event.type.replace("SYNC_", "REMOTE_") }, "*");
       }
+      if (isRecording) sessionRecorder.record('interaction', event);
     });
 
-    // ── Student Feedback Alerts ──
+    // ── Student Feedback ──
     newSocket.on("student_feedback", ({ emoji, label, studentName }: { emoji: string; label: string; studentName: string }) => {
       const id = feedbackIdRef.current++;
       setStudentFeedback(prev => [...prev, { id, emoji, label, studentName }]);
       showNotif(`${emoji} ${studentName}: ${label}`);
+      sounds.tick();
       setTimeout(() => setStudentFeedback(prev => prev.filter(f => f.id !== id)), 5000);
     });
 
-    // ── Timer Events ──
+    // ── Timer ──
     newSocket.on("timer_started", ({ seconds }: { seconds: number }) => {
       setChallengeTimer({ seconds, remaining: seconds });
     });
@@ -204,19 +266,19 @@ export default function Room() {
     });
 
     // ── Celebration ──
-    newSocket.on("celebration", () => {
+    newSocket.on("celebration", ({ type }: { type?: string }) => {
+      setCelebrationType((type as any) || 'confetti');
       setShowCelebration(true);
+      sounds.celebration();
       setTimeout(() => setShowCelebration(false), 4000);
     });
 
-    // ── State Sync ──
+    // ── Sync ──
     newSocket.on("request_html_sync", () => {
       if (iframeRef.current?.contentWindow) {
         iframeRef.current.contentWindow.postMessage({ type: 'REQUEST_HTML' }, "*");
       }
     });
-
-    // ── Force Sync State ──
     newSocket.on("force_sync_state", (state: any) => {
       if (state.activeFileId && state.lastRunHtml) {
         setPreviewHtml(state.lastRunHtml);
@@ -226,15 +288,31 @@ export default function Room() {
       setLastSyncTime(Date.now());
     });
 
+    // ── Attention ──
+    newSocket.on("student_attention", ({ studentId, studentName, isAttentive }: { studentId: string; studentName: string; isAttentive: boolean }) => {
+      setAttention(prev => ({
+        ...prev,
+        [studentId]: { studentId, studentName, isAttentive, lastSeen: Date.now() },
+      }));
+    });
+
+    // ── Step-Lock events ──
+    newSocket.on("gate_answered", ({ studentName, step, correct }: { studentName: string; step: number; correct: boolean }) => {
+      showNotif(`${correct ? '✅' : '❌'} ${studentName} ${correct ? 'passed' : 'failed'} gate on Step ${step}`);
+      if (correct) sounds.success();
+    });
+
     return () => { newSocket.disconnect(); };
   }, [roomId, navigate, teacherName]);
 
-  // ── Relay iframe messages to socket ──
+  // ── Relay iframe messages ──
   useEffect(() => {
     const handler = (e: MessageEvent) => {
       if (!socket) return;
       if (e.data?.type === 'SYNC_PROVIDE_HTML') {
         socket.emit("sync_html_update", { roomId, html: e.data.html });
+      } else if (e.data?.type === 'STEP_INFO') {
+        setMaxStep(e.data.maxStep || 0);
       } else if (e.data?.type?.startsWith("SYNC_")) {
         socket.emit("interaction", { roomId, event: e.data });
       }
@@ -243,24 +321,23 @@ export default function Room() {
     return () => window.removeEventListener("message", handler);
   }, [socket, roomId]);
 
-  useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [chatMessages]);
-
   // ── Build iframe URL ──
   useEffect(() => {
     if (!previewHtml) { setIframeUrl(""); return; }
     let content = previewHtml;
+    const scripts = injectedSyncScript + (stepLockEnabled ? stepLockScript : '');
     if (content.includes("<head>")) {
-      content = content.replace("<head>", "<head>" + injectedSyncScript);
+      content = content.replace("<head>", "<head>" + scripts);
     } else if (content.includes("<html>")) {
-      content = content.replace("<html>", "<html><head>" + injectedSyncScript + "</head>");
+      content = content.replace("<html>", "<html><head>" + scripts + "</head>");
     } else {
-      content = injectedSyncScript + content;
+      content = scripts + content;
     }
     const blob = new Blob([content], { type: "text/html" });
     const url = URL.createObjectURL(blob);
     setIframeUrl(url);
     return () => URL.revokeObjectURL(url);
-  }, [previewHtml]);
+  }, [previewHtml, stepLockEnabled]);
 
   // ── Sync code when active file changes ──
   useEffect(() => {
@@ -269,6 +346,38 @@ export default function Room() {
       if (file) { setHtmlCode(file.html); setPreviewHtml(file.html); }
     }
   }, [activeFileId]);
+
+  // ── Challenge Timer Countdown ──
+  useEffect(() => {
+    if (!challengeTimer) return;
+    if (challengeTimerRef.current) clearInterval(challengeTimerRef.current);
+    challengeTimerRef.current = setInterval(() => {
+      setChallengeTimer(prev => {
+        if (!prev || prev.remaining <= 1) {
+          clearInterval(challengeTimerRef.current);
+          sounds.timerEnd();
+          return null;
+        }
+        return { ...prev, remaining: prev.remaining - 1 };
+      });
+    }, 1000);
+    return () => { if (challengeTimerRef.current) clearInterval(challengeTimerRef.current); };
+  }, [challengeTimer?.seconds]);
+
+  // ── Step-Lock: send step to iframe when changed ──
+  useEffect(() => {
+    if (stepLockEnabled && iframeRef.current?.contentWindow) {
+      iframeRef.current.contentWindow.postMessage({ type: 'SET_STEP', step: currentStep }, '*');
+    }
+  }, [currentStep, stepLockEnabled]);
+
+  // ── Attention timestamp updater ──
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setAttention(prev => ({ ...prev })); // Force re-render for time-based status
+    }, 5000);
+    return () => clearInterval(interval);
+  }, []);
 
   // ── Helpers ──
   const showNotif = (msg: string) => { setNotification(msg); setTimeout(() => setNotification(""), 3000); };
@@ -362,7 +471,7 @@ export default function Room() {
   };
 
   const copyStudentLink = () => {
-    navigator.clipboard.writeText(`${window.location.origin}/`);
+    navigator.clipboard.writeText(`${window.location.origin}/live/${roomId}`);
     setLinkCopied(true);
     setTimeout(() => setLinkCopied(false), 2000);
   };
@@ -375,14 +484,11 @@ export default function Room() {
     setTimeout(() => setReactions(prev => prev.filter(r => r.id !== id)), 2500);
   };
 
-  // ── Force Sync (server-authoritative) ──
   const handleForceSync = () => {
     if (!socket) return;
-    // First, capture the teacher's live DOM state
     if (iframeRef.current?.contentWindow) {
       iframeRef.current.contentWindow.postMessage({ type: 'REQUEST_HTML' }, "*");
     }
-    // Then trigger server-authoritative sync
     setTimeout(() => {
       socket.emit("force_sync", { roomId });
       setLastSyncTime(Date.now());
@@ -390,206 +496,31 @@ export default function Room() {
     }, 300);
   };
 
-  const [penType, setPenType] = useState<'transient' | 'permanent'>('transient');
-
-  // ── Drawing Functions ──
-  const getCanvasCoords = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    const canvas = drawCanvasRef.current;
-    if (!canvas) return { x: 0, y: 0 };
-    const rect = canvas.getBoundingClientRect();
-    return { x: (e.clientX - rect.left) / rect.width, y: (e.clientY - rect.top) / rect.height };
-  };
-
-  const startDraw = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    const isRightClick = e.button === 2 || e.buttons === 2;
-    if (!drawMode && !laserMode) return;
-    if (!drawMode && !isRightClick) return;
-    setIsDrawing(true);
-    const pt = getCanvasCoords(e);
-    currentStrokeRef.current = [pt];
-    isTransientDrawRef.current = isRightClick ? true : (drawMode && penType === 'transient');
-  };
-
-  const moveDraw = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    if (!isDrawing) return;
-    const pt = getCanvasCoords(e);
-    currentStrokeRef.current.push(pt);
-    renderStrokes();
-  };
-
-  const endDraw = () => {
-    if (!isDrawing) return;
-    setIsDrawing(false);
-    const points = currentStrokeRef.current;
-    if (points.length > 1 && socket) {
-      const stroke = { points, color: penColor, width: penWidth, time: Date.now(), transient: isTransientDrawRef.current };
-      strokesRef.current.push(stroke);
-      socket.emit('draw_stroke', { roomId, points, color: penColor, width: penWidth, transient: isTransientDrawRef.current });
-    }
-    currentStrokeRef.current = [];
-  };
-
-  const clearDrawing = () => {
-    strokesRef.current = [];
-    renderStrokes();
-    if (socket) socket.emit('draw_clear', { roomId });
-  };
-
-  const renderStrokes = () => {
-    const canvas = drawCanvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-    const rect = canvas.getBoundingClientRect();
-    if (canvas.width !== rect.width * 2 || canvas.height !== rect.height * 2) {
-      canvas.width = rect.width * 2;
-      canvas.height = rect.height * 2;
-      ctx.scale(2, 2);
-    }
-    ctx.clearRect(0, 0, rect.width, rect.height);
-    const now = Date.now();
-    const w = rect.width;
-    const h = rect.height;
-
-    strokesRef.current = strokesRef.current.filter(s => {
-      if (!s.transient) return true;
-      return (now - s.time) < 1000;
-    });
-    strokesRef.current.forEach(stroke => {
-      const age = now - stroke.time;
-      let alpha = 1;
-      let blur = 0;
-
-      if (stroke.transient) {
-        const fadeStart = 200;
-        const fadeDuration = 800;
-        alpha = age > fadeStart ? 1 - (age - fadeStart) / fadeDuration : 1;
-        blur = 20;
-      }
-
-      if (alpha <= 0) return;
-      ctx.globalAlpha = alpha;
-      ctx.strokeStyle = stroke.color;
-      ctx.lineWidth = stroke.width;
-      ctx.lineCap = 'round';
-      ctx.lineJoin = 'round';
-      if (stroke.transient) {
-        ctx.shadowColor = stroke.color;
-        ctx.shadowBlur = blur;
-      } else {
-        ctx.shadowBlur = 0;
-      }
-      ctx.beginPath();
-      stroke.points.forEach((p, i) => {
-        if (i === 0) ctx.moveTo(p.x * w, p.y * h);
-        else ctx.lineTo(p.x * w, p.y * h);
-      });
-      ctx.stroke();
-      ctx.shadowBlur = 0;
-    });
-
-    if (currentStrokeRef.current.length > 1) {
-      ctx.globalAlpha = 1;
-      ctx.strokeStyle = penColor;
-      ctx.lineWidth = penWidth;
-      ctx.lineCap = 'round';
-      ctx.lineJoin = 'round';
-      ctx.shadowColor = penColor;
-      ctx.shadowBlur = 14;
-      ctx.beginPath();
-      currentStrokeRef.current.forEach((p, i) => {
-        if (i === 0) ctx.moveTo(p.x * w, p.y * h);
-        else ctx.lineTo(p.x * w, p.y * h);
-      });
-      ctx.stroke();
-      ctx.shadowBlur = 0;
-    }
-    ctx.globalAlpha = 1;
-  };
-
-  // Auto-fade animation loop
-  useEffect(() => {
-    let running = true;
-    const loop = () => {
-      if (!running) return;
-      if (strokesRef.current.length > 0) renderStrokes();
-      drawAnimFrameRef.current = requestAnimationFrame(loop);
-    };
-    loop();
-    return () => { running = false; if (drawAnimFrameRef.current) cancelAnimationFrame(drawAnimFrameRef.current); };
-  }, [penColor, penWidth]);
-
-  // Receive remote strokes
-  useEffect(() => {
+  const togglePause = () => {
     if (!socket) return;
-    const handleStroke = (data: { points: Array<{x:number;y:number}>; color: string; width: number }) => {
-      strokesRef.current.push({ ...data, time: Date.now() });
-      renderStrokes();
-    };
-    const handleClear = () => { strokesRef.current = []; renderStrokes(); };
-    socket.on('draw_stroke', handleStroke);
-    socket.on('draw_clear', handleClear);
-    return () => { socket.off('draw_stroke', handleStroke); socket.off('draw_clear', handleClear); };
-  }, [socket]);
+    if (isPaused) { socket.emit("resume_session", { roomId }); setIsPaused(false); }
+    else { socket.emit("pause_session", { roomId }); setIsPaused(true); }
+  };
 
-  // ── Challenge Timer Countdown ──
-  useEffect(() => {
-    if (!challengeTimer) return;
-    if (challengeTimerRef.current) clearInterval(challengeTimerRef.current);
-    challengeTimerRef.current = setInterval(() => {
-      setChallengeTimer(prev => {
-        if (!prev || prev.remaining <= 1) {
-          clearInterval(challengeTimerRef.current);
-          return null;
-        }
-        return { ...prev, remaining: prev.remaining - 1 };
-      });
-    }, 1000);
-    return () => { if (challengeTimerRef.current) clearInterval(challengeTimerRef.current); };
-  }, [challengeTimer?.seconds]);
+  const triggerCelebration = () => {
+    if (!socket) return;
+    socket.emit("trigger_celebration", { roomId, type: 'confetti' });
+  };
 
   const startChallengeTimer = (seconds: number) => {
     if (!socket) return;
-    socket.emit('start_timer', { roomId, seconds });
-    setShowTimerMenu(false);
+    socket.emit("start_timer", { roomId, seconds });
   };
 
   const stopChallengeTimer = () => {
     if (!socket) return;
-    socket.emit('stop_timer', { roomId });
+    socket.emit("stop_timer", { roomId });
     setChallengeTimer(null);
     if (challengeTimerRef.current) clearInterval(challengeTimerRef.current);
   };
 
-  // ── Laser Pointer ──
-  const handleLaserMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    if (!laserMode && !drawMode) return;
-    const canvas = drawCanvasRef.current;
-    if (!canvas) return;
-    const rect = canvas.getBoundingClientRect();
-    const x = (e.clientX - rect.left) / rect.width;
-    const y = (e.clientY - rect.top) / rect.height;
-    if (laserMode) setLocalMousePos({ x, y });
-    if (!laserMode || !socket) return;
-    socket.emit('laser_pointer', { roomId, x, y, active: true });
-  };
-
-  const handleLaserLeave = () => {
-    if (!socket) return;
-    socket.emit('laser_pointer', { roomId, x: 0, y: 0, active: false });
-  };
-
-  // ── Celebration ──
-  const triggerCelebration = () => {
-    if (!socket) return;
-    socket.emit('trigger_celebration', { roomId, type: 'confetti' });
-  };
-
-  const sendChat = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!socket || !chatInput.trim()) return;
-    socket.emit("send_chat", { roomId, message: chatInput.trim(), userName: teacherName });
-    setChatInput("");
+  const clearDrawing = () => {
+    if (socket) socket.emit('draw_clear', { roomId });
   };
 
   const sendQuiz = () => {
@@ -600,15 +531,58 @@ export default function Room() {
     showNotif("🎯 Quiz sent!");
   };
 
-  const togglePause = () => {
+  const handleSetStep = (step: number) => {
+    setCurrentStep(step);
+    if (socket) socket.emit('set_step', { roomId, step });
+  };
+
+  const toggleStepLock = () => {
+    const newEnabled = !stepLockEnabled;
+    setStepLockEnabled(newEnabled);
+    if (!newEnabled && iframeRef.current?.contentWindow) {
+      iframeRef.current.contentWindow.postMessage({ type: 'DISABLE_STEP_LOCK' }, '*');
+    }
+    if (newEnabled) {
+      setCurrentStep(1);
+      if (iframeRef.current?.contentWindow) {
+        iframeRef.current.contentWindow.postMessage({ type: 'GET_MAX_STEP' }, '*');
+        iframeRef.current.contentWindow.postMessage({ type: 'SET_STEP', step: 1 }, '*');
+      }
+    }
+  };
+
+  const handleLoadFromLibrary = (html: string, name: string) => {
     if (!socket) return;
-    if (isPaused) { socket.emit("resume_session", { roomId }); setIsPaused(false); }
-    else { socket.emit("pause_session", { roomId }); setIsPaused(true); }
+    const entry: FileEntry = {
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      name,
+      html,
+      uploadedAt: Date.now(),
+    };
+    socket.emit("upload_file", { roomId, file: entry });
+    setHtmlCode(html);
+    setPreviewHtml(html);
+    setShowLibrary(false);
+    showNotif(`📚 Loaded: ${name}`);
+  };
+
+  const toggleRecording = () => {
+    if (isRecording) {
+      sessionRecorder.stop();
+      sessionRecorder.download();
+      setIsRecording(false);
+      showNotif("⏹ Recording saved");
+    } else {
+      sessionRecorder.start();
+      setIsRecording(true);
+      showNotif("🔴 Recording started");
+    }
   };
 
   const studentCount = users.filter(u => u.role === 'student').length;
   const showLeftPanel = viewMode === 'split' || viewMode === 'code';
   const showPreview = viewMode === 'split' || viewMode === 'preview';
+  const activeFile = files.find(f => f.id === activeFileId);
 
   return (
     <div className="h-screen flex flex-col overflow-hidden"
@@ -633,7 +607,6 @@ export default function Room() {
       <header className="flex items-center justify-between px-5 shrink-0"
         style={{ height: '56px', borderBottom: '1px solid var(--border-subtle)', background: 'var(--bg-secondary)' }}>
 
-        {/* Left: Logo + Room + Views */}
         <div className="flex items-center gap-4">
           <button onClick={() => navigate('/')} className="flex items-center gap-2 hover:opacity-80 transition-opacity"
             style={{ background: 'none', border: 'none', cursor: 'pointer' }}>
@@ -666,8 +639,9 @@ export default function Room() {
           </div>
         </div>
 
-        {/* Right: Status + Actions */}
         <div className="flex items-center gap-3">
+          <ConnectionStatus socket={socket} connected={connected} />
+
           <span className="text-[13px] font-mono hidden sm:block" style={{ color: 'var(--text-muted)' }}>
             {formatTime(sessionTimer)}
           </span>
@@ -686,6 +660,25 @@ export default function Room() {
           <button onClick={copyStudentLink}
             className={`btn text-[12px] ${linkCopied ? 'btn-toolbar-active' : ''}`}>
             {linkCopied ? '✓ Copied' : '🔗 Share Link'}
+          </button>
+
+          {/* Library */}
+          <button onClick={() => setShowLibrary(true)} className="btn text-[12px]" title="Simulation Library">
+            📚
+          </button>
+
+          {/* Recording */}
+          <button onClick={toggleRecording}
+            className={`btn text-[12px] ${isRecording ? 'btn-toolbar-active' : ''}`}
+            style={isRecording ? { background: 'var(--accent-rose-light)', color: 'var(--accent-rose)', borderColor: 'rgba(244,63,94,0.3)' } : {}}
+            title={isRecording ? 'Stop Recording' : 'Start Recording'}>
+            {isRecording ? '⏹ REC' : '⏺ REC'}
+          </button>
+
+          {/* Sound toggle */}
+          <button onClick={() => { const m = sounds.toggleMute(); setSoundMuted(m); }}
+            className="btn text-[12px]" title={soundMuted ? 'Unmute' : 'Mute'}>
+            {soundMuted ? '🔇' : '🔊'}
           </button>
         </div>
       </header>
@@ -709,7 +702,6 @@ export default function Room() {
             borderRight: '1px solid var(--border-subtle)',
             background: 'var(--bg-secondary)',
           }}>
-
             {/* Upload Bar */}
             <div className="flex items-center gap-3 px-4 py-3 shrink-0" style={{ borderBottom: '1px solid var(--border-subtle)' }}>
               <input type="file" accept=".html,.htm" ref={fileInputRef} onChange={uploadFileFromInput} className="hidden" multiple />
@@ -767,11 +759,11 @@ export default function Room() {
                 </div>
               ) : (
                 <>
-                  {/* Editor header with Run button */}
+                  {/* Editor header */}
                   <div className="flex items-center justify-between px-4 py-2.5 shrink-0"
                     style={{ borderBottom: '1px solid var(--border-subtle)' }}>
                     <span className="badge badge-indigo">
-                      {files.find(f => f.id === activeFileId)?.name || 'Editor'}
+                      {activeFile?.name || 'Editor'}
                     </span>
                     <div className="flex items-center gap-3">
                       <span className="text-[11px] font-mono hidden sm:inline" style={{ color: 'var(--text-muted)' }}>⌘+Enter</span>
@@ -780,7 +772,6 @@ export default function Room() {
                       </button>
                     </div>
                   </div>
-                  {/* Textarea editor */}
                   <textarea
                     value={htmlCode}
                     onChange={(e) => setHtmlCode(e.target.value)}
@@ -814,128 +805,33 @@ export default function Room() {
         {showPreview && (
           <div className="flex-1 flex flex-col relative overflow-hidden" style={{ background: 'var(--bg-primary)' }}>
 
-            {/* Toolbar */}
-            <div className="shrink-0 flex flex-wrap items-center gap-2 px-4 py-2.5"
-              style={{ borderBottom: '1px solid var(--border-subtle)', background: 'var(--bg-secondary)' }}>
+            {/* Teacher Toolbar */}
+            <TeacherControls
+              socket={socket} roomId={roomId!}
+              isPaused={isPaused} onTogglePause={togglePause}
+              drawMode={drawMode} laserMode={laserMode} penType={penType}
+              penColor={penColor} penWidth={penWidth}
+              onSetDrawMode={setDrawMode} onSetLaserMode={setLaserMode}
+              onSetPenType={setPenType} onSetPenColor={setPenColor} onSetPenWidth={setPenWidth}
+              onClearDrawing={clearDrawing}
+              onForceSync={handleForceSync} onTriggerCelebration={triggerCelebration}
+              challengeTimer={challengeTimer}
+              onStartTimer={startChallengeTimer} onStopTimer={stopChallengeTimer}
+              lastSyncTime={lastSyncTime}
+              onOpenQuiz={() => setShowQuizModal(true)}
+              onSendReaction={sendReaction}
+            />
 
-              {/* Tool group: Cursor / Draw / Laser */}
-              <div className="flex items-center gap-1 p-1 rounded-lg" style={{ background: 'var(--bg-surface)' }}>
-                <button onClick={() => { setDrawMode(false); setLaserMode(false); }}
-                  className={`btn-ghost text-[12px] ${(!drawMode && !laserMode) ? 'btn-toolbar-active' : ''}`}
-                  style={{ padding: '5px 12px', borderRadius: '6px' }}>
-                  🖱 Cursor
-                </button>
-                <button onClick={() => { setDrawMode(true); setPenType('transient'); setLaserMode(false); }}
-                  className={`btn-ghost text-[12px] ${(drawMode && penType === 'transient') ? 'btn-toolbar-active' : ''}`}
-                  style={{ padding: '5px 12px', borderRadius: '6px' }}>
-                  ✏️ Highlight
-                </button>
-                <button onClick={() => { setDrawMode(true); setPenType('permanent'); setLaserMode(false); }}
-                  className={`btn-ghost text-[12px] ${(drawMode && penType === 'permanent') ? 'btn-toolbar-active' : ''}`}
-                  style={{ padding: '5px 12px', borderRadius: '6px' }}>
-                  🖊 Permanent
-                </button>
-                <button onClick={() => { setLaserMode(true); setDrawMode(false); }}
-                  className={`btn-ghost text-[12px] ${laserMode ? 'btn-toolbar-active' : ''}`}
-                  style={{
-                    padding: '5px 12px', borderRadius: '6px',
-                    ...(laserMode ? { background: 'var(--accent-rose-light)', color: 'var(--accent-rose)', borderColor: 'rgba(244,63,94,0.3)' } : {}),
-                  }}>
-                  🔴 Laser
-                </button>
-              </div>
-
-              <div className="h-5 w-px" style={{ background: 'var(--border-subtle)' }} />
-
-              {/* Force Sync */}
-              <button onClick={handleForceSync}
-                className="btn-accent text-[12px] font-bold"
-                style={{ padding: '6px 14px' }}>
-                🔄 Force Sync
-              </button>
-
-              {/* Timer */}
-              <div className="relative">
-                <button onClick={() => setShowTimerMenu(!showTimerMenu)}
-                  className={`btn text-[12px] ${challengeTimer ? 'btn-toolbar-active' : ''}`}>
-                  {challengeTimer ? `⏱ ${challengeTimer.remaining}s` : '⏱ Timer'}
-                </button>
-                {showTimerMenu && (
-                  <div className="absolute top-full right-0 mt-2 z-50 animate-slide-down rounded-xl p-1.5 min-w-[130px]"
-                    style={{ background: 'var(--bg-card)', border: '1px solid var(--border-subtle)', boxShadow: 'var(--shadow-lg)' }}>
-                    {[30, 60, 90, 120, 180].map(sec => (
-                      <button key={sec} onClick={() => startChallengeTimer(sec)}
-                        className="w-full text-left px-3 py-2 rounded-lg text-[12px] font-medium transition-all"
-                        style={{ color: 'var(--text-primary)' }}
-                        onMouseEnter={e => (e.currentTarget.style.background = 'var(--bg-surface)')}
-                        onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
-                        ⏱ {sec >= 60 ? `${sec / 60} min` : `${sec}s`}
-                      </button>
-                    ))}
-                    {challengeTimer && (
-                      <button onClick={stopChallengeTimer}
-                        className="w-full text-left px-3 py-2 rounded-lg text-[12px] font-medium transition-all mt-1"
-                        style={{ color: 'var(--accent-rose)' }}
-                        onMouseEnter={e => (e.currentTarget.style.background = 'var(--accent-rose-light)')}
-                        onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
-                        ✕ Stop Timer
-                      </button>
-                    )}
-                  </div>
-                )}
-              </div>
-
-              {/* Celebrate */}
-              <button onClick={triggerCelebration} className="btn text-[12px]" title="Celebrate!">
-                🎉
-              </button>
-
-              {/* Pause */}
-              <button onClick={togglePause}
-                className={`btn text-[12px] ${isPaused ? '' : ''}`}
-                style={isPaused ? { background: 'var(--accent-rose-light)', color: 'var(--accent-rose)', borderColor: 'rgba(244,63,94,0.3)' } : {}}>
-                {isPaused ? '▶ Resume' : '⏸ Pause'}
-              </button>
-
-              {/* Spacer */}
-              <div className="flex-1" />
-
-              {/* Sync indicator */}
-              {lastSyncTime && (
-                <span className="badge badge-emerald text-[10px]">
-                  ✓ Synced
-                </span>
-              )}
-            </div>
-
-            {/* Pen color/width controls */}
-            {drawMode && (
-              <div className="flex items-center gap-4 px-4 py-2 animate-slide-down shrink-0"
-                style={{ background: 'var(--bg-surface)', borderBottom: '1px solid var(--border-subtle)' }}>
-                <div className="flex gap-2">
-                  {['#6366F1', '#111827', '#10B981', '#0EA5E9', '#F43F5E'].map(c => (
-                    <button key={c} onClick={() => setPenColor(c)} className="transition-all active:scale-90" style={{
-                      width: 22, height: 22, borderRadius: '50%',
-                      background: c, cursor: 'pointer',
-                      transform: penColor === c ? 'scale(1.15)' : 'scale(1)',
-                      boxShadow: penColor === c ? `0 0 0 2px var(--bg-surface), 0 0 0 4px ${c}` : '0 0 0 1px var(--border-default)',
-                    }} />
-                  ))}
-                </div>
-                <div className="h-5 w-px" style={{ background: 'var(--border-subtle)' }} />
-                <select value={penWidth} onChange={(e) => setPenWidth(Number(e.target.value))}
-                  className="text-[12px] font-medium outline-none px-2 py-1 rounded-md"
-                  style={{ background: 'var(--bg-secondary)', color: 'var(--text-primary)', border: '1px solid var(--border-subtle)', cursor: 'pointer' }}>
-                  <option value={2}>Thin</option>
-                  <option value={4}>Medium</option>
-                  <option value={7}>Thick</option>
-                </select>
-                <div className="flex-1" />
-                <button onClick={clearDrawing} className="btn text-[12px]">
-                  🗑 Clear Board
-                </button>
-              </div>
-            )}
+            {/* Step Controls */}
+            <StepControls
+              socket={socket} roomId={roomId!}
+              currentStep={currentStep} maxStep={maxStep}
+              stepLockEnabled={stepLockEnabled}
+              onSetStep={handleSetStep}
+              onToggleStepLock={toggleStepLock}
+              onOpenGate={() => setShowGateModal(true)}
+              gates={gates}
+            />
 
             {/* Iframe */}
             <div className="flex-1 relative overflow-hidden m-3 rounded-xl preview-frame">
@@ -953,55 +849,16 @@ export default function Room() {
                 </div>
               )}
 
-              {/* Drawing Canvas Overlay */}
-              <canvas
-                ref={drawCanvasRef}
-                className="absolute inset-0 w-full h-full"
-                style={{
-                  cursor: drawMode ? 'crosshair' : laserMode ? 'none' : 'default',
-                  pointerEvents: (drawMode || laserMode) ? 'auto' : 'none',
-                  zIndex: 10,
-                }}
-                onMouseDown={startDraw}
-                onMouseMove={(e) => { moveDraw(e); handleLaserMove(e); }}
-                onMouseUp={endDraw}
-                onMouseLeave={(e) => { endDraw(); handleLaserLeave(); }}
-                onContextMenu={(e) => e.preventDefault()}
-                onWheel={(e) => {
-                  if (iframeRef.current?.contentWindow) {
-                    iframeRef.current.contentWindow.scrollBy(e.deltaX, e.deltaY);
-                  }
-                }}
+              {/* Drawing/Annotation Layer */}
+              <AnnotationLayer
+                socket={socket} roomId={roomId!}
+                drawMode={drawMode} laserMode={laserMode}
+                penType={penType} penColor={penColor} penWidth={penWidth}
+                iframeRef={iframeRef} interactive={true}
               />
 
-              {/* Teacher Laser Pointer */}
-              {laserMode && (
-                <div className="absolute inset-0 pointer-events-none z-20">
-                  <div className="absolute w-4 h-4 rounded-full"
-                    style={{
-                      left: `${localMousePos.x * 100}%`, top: `${localMousePos.y * 100}%`,
-                      transform: 'translate(-50%, -50%)',
-                      background: 'rgba(239,68,68,0.9)',
-                      boxShadow: '0 0 12px 6px rgba(239,68,68,0.6)',
-                      animation: 'laser-pulse 1s infinite',
-                    }} />
-                </div>
-              )}
-
-              {/* Cursors */}
-              <div className="absolute inset-0 pointer-events-none overflow-hidden" style={{ zIndex: 11 }}>
-                {(Object.entries(cursors) as [string, Cursor][]).map(([id, c]) => (
-                  <div key={id} className="absolute transition-all duration-100 ease-linear"
-                    style={{ left: `${c.x * 100}%`, top: `${c.y * 100}%`, transform: 'translate(-2px,-2px)' }}>
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill={c.color}>
-                      <path d="M5.5 3.21V20.8c0 .45.54.67.85.35l4.86-4.86a.5.5 0 0 1 .35-.15h6.87c.45 0 .67-.54.35-.85L6.35 2.86a.5.5 0 0 0-.85.35Z"
-                        stroke="#fff" strokeWidth="1.5" strokeLinejoin="round"/>
-                    </svg>
-                    <span className="absolute left-4 top-3 text-[9px] font-bold px-1.5 py-0.5 rounded-md text-white whitespace-nowrap"
-                      style={{ background: c.color }}>{c.name}</span>
-                  </div>
-                ))}
-              </div>
+              {/* Cursor Overlay */}
+              <CursorOverlay cursors={cursors} />
 
               {/* Reactions */}
               <div className="absolute inset-0 pointer-events-none overflow-hidden">
@@ -1013,135 +870,30 @@ export default function Room() {
                 ))}
               </div>
 
-              {/* Challenge Timer */}
+              {/* Timer Display */}
               {challengeTimer && (
-                <div className="absolute top-4 left-1/2 -translate-x-1/2 pointer-events-none z-20 animate-bounce-in">
-                  <div className="flex items-center gap-3 px-5 py-2.5 rounded-xl" style={{
-                    background: challengeTimer.remaining <= 10 ? 'rgba(244,63,94,0.95)' : 'rgba(17,24,39,0.9)',
-                    backdropFilter: 'blur(10px)', boxShadow: 'var(--shadow-xl)',
-                    animation: challengeTimer.remaining <= 5 ? 'pulse 0.5s ease-in-out infinite' : 'none',
-                  }}>
-                    <span className="text-xl">⏱</span>
-                    <span className="text-2xl font-black text-white tabular-nums">{challengeTimer.remaining}s</span>
-                    <div className="w-20 h-1.5 rounded-full overflow-hidden" style={{ background: 'rgba(255,255,255,0.2)' }}>
-                      <div className="h-full rounded-full transition-all duration-1000 ease-linear" style={{
-                        width: `${(challengeTimer.remaining / challengeTimer.seconds) * 100}%`,
-                        background: challengeTimer.remaining <= 10 ? '#FBBF24' : '#10B981',
-                      }} />
-                    </div>
-                  </div>
-                </div>
+                <TimerDisplay seconds={challengeTimer.seconds} remaining={challengeTimer.remaining} />
               )}
 
-              {/* Student Feedback Alerts */}
-              <div className="absolute top-4 right-4 z-20 flex flex-col gap-2 pointer-events-none">
-                {studentFeedback.map(f => (
-                  <div key={f.id} className="animate-slide-in-right flex items-center gap-2 px-3 py-2 rounded-xl"
-                    style={{ background: 'var(--bg-card)', border: '1px solid var(--border-subtle)', boxShadow: 'var(--shadow-lg)' }}>
-                    <span className="text-lg">{f.emoji}</span>
-                    <div>
-                      <div className="text-[10px] font-bold" style={{ color: 'var(--accent-indigo)' }}>{f.studentName}</div>
-                      <div className="text-xs font-semibold" style={{ color: 'var(--text-primary)' }}>{f.label}</div>
-                    </div>
-                  </div>
-                ))}
-              </div>
+              {/* Feedback Toasts */}
+              <FeedbackToasts feedback={studentFeedback} />
 
-              {/* Celebration Confetti */}
-              {showCelebration && (
-                <div className="absolute inset-0 pointer-events-none z-30 overflow-hidden">
-                  {Array.from({ length: 60 }).map((_, i) => (
-                    <div key={i} className="absolute" style={{
-                      left: `${Math.random() * 100}%`, top: '-5%',
-                      width: `${6 + Math.random() * 8}px`, height: `${6 + Math.random() * 8}px`,
-                      background: ['#6366F1', '#10B981', '#F59E0B', '#F43F5E', '#8B5CF6', '#EC4899', '#0EA5E9', '#F97316'][i % 8],
-                      borderRadius: Math.random() > 0.5 ? '50%' : '2px',
-                      animation: `confetti-fall ${2 + Math.random() * 2}s ease-in forwards`,
-                      animationDelay: `${Math.random() * 0.8}s`,
-                      transform: `rotate(${Math.random() * 360}deg)`,
-                    }} />
-                  ))}
-                </div>
-              )}
+              {/* Celebration */}
+              <Celebrations show={showCelebration} type={celebrationType} />
 
               {/* Paused Overlay */}
-              {isPaused && (
-                <div className="absolute inset-0 flex items-center justify-center z-30"
-                  style={{ background: 'rgba(249,250,251,0.85)', backdropFilter: 'blur(6px)' }}>
-                  <div className="text-center">
-                    <div className="text-5xl mb-2">⏸</div>
-                    <div className="font-display text-lg font-bold" style={{ color: 'var(--text-primary)' }}>Session Paused</div>
-                    <p className="text-sm mt-1" style={{ color: 'var(--text-muted)' }}>Students see a paused screen</p>
-                  </div>
-                </div>
-              )}
+              <PausedOverlay isPaused={isPaused} isTeacher={true} />
             </div>
           </div>
         )}
 
         {/* ──── RIGHT: Sidebar ──── */}
-        <div className="flex flex-col shrink-0" style={{
-          width: chatOpen ? '280px' : '52px',
-          borderLeft: '1px solid var(--border-subtle)',
-          background: 'var(--bg-secondary)',
-          transition: 'width 0.25s ease',
-        }}>
-          {chatOpen ? (
-            <div className="flex flex-col h-full animate-fade-in">
-              <div className="flex items-center justify-between px-3 py-2.5 shrink-0"
-                style={{ borderBottom: '1px solid var(--border-subtle)' }}>
-                <span className="badge badge-indigo text-[10px]">💬 CHAT</span>
-                <button onClick={() => setChatOpen(false)}
-                  style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '16px' }}>✕</button>
-              </div>
-              <div className="flex-1 overflow-y-auto p-3 space-y-2">
-                {chatMessages.length === 0 && (
-                  <p className="text-center text-xs py-8" style={{ color: 'var(--text-muted)' }}>No messages yet</p>
-                )}
-                {chatMessages.map(msg => (
-                  <div key={msg.id}>
-                    <div className="text-[10px] font-bold mb-0.5" style={{ color: 'var(--accent-indigo)' }}>{msg.userName}</div>
-                    <div className="text-[13px] px-3 py-2"
-                      style={{
-                        background: 'var(--bg-surface)', color: 'var(--text-primary)',
-                        borderRadius: '4px 12px 12px 12px',
-                      }}>
-                      {msg.message}
-                    </div>
-                  </div>
-                ))}
-                <div ref={chatEndRef} />
-              </div>
-              <form onSubmit={sendChat} className="p-2.5 shrink-0" style={{ borderTop: '1px solid var(--border-subtle)' }}>
-                <div className="flex gap-2">
-                  <input value={chatInput} onChange={(e) => setChatInput(e.target.value)} placeholder="Message..."
-                    className="input-field text-[13px]" style={{ padding: '7px 10px' }} />
-                  <button type="submit" className="btn-primary" style={{ padding: '7px 12px', fontSize: '14px' }}>↑</button>
-                </div>
-              </form>
-            </div>
-          ) : (
-            <div className="flex flex-col items-center py-3 gap-1.5">
-              <button onClick={() => setChatOpen(true)}
-                className="w-[40px] h-[40px] rounded-xl flex items-center justify-center text-[17px] transition-all hover:scale-110"
-                style={{ background: 'var(--bg-surface)', border: '1px solid var(--border-subtle)', cursor: 'pointer' }}
-                title="Chat">💬</button>
-              <div style={{ width: '24px', height: '1px', background: 'var(--border-subtle)', margin: '4px 0' }} />
-              {['🎉', '✅', '🤔', '❌', '👏', '🔥'].map(emoji => (
-                <button key={emoji} onClick={() => sendReaction(emoji)}
-                  className="w-[40px] h-[40px] rounded-xl flex items-center justify-center text-[17px] hover:scale-110 active:scale-90 transition-transform"
-                  style={{ background: 'var(--bg-surface)', border: '1px solid var(--border-subtle)', cursor: 'pointer' }}>
-                  {emoji}
-                </button>
-              ))}
-              <div style={{ width: '24px', height: '1px', background: 'var(--border-subtle)', margin: '4px 0' }} />
-              <button onClick={() => setShowQuizModal(true)}
-                className="w-[40px] h-[40px] rounded-xl flex items-center justify-center text-[17px] transition-all hover:scale-110"
-                style={{ background: 'var(--accent-indigo-light)', border: '1px solid rgba(99,102,241,0.2)', cursor: 'pointer' }}
-                title="Pop Quiz">❓</button>
-            </div>
-          )}
-        </div>
+        <ChatPanel
+          socket={socket} roomId={roomId!} userName={teacherName}
+          messages={chatMessages} isOpen={chatOpen}
+          onToggle={() => setChatOpen(!chatOpen)}
+          variant="sidebar"
+        />
       </div>
 
       {/* ═══ NOTIFICATION ═══ */}
@@ -1215,6 +967,25 @@ export default function Room() {
           </div>
         </div>
       )}
+
+      {/* ═══ STEP GATE MODAL ═══ */}
+      {showGateModal && (
+        <StepGate
+          socket={socket} roomId={roomId!}
+          mode="create" step={currentStep + 1}
+          onSave={(gate) => setGates(prev => ({ ...prev, [currentStep + 1]: gate }))}
+          onClose={() => setShowGateModal(false)}
+        />
+      )}
+
+      {/* ═══ SIMULATION LIBRARY ═══ */}
+      <SimulationLibrary
+        isOpen={showLibrary}
+        onClose={() => setShowLibrary(false)}
+        onLoad={handleLoadFromLibrary}
+        currentHtml={previewHtml}
+        currentName={activeFile?.name}
+      />
     </div>
   );
 }

@@ -180,6 +180,62 @@ export const injectedSyncScript = `
       }
     }, true);
 
+    // ── HTML5 Drag/Drop sync ──
+    let dragStartPath = '';
+    let lastDrag = 0;
+
+    document.addEventListener('dragstart', (e) => {
+      if (isRemoteUpdate) return;
+      dragStartPath = getElementPath(e.target);
+      window.parent.postMessage({
+        type: 'SYNC_DRAGSTART',
+        path: dragStartPath,
+        clientX: e.clientX / window.innerWidth,
+        clientY: e.clientY / window.innerHeight
+      }, '*');
+    }, true);
+
+    document.addEventListener('drag', (e) => {
+      if (isRemoteUpdate || !e.clientX) return;
+      const now = Date.now();
+      if (now - lastDrag < 50) return; // throttle
+      lastDrag = now;
+      window.parent.postMessage({
+        type: 'SYNC_DRAG',
+        path: dragStartPath,
+        clientX: e.clientX / window.innerWidth,
+        clientY: e.clientY / window.innerHeight
+      }, '*');
+    }, true);
+
+    document.addEventListener('dragend', (e) => {
+      if (isRemoteUpdate) return;
+      window.parent.postMessage({
+        type: 'SYNC_DRAGEND',
+        path: dragStartPath,
+        clientX: e.clientX / window.innerWidth,
+        clientY: e.clientY / window.innerHeight
+      }, '*');
+      dragStartPath = '';
+    }, true);
+
+    document.addEventListener('drop', (e) => {
+      if (isRemoteUpdate) return;
+      e.preventDefault();
+      const dropPath = getElementPath(e.target);
+      window.parent.postMessage({
+        type: 'SYNC_DROP',
+        dragPath: dragStartPath,
+        dropPath: dropPath,
+        clientX: e.clientX / window.innerWidth,
+        clientY: e.clientY / window.innerHeight
+      }, '*');
+    }, true);
+
+    document.addEventListener('dragover', (e) => {
+      e.preventDefault(); // Required to allow drops
+    }, true);
+
     // ── Key events for simulations ──
     document.addEventListener('keydown', (e) => {
       if (isRemoteUpdate) return;
@@ -262,6 +318,37 @@ export const injectedSyncScript = `
         document.dispatchEvent(new KeyboardEvent('keyup', { 
           key: data.key, code: data.code, bubbles: true 
         }));
+        isRemoteUpdate = false;
+      } else if (data.type === 'REMOTE_DRAGSTART') {
+        isRemoteUpdate = true;
+        var el = data.path ? document.querySelector(data.path) : null;
+        if (el) {
+          el.dispatchEvent(new DragEvent('dragstart', {
+            bubbles: true, clientX: data.clientX * window.innerWidth, clientY: data.clientY * window.innerHeight
+          }));
+        }
+        isRemoteUpdate = false;
+      } else if (data.type === 'REMOTE_DRAG') {
+        // Drag events are informational — the remote side tracks position
+        isRemoteUpdate = true;
+        isRemoteUpdate = false;
+      } else if (data.type === 'REMOTE_DRAGEND') {
+        isRemoteUpdate = true;
+        var el = data.path ? document.querySelector(data.path) : null;
+        if (el) {
+          el.dispatchEvent(new DragEvent('dragend', {
+            bubbles: true, clientX: data.clientX * window.innerWidth, clientY: data.clientY * window.innerHeight
+          }));
+        }
+        isRemoteUpdate = false;
+      } else if (data.type === 'REMOTE_DROP') {
+        isRemoteUpdate = true;
+        var dropEl = data.dropPath ? document.querySelector(data.dropPath) : null;
+        if (dropEl) {
+          dropEl.dispatchEvent(new DragEvent('drop', {
+            bubbles: true, clientX: data.clientX * window.innerWidth, clientY: data.clientY * window.innerHeight
+          }));
+        }
         isRemoteUpdate = false;
       } else if (data.type === 'REQUEST_HTML') {
         const inputs = document.querySelectorAll('input, select, textarea');

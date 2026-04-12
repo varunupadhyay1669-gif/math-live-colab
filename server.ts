@@ -22,6 +22,11 @@ interface RoomData {
   lastActivityAt: number;
   studentLeftAt: number | null; // When the last student disconnected (for 2hr expiry)
   chat: Array<{ id: string; userId: string; userName: string; message: string; timestamp: number }>;
+  // Step-lock
+  currentStep: number;
+  gates: Record<number, { question: string; options: string[]; correctIndex: number }>;
+  // Room password (optional)
+  password: string | null;
 }
 
 async function startServer() {
@@ -76,6 +81,30 @@ async function startServer() {
     if (room) room.lastActivityAt = Date.now();
   }
 
+  // ─── RATE LIMITING ───
+  const rateLimits = new Map<string, { count: number; resetAt: number }>();
+  const RATE_LIMIT_EVENTS = 60; // max events per second
+  const RATE_LIMIT_WINDOW = 1000; // 1 second window
+
+  function checkRateLimit(socketId: string): boolean {
+    const now = Date.now();
+    let entry = rateLimits.get(socketId);
+    if (!entry || now > entry.resetAt) {
+      entry = { count: 0, resetAt: now + RATE_LIMIT_WINDOW };
+      rateLimits.set(socketId, entry);
+    }
+    entry.count++;
+    return entry.count <= RATE_LIMIT_EVENTS;
+  }
+
+  // Clean up rate limit entries periodically
+  setInterval(() => {
+    const now = Date.now();
+    for (const [id, entry] of rateLimits.entries()) {
+      if (now > entry.resetAt + 5000) rateLimits.delete(id);
+    }
+  }, 30000);
+
   function createRoom(): RoomData {
     return {
       files: [],
@@ -88,6 +117,9 @@ async function startServer() {
       lastActivityAt: Date.now(),
       studentLeftAt: null,
       chat: [],
+      currentStep: 1,
+      gates: {},
+      password: null,
     };
   }
 
@@ -103,13 +135,20 @@ async function startServer() {
     console.log('User connected:', socket.id);
 
     // ─── JOIN ROOM ───
-    socket.on('join_room', ({ roomId, userName, role }: { roomId: string; userName: string; role: 'teacher' | 'student' }) => {
+    socket.on('join_room', ({ roomId, userName, role, password }: { roomId: string; userName: string; role: 'teacher' | 'student'; password?: string }) => {
       updateRoomActivity(roomId);
-      socket.join(roomId);
       if (!rooms.has(roomId)) {
         rooms.set(roomId, createRoom());
       }
       const room = rooms.get(roomId)!;
+
+      // Check room password (if set)
+      if (room.password && role === 'student' && password !== room.password) {
+        socket.emit('join_error', { message: 'Incorrect room password' });
+        return;
+      }
+
+      socket.join(roomId);
       room.users.set(socket.id, { name: userName || 'Anonymous', role, joinedAt: Date.now() });
 
       // If a student just joined, clear the studentLeftAt timer
@@ -136,6 +175,14 @@ async function startServer() {
 
       // Broadcast updated user list
       io.to(roomId).emit('user_list', getRoomUserList(room));
+    });
+
+    // ─── SET ROOM PASSWORD ───
+    socket.on('set_room_password', ({ roomId, password }: { roomId: string; password: string | null }) => {
+      const room = rooms.get(roomId);
+      if (!room || room.teacherSocketId !== socket.id) return;
+      room.password = password;
+      console.log(`🔒 Room ${roomId}: Password ${password ? 'set' : 'removed'}`);
     });
 
     // ─── FILE MANAGEMENT ───
@@ -333,6 +380,7 @@ async function startServer() {
 
     // ─── INTERACTION SYNC ───
     socket.on('interaction', ({ roomId, event }: { roomId: string; event: any }) => {
+      if (!checkRateLimit(socket.id)) return; // Rate limited
       updateRoomActivity(roomId);
       event.userId = socket.id;
       const room = rooms.get(roomId);
@@ -341,6 +389,60 @@ async function startServer() {
         if (user) event.userName = user.name;
       }
       socket.to(roomId).emit('interaction', event);
+    });
+
+    // ─── ATTENTION DETECTION ───
+    socket.on('attention_change', ({ roomId, userName, isAttentive, timestamp }: { roomId: string; userName: string; isAttentive: boolean; timestamp: number }) => {
+      const room = rooms.get(roomId);
+      if (!room || !room.teacherSocketId) return;
+      io.to(room.teacherSocketId).emit('student_attention', {
+        studentId: socket.id,
+        studentName: userName,
+        isAttentive,
+        timestamp,
+      });
+    });
+
+    // ─── STEP-LOCK SYSTEM ───
+    socket.on('set_step', ({ roomId, step }: { roomId: string; step: number }) => {
+      const room = rooms.get(roomId);
+      if (!room) return;
+      room.currentStep = step;
+      io.to(roomId).emit('step_changed', { step });
+    });
+
+    socket.on('add_gate', ({ roomId, step, question, options, correctIndex }: { roomId: string; step: number; question: string; options: string[]; correctIndex: number }) => {
+      const room = rooms.get(roomId);
+      if (!room) return;
+      room.gates[step] = { question, options, correctIndex };
+      io.to(roomId).emit('gate_added', { step });
+    });
+
+    socket.on('gate_answer', ({ roomId, step, answerIndex, studentName }: { roomId: string; step: number; answerIndex: number; studentName: string }) => {
+      const room = rooms.get(roomId);
+      if (!room || !room.gates[step]) return;
+      const isCorrect = room.gates[step].correctIndex === answerIndex;
+      socket.emit('gate_result', { correct: isCorrect });
+      if (room.teacherSocketId) {
+        io.to(room.teacherSocketId).emit('gate_answered', {
+          studentName, step, correct: isCorrect,
+        });
+      }
+    });
+
+    // ─── KICK USER ───
+    socket.on('kick_user', ({ roomId, userId }: { roomId: string; userId: string }) => {
+      const room = rooms.get(roomId);
+      if (!room || room.teacherSocketId !== socket.id) return; // Only teacher can kick
+      io.to(userId).emit('kicked');
+      const targetSocket = io.sockets.sockets.get(userId);
+      if (targetSocket) {
+        targetSocket.leave(roomId);
+        room.users.delete(userId);
+        io.to(roomId).emit('user_list', getRoomUserList(room));
+        io.to(roomId).emit('user_left', { userId, userName: 'Kicked user' });
+        console.log(`👢 Room ${roomId}: User ${userId} was kicked`);
+      }
     });
 
     // ─── DISCONNECT ───
