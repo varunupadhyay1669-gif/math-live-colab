@@ -9,23 +9,33 @@ export const injectedSyncScript = `
   } catch (e) {}
 
   (function() {
-    let isRemoteUpdate = false;
-    let interactionBlocked = false; // When true, block ALL outgoing user events (view-only mode)
+    // AUTONOMOUS: [ORDER-1] Use counter instead of boolean to prevent isRemoteUpdate getting stuck
+    var remoteDepth = 0;
+    function isRemote() { return remoteDepth > 0; }
+    function enterRemote() { remoteDepth++; }
+    function exitRemote() { remoteDepth = Math.max(0, remoteDepth - 1); }
+
+    var interactionBlocked = false;
+
+    // AUTONOMOUS: [ORDER-3] CSS.escape polyfill for older browsers
+    if (typeof CSS === 'undefined' || !CSS.escape) {
+      window.CSS = window.CSS || {};
+      CSS.escape = function(str) {
+        return String(str).replace(/[\\!"#$%&'()*+,.\\/:;<=>?@[\\]^\\x60{|}~]/g, '\\\\$&');
+      };
+    }
 
     // ── Deterministic Randomness ──
-    // Overriding Math.random so that both Teacher and Student generate the exact same sequences
     (function() {
       function hashCode(str) {
-        let hash = 0;
-        for (let i = 0; i < str.length; i++) {
-          let char = str.charCodeAt(i);
-          hash = ((hash << 5) - hash) + char;
+        var hash = 0;
+        for (var i = 0; i < str.length; i++) {
+          var c = str.charCodeAt(i);
+          hash = ((hash << 5) - hash) + c;
           hash = hash & hash;
         }
         return Math.abs(hash) || 12345;
       }
-      // Seed based on the body text content only (ignoring injected scripts)
-      // This ensures teacher and student get the same seed even if scripts differ
       function getStableSeed() {
         var body = document.body;
         if (!body) return 12345;
@@ -35,7 +45,6 @@ export const injectedSyncScript = `
 
       var seed;
       if (document.readyState === 'loading') {
-        // Use a temp seed, re-seed after DOMContentLoaded
         seed = 12345;
         document.addEventListener('DOMContentLoaded', function() {
           seed = getStableSeed();
@@ -57,9 +66,7 @@ export const injectedSyncScript = `
     // ── Element Path (robust selector generation) ──
     function getElementPath(el) {
       if (!el || el.nodeType !== 1) return '';
-      // Prefer id-based paths (most reliable)
       if (el.id) return '#' + CSS.escape(el.id);
-
       var path = [];
       while (el && el.nodeType === 1) {
         var selector = el.nodeName.toLowerCase();
@@ -68,14 +75,12 @@ export const injectedSyncScript = `
           path.unshift(selector);
           break;
         } else {
-          // Use nth-child for uniqueness (more reliable than nth-of-type)
           var sib = el, nth = 1;
           while (sib = sib.previousElementSibling) nth++;
           selector += ':nth-child(' + nth + ')';
         }
         path.unshift(selector);
         el = el.parentNode;
-        // Stop at body to avoid html/head differences
         if (el && el.nodeName === 'BODY') {
           path.unshift('body');
           break;
@@ -84,7 +89,6 @@ export const injectedSyncScript = `
       return path.join(' > ');
     }
 
-    // ── Safe query helper ──
     function findElement(path) {
       if (!path) return null;
       try { return document.querySelector(path); } catch(e) { return null; }
@@ -92,7 +96,7 @@ export const injectedSyncScript = `
 
     // ── Input events ──
     document.addEventListener('input', function(e) {
-      if (isRemoteUpdate || interactionBlocked) return;
+      if (isRemote() || interactionBlocked) return;
       var path = getElementPath(e.target);
       if (path) {
         window.parent.postMessage({ type: 'SYNC_INPUT', path: path, value: e.target.value, checked: e.target.checked }, '*');
@@ -100,7 +104,7 @@ export const injectedSyncScript = `
     }, true);
 
     document.addEventListener('change', function(e) {
-      if (isRemoteUpdate || interactionBlocked) return;
+      if (isRemote() || interactionBlocked) return;
       var path = getElementPath(e.target);
       if (path) {
         window.parent.postMessage({ type: 'SYNC_CHANGE', path: path, value: e.target.value, checked: e.target.checked }, '*');
@@ -109,7 +113,7 @@ export const injectedSyncScript = `
 
     // ── Click events ──
     document.addEventListener('click', function(e) {
-      if (isRemoteUpdate || interactionBlocked || !e.isTrusted) return;
+      if (isRemote() || interactionBlocked || !e.isTrusted) return;
       var path = getElementPath(e.target);
       if (path) {
         window.parent.postMessage({ type: 'SYNC_CLICK', path: path, clientX: e.clientX / window.innerWidth, clientY: e.clientY / window.innerHeight }, '*');
@@ -122,11 +126,7 @@ export const injectedSyncScript = `
       var now = Date.now();
       if (now - lastMove > 50) {
         lastMove = now;
-        window.parent.postMessage({
-          type: 'SYNC_CURSOR',
-          x: e.clientX / window.innerWidth,
-          y: e.clientY / window.innerHeight
-        }, '*');
+        window.parent.postMessage({ type: 'SYNC_CURSOR', x: e.clientX / window.innerWidth, y: e.clientY / window.innerHeight }, '*');
       }
     });
 
@@ -138,17 +138,13 @@ export const injectedSyncScript = `
         lastTouch = now;
         var touch = e.touches[0];
         if (touch) {
-          window.parent.postMessage({
-            type: 'SYNC_CURSOR',
-            x: touch.clientX / window.innerWidth,
-            y: touch.clientY / window.innerHeight
-          }, '*');
+          window.parent.postMessage({ type: 'SYNC_CURSOR', x: touch.clientX / window.innerWidth, y: touch.clientY / window.innerHeight }, '*');
         }
       }
     }, { passive: true });
 
     document.addEventListener('touchstart', function(e) {
-      if (isRemoteUpdate || interactionBlocked) return;
+      if (isRemote() || interactionBlocked) return;
       var touch = e.touches[0];
       if (touch) {
         var el = document.elementFromPoint(touch.clientX, touch.clientY);
@@ -166,17 +162,17 @@ export const injectedSyncScript = `
     var lastScroll = 0;
 
     function sendDocScroll() {
-      if (isRemoteUpdate || !scrollSyncEnabled || interactionBlocked) return;
+      if (isRemote() || !scrollSyncEnabled || interactionBlocked) return;
       var now = Date.now();
       if (now - lastScroll < 30) return;
       lastScroll = now;
-      var maxW = document.documentElement.scrollWidth - window.innerWidth;
-      var maxH = document.documentElement.scrollHeight - window.innerHeight;
+      var maxW = Math.max(0, document.documentElement.scrollWidth - window.innerWidth);
+      var maxH = Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
+      // AUTONOMOUS: [ORDER-3] Guard against zero/negative max to avoid NaN
       window.parent.postMessage({
         type: 'SYNC_SCROLL',
         scrollX: maxW > 0 ? window.scrollX / maxW : 0,
         scrollY: maxH > 0 ? window.scrollY / maxH : 0,
-        // Also send absolute pixel values for more accurate sync
         absScrollX: window.scrollX,
         absScrollY: window.scrollY,
         maxScrollX: maxW,
@@ -185,7 +181,7 @@ export const injectedSyncScript = `
     }
 
     function sendElementScroll(e) {
-      if (isRemoteUpdate || !scrollSyncEnabled || interactionBlocked) return;
+      if (isRemote() || !scrollSyncEnabled || interactionBlocked) return;
       var now = Date.now();
       if (now - lastScroll < 30) return;
       lastScroll = now;
@@ -193,25 +189,23 @@ export const injectedSyncScript = `
       if (!el || el.nodeType !== 1) return;
       var path = getElementPath(el);
       if (!path) return;
-      var maxTop = el.scrollHeight - el.clientHeight;
-      var maxLeft = el.scrollWidth - el.clientWidth;
+      var maxTop = Math.max(0, el.scrollHeight - el.clientHeight);
+      var maxLeft = Math.max(0, el.scrollWidth - el.clientWidth);
       if (maxTop > 0 || maxLeft > 0) {
         window.parent.postMessage({
-          type: 'SYNC_SCROLL',
-          path: path,
+          type: 'SYNC_SCROLL', path: path,
           scrollTop: maxTop > 0 ? el.scrollTop / maxTop : 0,
           scrollLeft: maxLeft > 0 ? el.scrollLeft / maxLeft : 0,
-          absScrollTop: el.scrollTop,
-          absScrollLeft: el.scrollLeft
+          absScrollTop: el.scrollTop, absScrollLeft: el.scrollLeft
         }, '*');
       }
     }
 
-    // Document-level scroll
     window.addEventListener('scroll', sendDocScroll, { passive: true });
 
-    // Discover scrollable elements and attach direct listeners
+    // AUTONOMOUS: [ORDER-4] Debounce DOM scanning to prevent perf issues (was 150ms, now 800ms)
     var _scrollTag = '__syncScroll';
+    var _scanTimer = null;
     function _attachScrollListeners() {
       var all = document.querySelectorAll('*');
       for (var i = 0; i < all.length; i++) {
@@ -233,13 +227,19 @@ export const injectedSyncScript = `
       }
     }
 
+    function _debouncedAttach() {
+      if (_scanTimer) clearTimeout(_scanTimer);
+      _scanTimer = setTimeout(_attachScrollListeners, 800);
+    }
+
     function _initScrollMonitor() {
       _attachScrollListeners();
       try {
-        new MutationObserver(function() { setTimeout(_attachScrollListeners, 150); })
+        new MutationObserver(_debouncedAttach)
           .observe(document.documentElement || document.body, { childList: true, subtree: true });
       } catch(ignore) {}
-      setInterval(_attachScrollListeners, 3000);
+      // AUTONOMOUS: [ORDER-4] Reduced periodic scan from 3s to 10s
+      setInterval(_attachScrollListeners, 10000);
     }
 
     if (document.readyState === 'loading') {
@@ -251,29 +251,18 @@ export const injectedSyncScript = `
 
     // ── Mouse down/up events ──
     document.addEventListener('mousedown', function(e) {
-      if (isRemoteUpdate || interactionBlocked || !e.isTrusted) return;
+      if (isRemote() || interactionBlocked || !e.isTrusted) return;
       var path = getElementPath(e.target);
       if (path) {
-        window.parent.postMessage({
-          type: 'SYNC_MOUSEDOWN',
-          path: path,
-          x: e.clientX / window.innerWidth,
-          y: e.clientY / window.innerHeight,
-          button: e.button
-        }, '*');
+        window.parent.postMessage({ type: 'SYNC_MOUSEDOWN', path: path, x: e.clientX / window.innerWidth, y: e.clientY / window.innerHeight, button: e.button }, '*');
       }
     }, true);
 
     document.addEventListener('mouseup', function(e) {
-      if (isRemoteUpdate || interactionBlocked || !e.isTrusted) return;
+      if (isRemote() || interactionBlocked || !e.isTrusted) return;
       var path = getElementPath(e.target);
       if (path) {
-        window.parent.postMessage({
-          type: 'SYNC_MOUSEUP',
-          path: path,
-          x: e.clientX / window.innerWidth,
-          y: e.clientY / window.innerHeight
-        }, '*');
+        window.parent.postMessage({ type: 'SYNC_MOUSEUP', path: path, x: e.clientX / window.innerWidth, y: e.clientY / window.innerHeight }, '*');
       }
     }, true);
 
@@ -282,80 +271,47 @@ export const injectedSyncScript = `
     var lastDrag = 0;
 
     document.addEventListener('dragstart', function(e) {
-      if (isRemoteUpdate || interactionBlocked) return;
+      if (isRemote() || interactionBlocked) return;
       dragStartPath = getElementPath(e.target);
-      window.parent.postMessage({
-        type: 'SYNC_DRAGSTART',
-        path: dragStartPath,
-        clientX: e.clientX / window.innerWidth,
-        clientY: e.clientY / window.innerHeight
-      }, '*');
+      window.parent.postMessage({ type: 'SYNC_DRAGSTART', path: dragStartPath, clientX: e.clientX / window.innerWidth, clientY: e.clientY / window.innerHeight }, '*');
     }, true);
 
     document.addEventListener('drag', function(e) {
-      if (isRemoteUpdate || interactionBlocked || !e.clientX) return;
+      if (isRemote() || interactionBlocked || !e.clientX) return;
       var now = Date.now();
       if (now - lastDrag < 50) return;
       lastDrag = now;
-      window.parent.postMessage({
-        type: 'SYNC_DRAG',
-        path: dragStartPath,
-        clientX: e.clientX / window.innerWidth,
-        clientY: e.clientY / window.innerHeight
-      }, '*');
+      window.parent.postMessage({ type: 'SYNC_DRAG', path: dragStartPath, clientX: e.clientX / window.innerWidth, clientY: e.clientY / window.innerHeight }, '*');
     }, true);
 
     document.addEventListener('dragend', function(e) {
-      if (isRemoteUpdate || interactionBlocked) return;
-      window.parent.postMessage({
-        type: 'SYNC_DRAGEND',
-        path: dragStartPath,
-        clientX: e.clientX / window.innerWidth,
-        clientY: e.clientY / window.innerHeight
-      }, '*');
+      if (isRemote() || interactionBlocked) return;
+      window.parent.postMessage({ type: 'SYNC_DRAGEND', path: dragStartPath, clientX: e.clientX / window.innerWidth, clientY: e.clientY / window.innerHeight }, '*');
       dragStartPath = '';
     }, true);
 
     document.addEventListener('drop', function(e) {
-      if (isRemoteUpdate || interactionBlocked) return;
+      if (isRemote() || interactionBlocked) return;
       e.preventDefault();
       var dropPath = getElementPath(e.target);
-      window.parent.postMessage({
-        type: 'SYNC_DROP',
-        dragPath: dragStartPath,
-        dropPath: dropPath,
-        clientX: e.clientX / window.innerWidth,
-        clientY: e.clientY / window.innerHeight
-      }, '*');
+      window.parent.postMessage({ type: 'SYNC_DROP', dragPath: dragStartPath, dropPath: dropPath, clientX: e.clientX / window.innerWidth, clientY: e.clientY / window.innerHeight }, '*');
     }, true);
 
-    document.addEventListener('dragover', function(e) {
-      e.preventDefault();
-    }, true);
+    document.addEventListener('dragover', function(e) { e.preventDefault(); }, true);
 
     // ── Key events for simulations ──
     document.addEventListener('keydown', function(e) {
-      if (isRemoteUpdate || interactionBlocked) return;
-      window.parent.postMessage({
-        type: 'SYNC_KEYDOWN',
-        key: e.key,
-        code: e.code,
-        shiftKey: e.shiftKey,
-        ctrlKey: e.ctrlKey,
-        altKey: e.altKey
-      }, '*');
+      if (isRemote() || interactionBlocked) return;
+      window.parent.postMessage({ type: 'SYNC_KEYDOWN', key: e.key, code: e.code, shiftKey: e.shiftKey, ctrlKey: e.ctrlKey, altKey: e.altKey }, '*');
     }, true);
 
     document.addEventListener('keyup', function(e) {
-      if (isRemoteUpdate || interactionBlocked) return;
-      window.parent.postMessage({
-        type: 'SYNC_KEYUP',
-        key: e.key,
-        code: e.code
-      }, '*');
+      if (isRemote() || interactionBlocked) return;
+      window.parent.postMessage({ type: 'SYNC_KEYUP', key: e.key, code: e.code }, '*');
     }, true);
 
     // ── Receive remote events ──
+    // AUTONOMOUS: [ORDER-1] All dispatchEvent calls wrapped in try-finally to prevent stuck flags
     window.addEventListener('message', function(e) {
       var data = e.data;
       if (!data || !data.type) return;
@@ -363,154 +319,128 @@ export const injectedSyncScript = `
       if (data.type === 'REMOTE_INPUT' || data.type === 'REMOTE_CHANGE') {
         var el = findElement(data.path);
         if (el) {
-          isRemoteUpdate = true;
-          if (el.type === 'checkbox' || el.type === 'radio') {
-            el.checked = data.checked;
-          } else {
-            el.value = data.value;
-          }
-          var event = new Event(data.type === 'REMOTE_INPUT' ? 'input' : 'change', { bubbles: true });
-          el.dispatchEvent(event);
-          isRemoteUpdate = false;
+          enterRemote();
+          try {
+            if (el.type === 'checkbox' || el.type === 'radio') {
+              el.checked = data.checked;
+            } else {
+              el.value = data.value;
+            }
+            el.dispatchEvent(new Event(data.type === 'REMOTE_INPUT' ? 'input' : 'change', { bubbles: true }));
+          } finally { exitRemote(); }
         }
       } else if (data.type === 'REMOTE_CLICK') {
         var el = findElement(data.path);
         if (el) {
-          isRemoteUpdate = true;
-          // Use coordinates if available for more precise clicking
-          if (data.clientX !== undefined && data.clientY !== undefined) {
-            var rect = el.getBoundingClientRect();
-            el.dispatchEvent(new MouseEvent('click', {
-              bubbles: true,
-              clientX: data.clientX * window.innerWidth,
-              clientY: data.clientY * window.innerHeight,
-              view: window
-            }));
-          } else {
-            el.click();
-          }
-          isRemoteUpdate = false;
+          enterRemote();
+          try {
+            if (data.clientX !== undefined && data.clientY !== undefined) {
+              el.dispatchEvent(new MouseEvent('click', {
+                bubbles: true, clientX: data.clientX * window.innerWidth, clientY: data.clientY * window.innerHeight, view: window
+              }));
+            } else {
+              el.click();
+            }
+          } finally { exitRemote(); }
         }
       } else if (data.type === 'REMOTE_SCROLL') {
         if (!scrollSyncEnabled) return;
-        isRemoteUpdate = true;
-        if (data.path) {
-          // Element-level scroll
-          var scrollEl = findElement(data.path);
-          if (scrollEl) {
-            var maxT = scrollEl.scrollHeight - scrollEl.clientHeight;
-            var maxL = scrollEl.scrollWidth - scrollEl.clientWidth;
-            scrollEl.scrollTo({
-              left: (data.scrollLeft || 0) * maxL,
-              top: (data.scrollTop || 0) * maxT,
-              behavior: 'smooth'
-            });
+        enterRemote();
+        try {
+          if (data.path) {
+            var scrollEl = findElement(data.path);
+            if (scrollEl) {
+              var maxT = Math.max(0, scrollEl.scrollHeight - scrollEl.clientHeight);
+              var maxL = Math.max(0, scrollEl.scrollWidth - scrollEl.clientWidth);
+              scrollEl.scrollTo({ left: (data.scrollLeft || 0) * maxL, top: (data.scrollTop || 0) * maxT, behavior: 'smooth' });
+            }
+          } else {
+            var maxX = Math.max(0, document.documentElement.scrollWidth - window.innerWidth);
+            var maxY = Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
+            window.scrollTo({ left: data.scrollX * maxX, top: data.scrollY * maxY, behavior: 'smooth' });
           }
-        } else {
-          // Document-level scroll
-          var maxX = document.documentElement.scrollWidth - window.innerWidth;
-          var maxY = document.documentElement.scrollHeight - window.innerHeight;
-          window.scrollTo({
-            left: data.scrollX * maxX,
-            top: data.scrollY * maxY,
-            behavior: 'smooth'
-          });
-        }
-        setTimeout(function() { isRemoteUpdate = false; }, 500);
+        } catch(ignore) {}
+        // AUTONOMOUS: [ORDER-1] Use delayed exit for smooth scroll animation duration
+        setTimeout(function() { exitRemote(); }, 600);
       } else if (data.type === 'SET_SCROLL_SYNC') {
         scrollSyncEnabled = !!data.enabled;
       } else if (data.type === 'SET_INTERACTION_MODE') {
         interactionBlocked = !data.allowed;
       } else if (data.type === 'RESET_VIEW') {
-        isRemoteUpdate = true;
-        window.scrollTo({ top: 0, left: 0, behavior: 'smooth' });
-        setTimeout(function() { isRemoteUpdate = false; }, 300);
+        enterRemote();
+        try { window.scrollTo({ top: 0, left: 0, behavior: 'smooth' }); } catch(ignore) {}
+        setTimeout(function() { exitRemote(); }, 400);
       } else if (data.type === 'REMOTE_MOUSEDOWN') {
         var el = findElement(data.path);
         if (el) {
-          isRemoteUpdate = true;
-          el.dispatchEvent(new MouseEvent('mousedown', {
-            bubbles: true, clientX: data.x * window.innerWidth, clientY: data.y * window.innerHeight, button: data.button || 0
-          }));
-          isRemoteUpdate = false;
+          enterRemote();
+          try { el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, clientX: data.x * window.innerWidth, clientY: data.y * window.innerHeight, button: data.button || 0 })); }
+          finally { exitRemote(); }
         }
       } else if (data.type === 'REMOTE_MOUSEUP') {
         var el = findElement(data.path);
         if (el) {
-          isRemoteUpdate = true;
-          el.dispatchEvent(new MouseEvent('mouseup', {
-            bubbles: true, clientX: data.x * window.innerWidth, clientY: data.y * window.innerHeight
-          }));
-          isRemoteUpdate = false;
+          enterRemote();
+          try { el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, clientX: data.x * window.innerWidth, clientY: data.y * window.innerHeight })); }
+          finally { exitRemote(); }
         }
       } else if (data.type === 'REMOTE_KEYDOWN') {
-        isRemoteUpdate = true;
-        document.dispatchEvent(new KeyboardEvent('keydown', {
-          key: data.key, code: data.code, bubbles: true, shiftKey: data.shiftKey, ctrlKey: data.ctrlKey, altKey: data.altKey
-        }));
-        isRemoteUpdate = false;
+        enterRemote();
+        try { document.dispatchEvent(new KeyboardEvent('keydown', { key: data.key, code: data.code, bubbles: true, shiftKey: data.shiftKey, ctrlKey: data.ctrlKey, altKey: data.altKey })); }
+        finally { exitRemote(); }
       } else if (data.type === 'REMOTE_KEYUP') {
-        isRemoteUpdate = true;
-        document.dispatchEvent(new KeyboardEvent('keyup', {
-          key: data.key, code: data.code, bubbles: true
-        }));
-        isRemoteUpdate = false;
+        enterRemote();
+        try { document.dispatchEvent(new KeyboardEvent('keyup', { key: data.key, code: data.code, bubbles: true })); }
+        finally { exitRemote(); }
       } else if (data.type === 'REMOTE_DRAGSTART') {
-        isRemoteUpdate = true;
         var el = findElement(data.path);
         if (el) {
-          el.dispatchEvent(new DragEvent('dragstart', {
-            bubbles: true, clientX: data.clientX * window.innerWidth, clientY: data.clientY * window.innerHeight
-          }));
+          enterRemote();
+          try { el.dispatchEvent(new DragEvent('dragstart', { bubbles: true, clientX: data.clientX * window.innerWidth, clientY: data.clientY * window.innerHeight })); }
+          finally { exitRemote(); }
         }
-        isRemoteUpdate = false;
       } else if (data.type === 'REMOTE_DRAG') {
-        isRemoteUpdate = true;
-        isRemoteUpdate = false;
+        // No-op for drag movement
       } else if (data.type === 'REMOTE_DRAGEND') {
-        isRemoteUpdate = true;
         var el = findElement(data.path);
         if (el) {
-          el.dispatchEvent(new DragEvent('dragend', {
-            bubbles: true, clientX: data.clientX * window.innerWidth, clientY: data.clientY * window.innerHeight
-          }));
+          enterRemote();
+          try { el.dispatchEvent(new DragEvent('dragend', { bubbles: true, clientX: data.clientX * window.innerWidth, clientY: data.clientY * window.innerHeight })); }
+          finally { exitRemote(); }
         }
-        isRemoteUpdate = false;
       } else if (data.type === 'REMOTE_DROP') {
-        isRemoteUpdate = true;
         var dropEl = findElement(data.dropPath);
         if (dropEl) {
-          dropEl.dispatchEvent(new DragEvent('drop', {
-            bubbles: true, clientX: data.clientX * window.innerWidth, clientY: data.clientY * window.innerHeight
-          }));
+          enterRemote();
+          try { dropEl.dispatchEvent(new DragEvent('drop', { bubbles: true, clientX: data.clientX * window.innerWidth, clientY: data.clientY * window.innerHeight })); }
+          finally { exitRemote(); }
         }
-        isRemoteUpdate = false;
       } else if (data.type === 'REQUEST_HTML') {
-        // Capture current form state into attributes for serialization
         var inputs = document.querySelectorAll('input, select, textarea');
         inputs.forEach(function(el) {
+          try {
             if (el.tagName === 'INPUT') {
-                if (el.type === 'checkbox' || el.type === 'radio') {
-                    if (el.checked) el.setAttribute('checked', 'checked');
-                    else el.removeAttribute('checked');
-                } else {
-                    el.setAttribute('value', el.value);
-                }
+              if (el.type === 'checkbox' || el.type === 'radio') {
+                if (el.checked) el.setAttribute('checked', 'checked');
+                else el.removeAttribute('checked');
+              } else {
+                el.setAttribute('value', el.value);
+              }
             } else if (el.tagName === 'TEXTAREA') {
-                el.innerHTML = el.value;
+              el.innerHTML = el.value;
             } else if (el.tagName === 'SELECT') {
-                Array.from(el.options).forEach(function(opt) {
-                    if (opt.selected) opt.setAttribute('selected', 'selected');
-                    else opt.removeAttribute('selected');
-                });
+              Array.from(el.options).forEach(function(opt) {
+                if (opt.selected) opt.setAttribute('selected', 'selected');
+                else opt.removeAttribute('selected');
+              });
             }
+          } catch(ignore) {}
         });
-
         window.parent.postMessage({
-            type: 'SYNC_PROVIDE_HTML',
-            html: '<!DOCTYPE html>\\n<html>' + document.documentElement.innerHTML + '</html>',
-            scrollX: window.scrollX,
-            scrollY: window.scrollY
+          type: 'SYNC_PROVIDE_HTML',
+          html: '<!DOCTYPE html>\\n<html>' + document.documentElement.innerHTML + '</html>',
+          scrollX: window.scrollX,
+          scrollY: window.scrollY
         }, '*');
       }
     });

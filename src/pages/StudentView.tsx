@@ -102,6 +102,13 @@ export default function StudentView() {
 
   // ── Attention Check ──
   const [attentionCheckModal, setAttentionCheckModal] = useState(false);
+  const attentionTimeoutRef = useRef<ReturnType<typeof setTimeout>>();
+
+  // ── Teacher Status ──
+  const [teacherDisconnected, setTeacherDisconnected] = useState(false);
+
+  // ── Join Error ──
+  const [joinError, setJoinError] = useState<string | null>(null);
 
   // ── Sound ──
   const [soundMuted, setSoundMuted] = useState(false);
@@ -112,9 +119,11 @@ export default function StudentView() {
 
   const iframeRef = useRef<HTMLIFrameElement>(null);
 
+  const notifTimeoutRef = useRef<ReturnType<typeof setTimeout>>();
   const showNotification = (msg: string) => {
+    if (notifTimeoutRef.current) clearTimeout(notifTimeoutRef.current);
     setNotification(msg);
-    setTimeout(() => setNotification(""), 4000);
+    notifTimeoutRef.current = setTimeout(() => setNotification(""), 4000);
   };
 
   // ── Build iframe URL ──
@@ -170,6 +179,7 @@ export default function StudentView() {
       setIsPaused(state.isPaused);
       if (typeof state.scrollSyncEnabled === 'boolean') setScrollSyncEnabled(state.scrollSyncEnabled);
       if (typeof state.studentInteractionAllowed === 'boolean') setInteractionAllowed(state.studentInteractionAllowed);
+      if (typeof state.currentStep === 'number') setCurrentStep(state.currentStep);
       setChatMessages(state.chat || []);
       if (state.lastRunHtml) {
         const f = state.files?.find((f: FileEntry) => f.id === state.activeFileId);
@@ -324,10 +334,33 @@ export default function StudentView() {
       postToIframe({ type: 'RESET_VIEW' });
     });
 
+    // ── Join Error ──
+    newSocket.on("join_error", ({ message }: { message: string }) => {
+      setJoinError(message);
+    });
+
+    // ── Teacher Disconnected ──
+    newSocket.on("teacher_disconnected", () => {
+      setTeacherDisconnected(true);
+      showNotification("⚠️ Teacher disconnected — waiting for reconnection...");
+    });
+
+    // Clear teacher disconnected when a new user list arrives with a teacher
+    newSocket.on("user_list", (list: Array<{ role: string }>) => {
+      const hasTeacher = list.some(u => u.role === 'teacher');
+      if (hasTeacher && teacherDisconnected) {
+        setTeacherDisconnected(false);
+        showNotification("✅ Teacher reconnected!");
+      }
+    });
+
     // ── Attention Check ──
     newSocket.on("attention_check", () => {
       setAttentionCheckModal(true);
       if (sounds && !soundMuted) sounds.raiseHand();
+      // Auto-dismiss after 30s if student doesn't respond
+      if (attentionTimeoutRef.current) clearTimeout(attentionTimeoutRef.current);
+      attentionTimeoutRef.current = setTimeout(() => setAttentionCheckModal(false), 30000);
     });
 
     // ── Kick ──
@@ -338,6 +371,7 @@ export default function StudentView() {
 
     return () => {
       cleanupAttention?.();
+      if (attentionTimeoutRef.current) clearTimeout(attentionTimeoutRef.current);
       newSocket.disconnect();
     };
   }, [roomId, navigate, studentName]);
@@ -347,7 +381,10 @@ export default function StudentView() {
     if (iframeReadyRef.current && iframeRef.current?.contentWindow) {
       iframeRef.current.contentWindow.postMessage(msg, '*');
     } else {
-      pendingMessagesRef.current.push(msg);
+      // Cap pending queue to prevent memory leak
+      if (pendingMessagesRef.current.length < 500) {
+        pendingMessagesRef.current.push(msg);
+      }
     }
   }, []);
 
@@ -515,6 +552,30 @@ export default function StudentView() {
           </button>
         </div>
       </header>
+
+      {/* ══════ JOIN ERROR ══════ */}
+      {joinError && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4"
+          style={{ background: 'rgba(0,0,0,0.4)', backdropFilter: 'blur(6px)' }}>
+          <div className="w-full max-w-sm animate-bounce-in text-center"
+            style={{ background: 'var(--bg-card)', borderRadius: '12px', border: '2px solid #E5394B', boxShadow: '0 8px 32px rgba(229,57,75,0.25)', padding: '32px 24px' }}>
+            <div className="text-4xl mb-4">⚠️</div>
+            <h3 className="font-display text-lg font-bold mb-2" style={{ color: 'var(--text-primary)' }}>Cannot Join Room</h3>
+            <p className="text-sm mb-6" style={{ color: 'var(--text-secondary)' }}>{joinError}</p>
+            <button onClick={() => navigate('/')} className="btn-primary w-full justify-center" style={{ height: '44px', fontSize: '15px', borderRadius: '8px' }}>
+              Go Back
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ══════ TEACHER DISCONNECTED BANNER ══════ */}
+      {teacherDisconnected && (
+        <div className="animate-slide-down px-4 py-2 text-center text-sm font-semibold shrink-0"
+          style={{ background: 'rgba(245,158,11,0.12)', color: '#B45309', borderBottom: '1px solid rgba(245,158,11,0.2)' }}>
+          ⚠️ Teacher disconnected — waiting for reconnection...
+        </div>
+      )}
 
       {/* ══════ MAIN AREA ══════ */}
       <div className="flex-1 flex overflow-hidden relative">
@@ -707,6 +768,7 @@ export default function StudentView() {
             <button
               onClick={() => {
                 setAttentionCheckModal(false);
+                if (attentionTimeoutRef.current) clearTimeout(attentionTimeoutRef.current);
                 if (socket) socket.emit('attention_ack', { roomId, studentName });
               }}
               className="btn-primary w-full justify-center"

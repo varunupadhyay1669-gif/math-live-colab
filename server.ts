@@ -229,11 +229,63 @@ async function startServer() {
     return list;
   }
 
+  // ─── INPUT VALIDATION HELPERS ───
+  const MAX_CHAT_LENGTH = 2000;
+  const MAX_USERNAME_LENGTH = 50;
+  const MAX_ROOM_ID_LENGTH = 20;
+  const MAX_FILE_SIZE = 2 * 1024 * 1024; // 2MB per file
+  const MAX_QUIZ_QUESTION_LENGTH = 500;
+  const MAX_FILES_PER_ROOM = 50;
+
+  function sanitizeString(str: unknown, maxLen: number): string {
+    if (typeof str !== 'string') return '';
+    return str.slice(0, maxLen).trim();
+  }
+
+  function isValidRoomId(roomId: unknown): roomId is string {
+    return typeof roomId === 'string' && roomId.length > 0 && roomId.length <= MAX_ROOM_ID_LENGTH && /^[a-zA-Z0-9_-]+$/.test(roomId);
+  }
+
+  // ─── CHAT RATE LIMITING ───
+  const chatRateLimits = new Map<string, { count: number; resetAt: number }>();
+  const CHAT_RATE_LIMIT = 10; // max messages per window
+  const CHAT_RATE_WINDOW = 5000; // 5 seconds
+
+  function checkChatRateLimit(socketId: string): boolean {
+    const now = Date.now();
+    let entry = chatRateLimits.get(socketId);
+    if (!entry || now > entry.resetAt) {
+      entry = { count: 0, resetAt: now + CHAT_RATE_WINDOW };
+      chatRateLimits.set(socketId, entry);
+    }
+    entry.count++;
+    return entry.count <= CHAT_RATE_LIMIT;
+  }
+
+  // Clean up chat rate limit entries
+  setInterval(() => {
+    const now = Date.now();
+    for (const [id, entry] of chatRateLimits.entries()) {
+      if (now > entry.resetAt + 10000) chatRateLimits.delete(id);
+    }
+  }, 30000);
+
   io.on('connection', (socket) => {
     console.log('User connected:', socket.id);
 
     // ─── JOIN ROOM ───
     socket.on('join_room', ({ roomId, userName, role, password }: { roomId: string; userName: string; role: 'teacher' | 'student'; password?: string }) => {
+      // Validate inputs
+      if (!isValidRoomId(roomId)) {
+        socket.emit('join_error', { message: 'Invalid room code' });
+        return;
+      }
+      const safeName = sanitizeString(userName, MAX_USERNAME_LENGTH) || 'Anonymous';
+      if (role !== 'teacher' && role !== 'student') {
+        socket.emit('join_error', { message: 'Invalid role' });
+        return;
+      }
+
       updateRoomActivity(roomId);
       if (!rooms.has(roomId)) {
         rooms.set(roomId, createRoom());
@@ -247,7 +299,7 @@ async function startServer() {
       }
 
       socket.join(roomId);
-      room.users.set(socket.id, { name: userName || 'Anonymous', role, joinedAt: Date.now() });
+      room.users.set(socket.id, { name: safeName, role, joinedAt: Date.now() });
 
       // If a student just joined, clear the studentLeftAt timer
       if (role === 'student') {
@@ -269,6 +321,8 @@ async function startServer() {
         isPaused: room.isPaused,
         scrollSyncEnabled: room.scrollSyncEnabled,
         studentInteractionAllowed: room.studentInteractionAllowed,
+        currentStep: room.currentStep,
+        gates: room.gates,
         users: getRoomUserList(room),
         chat: room.chat.slice(-50), // Last 50 messages
       });
@@ -287,9 +341,20 @@ async function startServer() {
 
     // ─── FILE MANAGEMENT ───
     socket.on('upload_file', ({ roomId, file }: { roomId: string; file: FileEntry }) => {
+      if (!isValidRoomId(roomId)) return;
       updateRoomActivity(roomId);
       const room = rooms.get(roomId);
       if (!room) return;
+      // Validate file size
+      if (file?.html && file.html.length > MAX_FILE_SIZE) {
+        socket.emit('upload_error', { message: 'File too large (max 2MB)' });
+        return;
+      }
+      // Validate file count
+      if (room.files.length >= MAX_FILES_PER_ROOM) {
+        socket.emit('upload_error', { message: `Too many files (max ${MAX_FILES_PER_ROOM})` });
+        return;
+      }
       room.files.push(file);
       room.activeFileId = file.id;
       room.lastRunHtml = file.html;
@@ -435,14 +500,19 @@ async function startServer() {
 
     // ─── CHAT ───
     socket.on('send_chat', ({ roomId, message, userName }: { roomId: string; message: string; userName: string }) => {
+      if (!isValidRoomId(roomId)) return;
+      if (!checkChatRateLimit(socket.id)) return; // Rate limited
+      const safeMessage = sanitizeString(message, MAX_CHAT_LENGTH);
+      const safeName = sanitizeString(userName, MAX_USERNAME_LENGTH) || 'Anonymous';
+      if (!safeMessage) return; // Empty message after sanitization
       updateRoomActivity(roomId);
       const room = rooms.get(roomId);
       if (!room) return;
       const chatMsg = {
         id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
         userId: socket.id,
-        userName,
-        message,
+        userName: safeName,
+        message: safeMessage,
         timestamp: Date.now(),
       };
       room.chat.push(chatMsg);
@@ -453,7 +523,10 @@ async function startServer() {
 
     // ─── QUIZ / QUESTIONS ───
     socket.on('send_quiz', ({ roomId, question, options }: { roomId: string; question: string; options?: string[] }) => {
-      io.to(roomId).emit('quiz', { question, options, senderId: socket.id });
+      if (!isValidRoomId(roomId)) return;
+      const safeQuestion = sanitizeString(question, MAX_QUIZ_QUESTION_LENGTH);
+      if (!safeQuestion) return;
+      io.to(roomId).emit('quiz', { question: safeQuestion, options, senderId: socket.id });
     });
 
     socket.on('quiz_answer', ({ roomId, answer, studentName }: { roomId: string; answer: string; studentName: string }) => {
@@ -577,8 +650,10 @@ async function startServer() {
 
     socket.on('gate_answer', ({ roomId, step, answerIndex, studentName }: { roomId: string; step: number; answerIndex: number; studentName: string }) => {
       const room = rooms.get(roomId);
-      if (!room || !room.gates[step]) return;
-      const isCorrect = room.gates[step].correctIndex === answerIndex;
+      if (!room) return;
+      const gate = room.gates[step];
+      if (!gate) { socket.emit('gate_result', { correct: false }); return; }
+      const isCorrect = gate.correctIndex === answerIndex;
       socket.emit('gate_result', { correct: isCorrect });
       if (room.teacherSocketId) {
         io.to(room.teacherSocketId).emit('gate_answered', {
@@ -615,6 +690,8 @@ async function startServer() {
 
           if (room.teacherSocketId === socket.id) {
             room.teacherSocketId = null;
+            // Notify students that teacher disconnected
+            io.to(roomId).emit('teacher_disconnected');
           }
 
           // Check if any students remain — if not, start the 2hr expiry countdown

@@ -363,7 +363,10 @@ export default function Room() {
     if (iframeReadyRef.current && iframeRef.current?.contentWindow) {
       iframeRef.current.contentWindow.postMessage(msg, '*');
     } else {
-      pendingMessagesRef.current.push(msg);
+      // Cap pending queue to prevent memory leak
+      if (pendingMessagesRef.current.length < 500) {
+        pendingMessagesRef.current.push(msg);
+      }
     }
   }, []);
 
@@ -484,12 +487,18 @@ export default function Room() {
   }, []);
 
   // ── Helpers ──
-  const showNotif = (msg: string) => { setNotification(msg); setTimeout(() => setNotification(""), 3000); };
+  const notifTimeoutRef = useRef<ReturnType<typeof setTimeout>>();
+  const showNotif = (msg: string) => {
+    if (notifTimeoutRef.current) clearTimeout(notifTimeoutRef.current);
+    setNotification(msg);
+    notifTimeoutRef.current = setTimeout(() => setNotification(""), 3000);
+  };
 
   const uploadFileFromInput = (e: React.ChangeEvent<HTMLInputElement>) => {
     const uploadedFiles = e.target.files;
     if (!uploadedFiles || !socket) return;
     Array.from(uploadedFiles).forEach((file: File) => {
+      if (file.size > 2 * 1024 * 1024) { showNotif(`⚠️ ${file.name} is too large (max 2MB)`); return; }
       const reader = new FileReader();
       reader.onload = (ev) => {
         const content = ev.target?.result as string;
@@ -504,6 +513,7 @@ export default function Room() {
         setPreviewHtml(content);
         showNotif(`✅ Uploaded: ${entry.name}`);
       };
+      reader.onerror = () => showNotif(`⚠️ Failed to read ${file.name}`);
       reader.readAsText(file);
     });
     e.target.value = '';
@@ -516,6 +526,7 @@ export default function Room() {
     const droppedFiles = (Array.from(e.dataTransfer.files) as File[]).filter(f => /\.html?$/i.test(f.name));
     if (droppedFiles.length === 0) { showNotif("⚠️ Only .html files please"); return; }
     droppedFiles.forEach((file: File) => {
+      if (file.size > 2 * 1024 * 1024) { showNotif(`⚠️ ${file.name} is too large (max 2MB)`); return; }
       const reader = new FileReader();
       reader.onload = (ev) => {
         const content = ev.target?.result as string;
@@ -530,6 +541,7 @@ export default function Room() {
         setPreviewHtml(content);
         showNotif(`✅ Uploaded: ${entry.name}`);
       };
+      reader.onerror = () => showNotif(`⚠️ Failed to read ${file.name}`);
       reader.readAsText(file);
     });
   };
