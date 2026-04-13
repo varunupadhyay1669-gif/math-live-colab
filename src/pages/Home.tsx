@@ -8,6 +8,7 @@ export default function Home() {
   const [studentName, setStudentName] = useState('');
   const [roomCode, setRoomCode] = useState("");
   const [recentRooms, setRecentRooms] = useState<Array<{ id: string; name: string; date: string }>>([]);
+  const [activeCard, setActiveCard] = useState<'teacher' | 'student' | null>(null);
 
   useEffect(() => {
     try {
@@ -36,71 +37,75 @@ export default function Home() {
     navigate(`/room/${id}?name=${encodeURIComponent(teacherName.trim() || 'Teacher')}`);
   };
 
-  const font = "'Manrope', sans-serif";
-  const mono = "'JetBrains Mono', monospace";
-
-  const [activeCard, setActiveCard] = useState<'teacher' | 'student' | null>(null);
-
   return (
-    <div className="min-h-screen overflow-x-hidden relative flex flex-col items-center justify-center" style={{ background: '#0c0e12', color: '#f6f6fc', fontFamily: font }}>
-      {/* Dot grid */}
-      <div className="fixed inset-0 pointer-events-none z-0" style={{ backgroundImage: 'radial-gradient(#46484d 1px, transparent 1px)', backgroundSize: '32px 32px', opacity: 0.15 }} />
-      {/* Glow */}
-      <div className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[800px] h-[800px] rounded-full pointer-events-none z-0" style={{ background: 'rgba(204,151,255,0.05)', filter: 'blur(120px)' }} />
+    <div className="min-h-screen flex flex-col items-center justify-center relative overflow-hidden"
+      style={{ background: 'var(--bg-primary)', color: 'var(--text-primary)' }}>
 
-      <div className="relative z-10 flex flex-col items-center gap-8 max-w-4xl w-full px-6">
+      {/* Background mesh gradient */}
+      <div className="fixed inset-0 pointer-events-none z-0" style={{ background: 'var(--gradient-mesh)' }} />
+      <div className="fixed inset-0 pointer-events-none z-0"
+        style={{ backgroundImage: 'radial-gradient(var(--border-subtle) 1px, transparent 1px)', backgroundSize: '32px 32px', opacity: 0.5 }} />
+
+      <div className="relative z-10 flex flex-col items-center gap-6 max-w-4xl w-full px-6">
+
         {/* Badge */}
-        <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full border border-[#46484d]/20" style={{ background: '#23262c' }}>
-          <span className="w-1.5 h-1.5 rounded-full bg-[#cc97ff] animate-pulse" />
-          <span className="text-[10px] font-bold uppercase text-[#aaabb0]" style={{ letterSpacing: '0.2em' }}>System Status: Active</span>
+        <div className="badge badge-indigo">
+          <span className="connection-dot online" style={{ width: 6, height: 6 }} />
+          System Active
         </div>
 
         {/* Title */}
-        <h1 className="font-extrabold leading-none text-center" style={{ fontSize: 'clamp(56px, 11vw, 120px)', letterSpacing: '-0.05em' }}>
-          Maths<span className="text-[#cc97ff]">Live</span>
+        <h1 className="font-display font-extrabold text-center leading-none"
+          style={{ fontSize: 'clamp(48px, 10vw, 96px)', letterSpacing: '-0.04em', color: 'var(--text-primary)' }}>
+          Maths<span className="gradient-text">Live</span>
         </h1>
 
         {/* Subtitle */}
-        <p className="text-lg md:text-xl font-light max-w-2xl mx-auto leading-relaxed text-center" style={{ color: '#aaabb0' }}>
-          A sophisticated computational laboratory for interactive HTML simulations. Experience the precision of mathematics through real-time synced visualization.
+        <p className="text-center max-w-lg mx-auto" style={{ color: 'var(--text-secondary)', fontSize: '16px', lineHeight: '1.7' }}>
+          Real-time collaborative platform for interactive HTML simulations. Teach, demonstrate, and explore together.
         </p>
 
-        {/* Two buttons */}
-        <div className="pt-4 flex flex-col sm:flex-row items-center justify-center gap-5">
-          <button
-            onClick={() => setActiveCard(activeCard === 'teacher' ? null : 'teacher')}
-            className="flex items-center gap-3 px-8 py-4 bg-[#cc97ff] text-black font-bold rounded-xl text-sm transition-all hover:-translate-y-0.5 active:scale-[0.98]"
-            style={{ boxShadow: '0 0 30px rgba(204,151,255,0.3)' }}>
-            Join as Teacher
-            <span style={{ fontSize: '18px' }}>→</span>
+        {/* Role Selection Buttons */}
+        <div className="flex items-center gap-4 pt-2">
+          <button onClick={() => setActiveCard(activeCard === 'teacher' ? null : 'teacher')}
+            className="btn-primary"
+            style={{ padding: '14px 28px', fontSize: '15px' }}>
+            Launch Session
+            <span style={{ fontSize: '16px' }}>&#8594;</span>
           </button>
-          <button
-            onClick={() => setActiveCard(activeCard === 'student' ? null : 'student')}
-            className="px-8 py-4 border border-[#46484d]/20 rounded-xl font-bold text-sm text-[#f6f6fc] hover:bg-[#1d2025] transition-all active:scale-[0.98]">
-            Join as Student
+          <button onClick={() => setActiveCard(activeCard === 'student' ? null : 'student')}
+            className="btn-secondary"
+            style={{ padding: '14px 28px', fontSize: '15px' }}>
+            Join Session
           </button>
         </div>
 
-        {/* Cards — small, frosted glass, side by side */}
-        <div className="w-full grid md:grid-cols-2 gap-6 mt-4">
+        {/* Cards */}
+        <div className="w-full grid md:grid-cols-2 gap-5 mt-2">
+
           {/* Teacher Card */}
-          <div
-            className={`rounded-xl p-8 flex flex-col gap-5 transition-all duration-500 border ${
-              activeCard === 'teacher'
-                ? 'border-[#cc97ff]/30 opacity-100 scale-100'
-                : 'border-[#46484d]/10 opacity-60'
-            }`}
-            style={{ backdropFilter: 'blur(20px)', background: 'rgba(35, 38, 44, 0.6)' }}
-          >
-            <div className="w-10 h-10 rounded-lg bg-[#cc97ff]/10 flex items-center justify-center">
-              <span className="text-[#cc97ff] text-xl">🚀</span>
+          <div className={`panel p-7 flex flex-col gap-5 transition-all duration-300 ${
+            activeCard === 'teacher' ? 'opacity-100 ring-2' : 'opacity-60 hover:opacity-80'
+          }`} style={{
+            borderColor: activeCard === 'teacher' ? 'var(--accent-indigo)' : 'var(--border-subtle)',
+            boxShadow: activeCard === 'teacher' ? 'var(--shadow-lg), var(--shadow-glow-indigo)' : 'var(--shadow-sm)',
+            '--tw-ring-color': 'var(--accent-indigo)',
+          } as React.CSSProperties}>
+
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl flex items-center justify-center"
+                style={{ background: 'var(--accent-indigo-light)' }}>
+                <span style={{ fontSize: '20px' }}>&#128640;</span>
+              </div>
+              <div>
+                <h3 className="font-display text-lg font-bold" style={{ color: 'var(--text-primary)' }}>Launch Session</h3>
+                <p className="text-[13px]" style={{ color: 'var(--text-muted)' }}>Create a room and share simulations</p>
+              </div>
             </div>
+
             <div>
-              <h3 className="text-xl font-bold mb-1">Launch Session</h3>
-              <p className="text-sm" style={{ color: '#aaabb0' }}>Create a new interactive environment and upload your HTML simulation.</p>
-            </div>
-            <div className="space-y-2">
-              <label className="block text-[10px] font-bold uppercase text-[#aaabb0]" style={{ letterSpacing: '0.15em' }}>Session Title</label>
+              <label className="block text-[11px] font-bold uppercase mb-1.5"
+                style={{ color: 'var(--text-muted)', letterSpacing: '0.08em' }}>Session Title</label>
               <input
                 type="text"
                 placeholder="e.g. Calculus Visualization 101"
@@ -108,64 +113,65 @@ export default function Home() {
                 onChange={(e) => setTeacherName(e.target.value)}
                 onKeyDown={(e) => e.key === 'Enter' && createRoom()}
                 onFocus={() => setActiveCard('teacher')}
-                className="w-full px-4 py-3 border border-[#46484d]/20 rounded-lg text-sm text-[#f6f6fc] placeholder:text-[#74757a] focus:outline-none focus:border-[#cc97ff] transition-all"
-                style={{ background: '#000000' }}
+                className="input-field"
               />
             </div>
-            <button
-              onClick={createRoom}
-              disabled={!teacherName.trim()}
-              className="w-full py-3.5 bg-[#cc97ff] text-black font-bold rounded-lg text-sm transition-all hover:shadow-[0_0_20px_rgba(204,151,255,0.2)] active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed">
-              Initiate Environment
+
+            <button onClick={createRoom} disabled={!teacherName.trim()} className="btn-primary w-full justify-center disabled:opacity-40">
+              Create Room
             </button>
           </div>
 
           {/* Student Card */}
-          <div
-            className={`rounded-xl p-8 flex flex-col gap-5 transition-all duration-500 border ${
-              activeCard === 'student'
-                ? 'border-[#699cff]/30 opacity-100 scale-100'
-                : 'border-[#46484d]/10 opacity-60'
-            }`}
-            style={{ backdropFilter: 'blur(20px)', background: 'rgba(35, 38, 44, 0.6)' }}
-          >
-            <div className="w-10 h-10 rounded-lg bg-[#699cff]/10 flex items-center justify-center">
-              <span className="text-[#699cff] text-xl">👥</span>
+          <div className={`panel p-7 flex flex-col gap-5 transition-all duration-300 ${
+            activeCard === 'student' ? 'opacity-100 ring-2' : 'opacity-60 hover:opacity-80'
+          }`} style={{
+            borderColor: activeCard === 'student' ? 'var(--accent-violet)' : 'var(--border-subtle)',
+            boxShadow: activeCard === 'student' ? 'var(--shadow-lg), var(--shadow-glow-violet)' : 'var(--shadow-sm)',
+            '--tw-ring-color': 'var(--accent-violet)',
+          } as React.CSSProperties}>
+
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl flex items-center justify-center"
+                style={{ background: 'var(--accent-violet-light)' }}>
+                <span style={{ fontSize: '20px' }}>&#128101;</span>
+              </div>
+              <div>
+                <h3 className="font-display text-lg font-bold" style={{ color: 'var(--text-primary)' }}>Join Session</h3>
+                <p className="text-[13px]" style={{ color: 'var(--text-muted)' }}>Enter a code to join a live session</p>
+              </div>
             </div>
-            <div>
-              <h3 className="text-xl font-bold mb-1">Join Session</h3>
-              <p className="text-sm" style={{ color: '#aaabb0' }}>Enter a session ID to participate in an active mathematical demonstration.</p>
-            </div>
+
             <form onSubmit={joinRoom} className="flex flex-col gap-3">
               <div>
-                <label className="block text-[10px] font-bold uppercase text-[#aaabb0] mb-1.5" style={{ letterSpacing: '0.15em' }}>Your Name</label>
+                <label className="block text-[11px] font-bold uppercase mb-1.5"
+                  style={{ color: 'var(--text-muted)', letterSpacing: '0.08em' }}>Your Name</label>
                 <input
                   type="text"
                   placeholder="e.g. Arjun"
                   value={studentName}
                   onChange={(e) => setStudentName(e.target.value)}
                   onFocus={() => setActiveCard('student')}
-                  className="w-full px-4 py-3 border border-[#46484d]/20 rounded-lg text-sm text-[#f6f6fc] placeholder:text-[#74757a] focus:outline-none focus:border-[#699cff] transition-all"
-                  style={{ background: '#000000' }}
+                  className="input-field"
                 />
               </div>
               <div>
-                <label className="block text-[10px] font-bold uppercase text-[#aaabb0] mb-1.5" style={{ letterSpacing: '0.15em' }}>Access Code</label>
+                <label className="block text-[11px] font-bold uppercase mb-1.5"
+                  style={{ color: 'var(--text-muted)', letterSpacing: '0.08em' }}>Room Code</label>
                 <input
                   type="text"
-                  placeholder="XXX - XXX - XXX"
+                  placeholder="Enter room code"
                   value={roomCode}
                   onChange={(e) => setRoomCode(e.target.value)}
                   onFocus={() => setActiveCard('student')}
-                  className="w-full px-4 py-3 border border-[#46484d]/20 rounded-lg text-sm text-center text-[#f6f6fc] placeholder:text-[#74757a] focus:outline-none focus:border-[#699cff] transition-all"
-                  style={{ background: '#000000', fontFamily: mono, letterSpacing: '0.5em' }}
+                  className="input-field"
+                  style={{ fontFamily: "'JetBrains Mono', monospace", letterSpacing: '0.15em', textAlign: 'center' }}
                 />
               </div>
-              <button
-                type="submit"
-                disabled={!roomCode.trim() || !studentName.trim()}
-                className="w-full py-3.5 bg-[#699cff] text-[#001e4a] font-bold rounded-lg text-sm transition-all hover:shadow-[0_0_20px_rgba(105,156,255,0.2)] active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed">
-                Connect to Node
+              <button type="submit" disabled={!roomCode.trim() || !studentName.trim()}
+                className="btn-primary w-full justify-center disabled:opacity-40"
+                style={{ background: 'linear-gradient(135deg, #8B5CF6, #A78BFA, #7C3AED)' }}>
+                Join Room
               </button>
             </form>
           </div>
@@ -173,18 +179,26 @@ export default function Home() {
 
         {/* Recent rooms */}
         {recentRooms.length > 0 && (
-          <div className="flex flex-wrap justify-center gap-2 mt-4">
-            {recentRooms.map((room) => (
-              <button
-                key={room.id}
-                onClick={() => joinRecent(room.id)}
-                className="px-3 py-1.5 border border-[#46484d]/20 rounded-lg bg-[#171a1f] hover:border-[#cc97ff]/30 transition-all text-[#aaabb0] hover:text-white text-[11px]"
-                style={{ fontFamily: mono }}>
-                {room.id}
-              </button>
-            ))}
+          <div className="flex flex-col items-center gap-2 mt-2">
+            <span className="text-[11px] font-bold uppercase" style={{ color: 'var(--text-muted)', letterSpacing: '0.08em' }}>
+              Recent Sessions
+            </span>
+            <div className="flex flex-wrap justify-center gap-2">
+              {recentRooms.map((room) => (
+                <button key={room.id} onClick={() => joinRecent(room.id)}
+                  className="btn text-[12px]"
+                  style={{ fontFamily: "'JetBrains Mono', monospace" }}>
+                  {room.id}
+                </button>
+              ))}
+            </div>
           </div>
         )}
+
+        {/* Footer */}
+        <p className="text-[12px] mt-4" style={{ color: 'var(--text-muted)' }}>
+          Built for teachers who love interactive learning
+        </p>
       </div>
     </div>
   );

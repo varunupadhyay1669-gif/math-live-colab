@@ -86,7 +86,7 @@ async function startServer() {
 
   // ─── RATE LIMITING ───
   const rateLimits = new Map<string, { count: number; resetAt: number }>();
-  const RATE_LIMIT_EVENTS = 60; // max events per second
+  const RATE_LIMIT_EVENTS = 200; // max events per second (needs headroom for scroll + cursor + input)
   const RATE_LIMIT_WINDOW = 1000; // 1 second window
 
   function checkRateLimit(socketId: string): boolean {

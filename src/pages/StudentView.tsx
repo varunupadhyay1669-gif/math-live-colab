@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useRef } from "react";
+import React, { useEffect, useState, useRef, useCallback } from "react";
 import { useParams, useNavigate, useSearchParams } from "react-router-dom";
 import { io, Socket } from "socket.io-client";
 import { injectedSyncScript } from "../lib/syncScript";
@@ -100,6 +100,10 @@ export default function StudentView() {
   // ── Sound ──
   const [soundMuted, setSoundMuted] = useState(false);
 
+  // ── Iframe readiness ──
+  const iframeReadyRef = useRef(false);
+  const pendingMessagesRef = useRef<any[]>([]);
+
   const iframeRef = useRef<HTMLIFrameElement>(null);
 
   const showNotification = (msg: string) => {
@@ -110,6 +114,8 @@ export default function StudentView() {
   // ── Build iframe URL ──
   useEffect(() => {
     if (!currentHtml) { setIframeUrl(""); return; }
+    // Mark iframe as not ready while we rebuild it
+    iframeReadyRef.current = false;
     let content = currentHtml;
     const scripts = injectedSyncScript + stepLockScript;
     if (content.includes("<head>")) {
@@ -252,10 +258,9 @@ export default function StudentView() {
             name: event.userName || 'Teacher',
           },
         }));
-      } else if (iframeRef.current?.contentWindow) {
-        iframeRef.current.contentWindow.postMessage(
-          { ...event, type: event.type.replace("SYNC_", "REMOTE_") }, "*"
-        );
+      } else {
+        const remoteEvent = { ...event, type: event.type.replace("SYNC_", "REMOTE_") };
+        postToIframe(remoteEvent);
       }
     });
 
@@ -284,9 +289,7 @@ export default function StudentView() {
     // ── Step-Lock ──
     newSocket.on("step_changed", ({ step }: { step: number }) => {
       setCurrentStep(step);
-      if (iframeRef.current?.contentWindow) {
-        iframeRef.current.contentWindow.postMessage({ type: 'SET_STEP', step }, '*');
-      }
+      postToIframe({ type: 'SET_STEP', step });
     });
 
     newSocket.on("gate_added", ({ step }: { step: number }) => {
@@ -311,11 +314,43 @@ export default function StudentView() {
     };
   }, [roomId, navigate, studentName]);
 
+  // ── Helper: safely post message to iframe (queues if not ready) ──
+  const postToIframe = useCallback((msg: any) => {
+    if (iframeReadyRef.current && iframeRef.current?.contentWindow) {
+      iframeRef.current.contentWindow.postMessage(msg, '*');
+    } else {
+      pendingMessagesRef.current.push(msg);
+    }
+  }, []);
+
+  // ── Iframe onLoad: flush pending messages ──
+  const handleIframeLoad = useCallback(() => {
+    iframeReadyRef.current = true;
+    // Flush pending messages
+    const pending = pendingMessagesRef.current;
+    pendingMessagesRef.current = [];
+    for (const msg of pending) {
+      iframeRef.current?.contentWindow?.postMessage(msg, '*');
+    }
+    // Re-send current state
+    iframeRef.current?.contentWindow?.postMessage({ type: 'SET_SCROLL_SYNC', enabled: scrollSyncEnabled }, '*');
+    if (currentStep < 999) {
+      iframeRef.current?.contentWindow?.postMessage({ type: 'SET_STEP', step: currentStep }, '*');
+    }
+  }, [scrollSyncEnabled, currentStep]);
+
   // ── Relay iframe messages ──
   useEffect(() => {
     const handler = (e: MessageEvent) => {
-      if (!socket || !e.data?.type?.startsWith("SYNC_")) return;
-      if (e.data.type === 'SYNC_SCROLL' && !scrollSyncEnabled) return;
+      if (!socket) return;
+      const type = e.data?.type;
+      if (!type) return;
+      
+      // Filter out internal events that shouldn't be relayed as interactions
+      if (type === 'SYNC_PROVIDE_HTML' || type === 'STEP_INFO') return;
+      
+      if (!type.startsWith('SYNC_')) return;
+      if (type === 'SYNC_SCROLL' && !scrollSyncEnabled) return;
       socket.emit("interaction", { roomId, event: e.data });
     };
     window.addEventListener("message", handler);
@@ -341,17 +376,15 @@ export default function StudentView() {
 
   // ── Push scroll sync state to iframe ──
   useEffect(() => {
-    if (iframeRef.current?.contentWindow) {
-      iframeRef.current.contentWindow.postMessage({ type: 'SET_SCROLL_SYNC', enabled: scrollSyncEnabled }, '*');
-    }
-  }, [scrollSyncEnabled, iframeUrl]);
+    postToIframe({ type: 'SET_SCROLL_SYNC', enabled: scrollSyncEnabled });
+  }, [scrollSyncEnabled, iframeUrl, postToIframe]);
 
   // ── Step sync to iframe ──
   useEffect(() => {
-    if (iframeRef.current?.contentWindow && currentStep < 999) {
-      iframeRef.current.contentWindow.postMessage({ type: 'SET_STEP', step: currentStep }, '*');
+    if (currentStep < 999) {
+      postToIframe({ type: 'SET_STEP', step: currentStep });
     }
-  }, [currentStep, iframeUrl]);
+  }, [currentStep, iframeUrl, postToIframe]);
 
   // ── Handlers ──
   const submitQuizAnswer = () => {
@@ -416,6 +449,7 @@ export default function StudentView() {
               src={iframeUrl}
               className="w-full h-full border-none"
               style={{ background: '#ffffff' }}
+              onLoad={handleIframeLoad}
               sandbox="allow-scripts allow-same-origin allow-forms allow-modals allow-popups allow-pointer-lock"
             />
           ) : (

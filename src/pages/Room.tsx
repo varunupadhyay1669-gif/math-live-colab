@@ -131,6 +131,10 @@ export default function Room() {
   // ── Scroll Sync ──
   const [scrollSyncEnabled, setScrollSyncEnabled] = useState(true);
 
+  // ── Iframe readiness ──
+  const iframeReadyRef = useRef(false);
+  const pendingMessagesRef = useRef<any[]>([]);
+
   // ── Step-Lock ──
   const [stepLockEnabled, setStepLockEnabled] = useState(false);
   const [currentStep, setCurrentStep] = useState(1);
@@ -156,6 +160,9 @@ export default function Room() {
   // ── Room Password ──
   const [roomPassword, setRoomPassword] = useState<string>('');
   const [showShareMenu, setShowShareMenu] = useState(false);
+
+  // ── Flag to skip our own run_preview echo ──
+  const skipOwnPreviewRef = useRef(false);
 
   // ── Refs ──
   const iframeRef = useRef<HTMLIFrameElement>(null);
@@ -222,7 +229,14 @@ export default function Room() {
     newSocket.on("active_file_changed", (data: { fileId: string; fileName?: string; html?: string }) => {
       setActiveFileId(data.fileId);
     });
-    newSocket.on("run_preview", ({ html }: { fileId: string; html: string }) => setPreviewHtml(html));
+    newSocket.on("run_preview", ({ html }: { fileId: string; html: string }) => {
+      // Skip if this is our own echo from run_preview we just emitted
+      if (skipOwnPreviewRef.current) {
+        skipOwnPreviewRef.current = false;
+        return;
+      }
+      setPreviewHtml(html);
+    });
     newSocket.on("chat_message", (msg: ChatMessage) => {
       setChatMessages(prev => [...prev, msg]);
       sounds.message();
@@ -254,8 +268,9 @@ export default function Room() {
             name: event.userName || 'Student',
           },
         }));
-      } else if (iframeRef.current?.contentWindow) {
-        iframeRef.current.contentWindow.postMessage({ ...event, type: event.type.replace("SYNC_", "REMOTE_") }, "*");
+      } else {
+        const remoteEvent = { ...event, type: event.type.replace("SYNC_", "REMOTE_") };
+        postToIframe(remoteEvent);
       }
       if (isRecording) sessionRecorder.record('interaction', event);
     });
@@ -323,19 +338,54 @@ export default function Room() {
     return () => { newSocket.disconnect(); };
   }, [roomId, navigate, teacherName]);
 
+  // ── Helper: safely post message to iframe (queues if not ready) ──
+  const postToIframe = useCallback((msg: any) => {
+    if (iframeReadyRef.current && iframeRef.current?.contentWindow) {
+      iframeRef.current.contentWindow.postMessage(msg, '*');
+    } else {
+      pendingMessagesRef.current.push(msg);
+    }
+  }, []);
+
+  // ── Iframe onLoad: flush pending messages ──
+  const handleIframeLoad = useCallback(() => {
+    iframeReadyRef.current = true;
+    // Flush any pending messages
+    const pending = pendingMessagesRef.current;
+    pendingMessagesRef.current = [];
+    for (const msg of pending) {
+      iframeRef.current?.contentWindow?.postMessage(msg, '*');
+    }
+    // Re-send current state
+    if (scrollSyncEnabled !== undefined) {
+      iframeRef.current?.contentWindow?.postMessage({ type: 'SET_SCROLL_SYNC', enabled: scrollSyncEnabled }, '*');
+    }
+    if (stepLockEnabled && currentStep) {
+      iframeRef.current?.contentWindow?.postMessage({ type: 'SET_STEP', step: currentStep }, '*');
+    }
+  }, [scrollSyncEnabled, stepLockEnabled, currentStep]);
+
   // ── Relay iframe messages ──
   useEffect(() => {
     const handler = (e: MessageEvent) => {
       if (!socket) return;
-      if (e.data?.type === 'SYNC_PROVIDE_HTML') {
+      const type = e.data?.type;
+      if (!type) return;
+
+      // Internal sync events — not interactions
+      if (type === 'SYNC_PROVIDE_HTML') {
         socket.emit("sync_html_update", { roomId, html: e.data.html });
-      } else if (e.data?.type === 'STEP_INFO') {
+        return;
+      }
+      if (type === 'STEP_INFO') {
         setMaxStep(e.data.maxStep || 0);
-      } else if (e.data?.type === 'SYNC_SCROLL') {
-        if (scrollSyncEnabled) {
-          socket.emit("interaction", { roomId, event: e.data });
-        }
-      } else if (e.data?.type?.startsWith("SYNC_")) {
+        return;
+      }
+
+      // Only relay actual SYNC_ interaction events
+      if (type.startsWith('SYNC_')) {
+        // Check scroll sync gate
+        if (type === 'SYNC_SCROLL' && !scrollSyncEnabled) return;
         socket.emit("interaction", { roomId, event: e.data });
       }
     };
@@ -343,11 +393,24 @@ export default function Room() {
     return () => window.removeEventListener("message", handler);
   }, [socket, roomId, scrollSyncEnabled]);
 
+  // ── Periodic auto-sync: every 10s, push teacher's live DOM to students ──
+  useEffect(() => {
+    if (!socket || !roomId) return;
+    const interval = setInterval(() => {
+      if (iframeRef.current?.contentWindow && iframeReadyRef.current) {
+        iframeRef.current.contentWindow.postMessage({ type: 'REQUEST_HTML' }, '*');
+      }
+    }, 10000);
+    return () => clearInterval(interval);
+  }, [socket, roomId]);
+
   // ── Build iframe URL ──
   useEffect(() => {
     if (!previewHtml) { setIframeUrl(""); return; }
+    // Mark iframe as not ready while we rebuild it
+    iframeReadyRef.current = false;
     let content = previewHtml;
-    const scripts = injectedSyncScript + (stepLockEnabled ? stepLockScript : '');
+    const scripts = injectedSyncScript + stepLockScript;
     if (content.includes("<head>")) {
       content = content.replace("<head>", "<head>" + scripts);
     } else if (content.includes("<html>")) {
@@ -388,17 +451,15 @@ export default function Room() {
 
   // ── Step-Lock: send step to iframe when changed ──
   useEffect(() => {
-    if (stepLockEnabled && iframeRef.current?.contentWindow) {
-      iframeRef.current.contentWindow.postMessage({ type: 'SET_STEP', step: currentStep }, '*');
+    if (stepLockEnabled) {
+      postToIframe({ type: 'SET_STEP', step: currentStep });
     }
-  }, [currentStep, stepLockEnabled]);
+  }, [currentStep, stepLockEnabled, postToIframe]);
 
   // ── Push scroll sync state to iframe ──
   useEffect(() => {
-    if (iframeRef.current?.contentWindow) {
-      iframeRef.current.contentWindow.postMessage({ type: 'SET_SCROLL_SYNC', enabled: scrollSyncEnabled }, '*');
-    }
-  }, [scrollSyncEnabled, iframeUrl]);
+    postToIframe({ type: 'SET_SCROLL_SYNC', enabled: scrollSyncEnabled });
+  }, [scrollSyncEnabled, iframeUrl, postToIframe]);
 
   // ── Attention timestamp updater ──
   useEffect(() => {
@@ -479,6 +540,8 @@ export default function Room() {
 
   const runPreview = () => {
     if (!socket || !activeFileId) return;
+    // Flag to skip our own echo from the server broadcast
+    skipOwnPreviewRef.current = true;
     socket.emit("run_preview", { roomId, fileId: activeFileId, html: htmlCode });
     setPreviewHtml(htmlCode);
     showNotif("▶ Preview updated & synced");
@@ -528,9 +591,7 @@ export default function Room() {
 
   const handleForceSync = () => {
     if (!socket) return;
-    if (iframeRef.current?.contentWindow) {
-      iframeRef.current.contentWindow.postMessage({ type: 'REQUEST_HTML' }, "*");
-    }
+    postToIframe({ type: 'REQUEST_HTML' });
     setTimeout(() => {
       socket.emit("force_sync", { roomId });
       setLastSyncTime(Date.now());
@@ -543,9 +604,7 @@ export default function Room() {
     const newEnabled = !scrollSyncEnabled;
     setScrollSyncEnabled(newEnabled);
     socket.emit("toggle_scroll_sync", { roomId, enabled: newEnabled });
-    if (iframeRef.current?.contentWindow) {
-      iframeRef.current.contentWindow.postMessage({ type: 'SET_SCROLL_SYNC', enabled: newEnabled }, '*');
-    }
+    postToIframe({ type: 'SET_SCROLL_SYNC', enabled: newEnabled });
     showNotif(newEnabled ? '🔗 Scroll sync ON' : '🔓 Free scroll — everyone scrolls independently');
   };
 
@@ -592,15 +651,13 @@ export default function Room() {
   const toggleStepLock = () => {
     const newEnabled = !stepLockEnabled;
     setStepLockEnabled(newEnabled);
-    if (!newEnabled && iframeRef.current?.contentWindow) {
-      iframeRef.current.contentWindow.postMessage({ type: 'DISABLE_STEP_LOCK' }, '*');
+    if (!newEnabled) {
+      postToIframe({ type: 'DISABLE_STEP_LOCK' });
     }
     if (newEnabled) {
       setCurrentStep(1);
-      if (iframeRef.current?.contentWindow) {
-        iframeRef.current.contentWindow.postMessage({ type: 'GET_MAX_STEP' }, '*');
-        iframeRef.current.contentWindow.postMessage({ type: 'SET_STEP', step: 1 }, '*');
-      }
+      postToIframe({ type: 'GET_MAX_STEP' });
+      postToIframe({ type: 'SET_STEP', step: 1 });
     }
   };
 
@@ -958,6 +1015,7 @@ export default function Room() {
               {iframeUrl ? (
                 <iframe ref={iframeRef} src={iframeUrl} className="w-full h-full border-none"
                   style={{ background: '#ffffff' }}
+                  onLoad={handleIframeLoad}
                   sandbox="allow-scripts allow-same-origin allow-forms allow-modals allow-popups allow-pointer-lock" />
               ) : (
                 <div className="flex items-center justify-center h-full" style={{ background: 'var(--bg-surface)' }}>

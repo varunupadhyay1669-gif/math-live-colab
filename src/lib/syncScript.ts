@@ -13,7 +13,6 @@ export const injectedSyncScript = `
 
     // ── Deterministic Randomness ──
     // Overriding Math.random so that both Teacher and Student generate the exact same sequences
-    // of questions/numbers when interacting with the simulation.
     (function() {
       function hashCode(str) {
         let hash = 0;
@@ -24,136 +23,170 @@ export const injectedSyncScript = `
         }
         return Math.abs(hash) || 12345;
       }
-      // Seed based on initial HTML structure (which matches exactly when loaded)
-      let seed = hashCode(document.documentElement.innerHTML);
+      // Seed based on the body text content only (ignoring injected scripts)
+      // This ensures teacher and student get the same seed even if scripts differ
+      function getStableSeed() {
+        var body = document.body;
+        if (!body) return 12345;
+        var text = body.textContent || '';
+        return hashCode(text.trim().substring(0, 500));
+      }
+
+      var seed;
+      if (document.readyState === 'loading') {
+        // Use a temp seed, re-seed after DOMContentLoaded
+        seed = 12345;
+        document.addEventListener('DOMContentLoaded', function() {
+          seed = getStableSeed();
+          if (seed < 1000) seed += 123456789;
+        });
+      } else {
+        seed = getStableSeed();
+      }
       if (seed < 1000) seed += 123456789;
-      
+
       Math.random = function() {
-        let t = seed += 0x6D2B79F5;
+        var t = seed += 0x6D2B79F5;
         t = Math.imul(t ^ t >>> 15, t | 1);
         t ^= t + Math.imul(t ^ t >>> 7, t | 61);
         return ((t ^ t >>> 14) >>> 0) / 4294967296;
       };
     })();
-    
+
+    // ── Element Path (robust selector generation) ──
     function getElementPath(el) {
       if (!el || el.nodeType !== 1) return '';
-      if (el.id) return '#' + el.id;
-      let path = [];
+      // Prefer id-based paths (most reliable)
+      if (el.id) return '#' + CSS.escape(el.id);
+
+      var path = [];
       while (el && el.nodeType === 1) {
-        let selector = el.nodeName.toLowerCase();
+        var selector = el.nodeName.toLowerCase();
         if (el.id) {
-          selector += '#' + el.id;
+          selector += '#' + CSS.escape(el.id);
           path.unshift(selector);
           break;
         } else {
-          let sib = el, nth = 1;
-          while (sib = sib.previousElementSibling) {
-            if (sib.nodeName.toLowerCase() == selector) nth++;
-          }
-          if (nth != 1) selector += ":nth-of-type("+nth+")";
+          // Use nth-child for uniqueness (more reliable than nth-of-type)
+          var sib = el, nth = 1;
+          while (sib = sib.previousElementSibling) nth++;
+          selector += ':nth-child(' + nth + ')';
         }
         path.unshift(selector);
         el = el.parentNode;
+        // Stop at body to avoid html/head differences
+        if (el && el.nodeName === 'BODY') {
+          path.unshift('body');
+          break;
+        }
       }
       return path.join(' > ');
     }
 
+    // ── Safe query helper ──
+    function findElement(path) {
+      if (!path) return null;
+      try { return document.querySelector(path); } catch(e) { return null; }
+    }
+
     // ── Input events ──
-    document.addEventListener('input', (e) => {
+    document.addEventListener('input', function(e) {
       if (isRemoteUpdate) return;
-      const path = getElementPath(e.target);
+      var path = getElementPath(e.target);
       if (path) {
-        window.parent.postMessage({ type: 'SYNC_INPUT', path, value: e.target.value, checked: e.target.checked }, '*');
+        window.parent.postMessage({ type: 'SYNC_INPUT', path: path, value: e.target.value, checked: e.target.checked }, '*');
       }
     }, true);
 
-    document.addEventListener('change', (e) => {
+    document.addEventListener('change', function(e) {
       if (isRemoteUpdate) return;
-      const path = getElementPath(e.target);
+      var path = getElementPath(e.target);
       if (path) {
-        window.parent.postMessage({ type: 'SYNC_CHANGE', path, value: e.target.value, checked: e.target.checked }, '*');
+        window.parent.postMessage({ type: 'SYNC_CHANGE', path: path, value: e.target.value, checked: e.target.checked }, '*');
       }
     }, true);
 
     // ── Click events ──
-    document.addEventListener('click', (e) => {
+    document.addEventListener('click', function(e) {
       if (isRemoteUpdate || !e.isTrusted) return;
-      const path = getElementPath(e.target);
+      var path = getElementPath(e.target);
       if (path) {
-        window.parent.postMessage({ type: 'SYNC_CLICK', path }, '*');
+        window.parent.postMessage({ type: 'SYNC_CLICK', path: path, clientX: e.clientX / window.innerWidth, clientY: e.clientY / window.innerHeight }, '*');
       }
     }, true);
 
     // ── Mouse move for cursors (throttled) ──
-    let lastMove = 0;
-    document.addEventListener('mousemove', (e) => {
-      const now = Date.now();
+    var lastMove = 0;
+    document.addEventListener('mousemove', function(e) {
+      var now = Date.now();
       if (now - lastMove > 50) {
         lastMove = now;
-        window.parent.postMessage({ 
-          type: 'SYNC_CURSOR', 
-          x: e.clientX / window.innerWidth, 
-          y: e.clientY / window.innerHeight 
+        window.parent.postMessage({
+          type: 'SYNC_CURSOR',
+          x: e.clientX / window.innerWidth,
+          y: e.clientY / window.innerHeight
         }, '*');
       }
     });
 
     // ── Touch events for mobile ──
-    let lastTouch = 0;
-    document.addEventListener('touchmove', (e) => {
-      const now = Date.now();
+    var lastTouch = 0;
+    document.addEventListener('touchmove', function(e) {
+      var now = Date.now();
       if (now - lastTouch > 80) {
         lastTouch = now;
-        const touch = e.touches[0];
+        var touch = e.touches[0];
         if (touch) {
-          window.parent.postMessage({ 
-            type: 'SYNC_CURSOR', 
-            x: touch.clientX / window.innerWidth, 
-            y: touch.clientY / window.innerHeight 
+          window.parent.postMessage({
+            type: 'SYNC_CURSOR',
+            x: touch.clientX / window.innerWidth,
+            y: touch.clientY / window.innerHeight
           }, '*');
         }
       }
     }, { passive: true });
 
-    document.addEventListener('touchstart', (e) => {
+    document.addEventListener('touchstart', function(e) {
       if (isRemoteUpdate) return;
-      const touch = e.touches[0];
+      var touch = e.touches[0];
       if (touch) {
-        const el = document.elementFromPoint(touch.clientX, touch.clientY);
+        var el = document.elementFromPoint(touch.clientX, touch.clientY);
         if (el) {
-          const path = getElementPath(el);
+          var path = getElementPath(el);
           if (path) {
-            window.parent.postMessage({ type: 'SYNC_CLICK', path }, '*');
+            window.parent.postMessage({ type: 'SYNC_CLICK', path: path }, '*');
           }
         }
       }
     }, { passive: true });
 
     // ── Scroll sync (toggleable, smooth) ──
-    let scrollSyncEnabled = true;
-    let lastScroll = 0;
+    var scrollSyncEnabled = true;
+    var lastScroll = 0;
 
     function sendDocScroll() {
       if (isRemoteUpdate || !scrollSyncEnabled) return;
       var now = Date.now();
-      if (now - lastScroll < 50) return;
+      if (now - lastScroll < 30) return;
       lastScroll = now;
       var maxW = document.documentElement.scrollWidth - window.innerWidth;
       var maxH = document.documentElement.scrollHeight - window.innerHeight;
-      if (maxW > 0 || maxH > 0) {
-        window.parent.postMessage({ 
-          type: 'SYNC_SCROLL', 
-          scrollX: maxW > 0 ? window.scrollX / maxW : 0, 
-          scrollY: maxH > 0 ? window.scrollY / maxH : 0 
-        }, '*');
-      }
+      window.parent.postMessage({
+        type: 'SYNC_SCROLL',
+        scrollX: maxW > 0 ? window.scrollX / maxW : 0,
+        scrollY: maxH > 0 ? window.scrollY / maxH : 0,
+        // Also send absolute pixel values for more accurate sync
+        absScrollX: window.scrollX,
+        absScrollY: window.scrollY,
+        maxScrollX: maxW,
+        maxScrollY: maxH
+      }, '*');
     }
 
     function sendElementScroll(e) {
       if (isRemoteUpdate || !scrollSyncEnabled) return;
       var now = Date.now();
-      if (now - lastScroll < 50) return;
+      if (now - lastScroll < 30) return;
       lastScroll = now;
       var el = e.currentTarget || e.target;
       if (!el || el.nodeType !== 1) return;
@@ -166,7 +199,9 @@ export const injectedSyncScript = `
           type: 'SYNC_SCROLL',
           path: path,
           scrollTop: maxTop > 0 ? el.scrollTop / maxTop : 0,
-          scrollLeft: maxLeft > 0 ? el.scrollLeft / maxLeft : 0
+          scrollLeft: maxLeft > 0 ? el.scrollLeft / maxLeft : 0,
+          absScrollTop: el.scrollTop,
+          absScrollLeft: el.scrollLeft
         }, '*');
       }
     }
@@ -213,27 +248,28 @@ export const injectedSyncScript = `
     }
     window.addEventListener('load', function() { setTimeout(_attachScrollListeners, 300); });
 
-    // ── Drag events ──
-    document.addEventListener('mousedown', (e) => {
+    // ── Mouse down/up events ──
+    document.addEventListener('mousedown', function(e) {
       if (isRemoteUpdate || !e.isTrusted) return;
-      const path = getElementPath(e.target);
+      var path = getElementPath(e.target);
       if (path) {
-        window.parent.postMessage({ 
-          type: 'SYNC_MOUSEDOWN', 
-          path,
+        window.parent.postMessage({
+          type: 'SYNC_MOUSEDOWN',
+          path: path,
           x: e.clientX / window.innerWidth,
-          y: e.clientY / window.innerHeight
+          y: e.clientY / window.innerHeight,
+          button: e.button
         }, '*');
       }
     }, true);
 
-    document.addEventListener('mouseup', (e) => {
+    document.addEventListener('mouseup', function(e) {
       if (isRemoteUpdate || !e.isTrusted) return;
-      const path = getElementPath(e.target);
+      var path = getElementPath(e.target);
       if (path) {
-        window.parent.postMessage({ 
-          type: 'SYNC_MOUSEUP', 
-          path,
+        window.parent.postMessage({
+          type: 'SYNC_MOUSEUP',
+          path: path,
           x: e.clientX / window.innerWidth,
           y: e.clientY / window.innerHeight
         }, '*');
@@ -241,10 +277,10 @@ export const injectedSyncScript = `
     }, true);
 
     // ── HTML5 Drag/Drop sync ──
-    let dragStartPath = '';
-    let lastDrag = 0;
+    var dragStartPath = '';
+    var lastDrag = 0;
 
-    document.addEventListener('dragstart', (e) => {
+    document.addEventListener('dragstart', function(e) {
       if (isRemoteUpdate) return;
       dragStartPath = getElementPath(e.target);
       window.parent.postMessage({
@@ -255,10 +291,10 @@ export const injectedSyncScript = `
       }, '*');
     }, true);
 
-    document.addEventListener('drag', (e) => {
+    document.addEventListener('drag', function(e) {
       if (isRemoteUpdate || !e.clientX) return;
-      const now = Date.now();
-      if (now - lastDrag < 50) return; // throttle
+      var now = Date.now();
+      if (now - lastDrag < 50) return;
       lastDrag = now;
       window.parent.postMessage({
         type: 'SYNC_DRAG',
@@ -268,7 +304,7 @@ export const injectedSyncScript = `
       }, '*');
     }, true);
 
-    document.addEventListener('dragend', (e) => {
+    document.addEventListener('dragend', function(e) {
       if (isRemoteUpdate) return;
       window.parent.postMessage({
         type: 'SYNC_DRAGEND',
@@ -279,10 +315,10 @@ export const injectedSyncScript = `
       dragStartPath = '';
     }, true);
 
-    document.addEventListener('drop', (e) => {
+    document.addEventListener('drop', function(e) {
       if (isRemoteUpdate) return;
       e.preventDefault();
-      const dropPath = getElementPath(e.target);
+      var dropPath = getElementPath(e.target);
       window.parent.postMessage({
         type: 'SYNC_DROP',
         dragPath: dragStartPath,
@@ -292,38 +328,39 @@ export const injectedSyncScript = `
       }, '*');
     }, true);
 
-    document.addEventListener('dragover', (e) => {
-      e.preventDefault(); // Required to allow drops
+    document.addEventListener('dragover', function(e) {
+      e.preventDefault();
     }, true);
 
     // ── Key events for simulations ──
-    document.addEventListener('keydown', (e) => {
+    document.addEventListener('keydown', function(e) {
       if (isRemoteUpdate) return;
-      window.parent.postMessage({ 
-        type: 'SYNC_KEYDOWN', 
-        key: e.key, 
+      window.parent.postMessage({
+        type: 'SYNC_KEYDOWN',
+        key: e.key,
         code: e.code,
         shiftKey: e.shiftKey,
-        ctrlKey: e.ctrlKey
+        ctrlKey: e.ctrlKey,
+        altKey: e.altKey
       }, '*');
     }, true);
 
-    document.addEventListener('keyup', (e) => {
+    document.addEventListener('keyup', function(e) {
       if (isRemoteUpdate) return;
-      window.parent.postMessage({ 
-        type: 'SYNC_KEYUP', 
-        key: e.key, 
+      window.parent.postMessage({
+        type: 'SYNC_KEYUP',
+        key: e.key,
         code: e.code
       }, '*');
     }, true);
 
     // ── Receive remote events ──
-    window.addEventListener('message', (e) => {
-      const data = e.data;
+    window.addEventListener('message', function(e) {
+      var data = e.data;
       if (!data || !data.type) return;
-      
+
       if (data.type === 'REMOTE_INPUT' || data.type === 'REMOTE_CHANGE') {
-        const el = document.querySelector(data.path);
+        var el = findElement(data.path);
         if (el) {
           isRemoteUpdate = true;
           if (el.type === 'checkbox' || el.type === 'radio') {
@@ -331,15 +368,26 @@ export const injectedSyncScript = `
           } else {
             el.value = data.value;
           }
-          const event = new Event(data.type === 'REMOTE_INPUT' ? 'input' : 'change', { bubbles: true });
+          var event = new Event(data.type === 'REMOTE_INPUT' ? 'input' : 'change', { bubbles: true });
           el.dispatchEvent(event);
           isRemoteUpdate = false;
         }
       } else if (data.type === 'REMOTE_CLICK') {
-        const el = document.querySelector(data.path);
+        var el = findElement(data.path);
         if (el) {
           isRemoteUpdate = true;
-          el.click();
+          // Use coordinates if available for more precise clicking
+          if (data.clientX !== undefined && data.clientY !== undefined) {
+            var rect = el.getBoundingClientRect();
+            el.dispatchEvent(new MouseEvent('click', {
+              bubbles: true,
+              clientX: data.clientX * window.innerWidth,
+              clientY: data.clientY * window.innerHeight,
+              view: window
+            }));
+          } else {
+            el.click();
+          }
           isRemoteUpdate = false;
         }
       } else if (data.type === 'REMOTE_SCROLL') {
@@ -347,59 +395,62 @@ export const injectedSyncScript = `
         isRemoteUpdate = true;
         if (data.path) {
           // Element-level scroll
-          var scrollEl = document.querySelector(data.path);
+          var scrollEl = findElement(data.path);
           if (scrollEl) {
             var maxT = scrollEl.scrollHeight - scrollEl.clientHeight;
             var maxL = scrollEl.scrollWidth - scrollEl.clientWidth;
-            scrollEl.scrollTo({ 
-              left: (data.scrollLeft || 0) * maxL, 
-              top: (data.scrollTop || 0) * maxT, 
-              behavior: 'smooth' 
+            scrollEl.scrollTo({
+              left: (data.scrollLeft || 0) * maxL,
+              top: (data.scrollTop || 0) * maxT,
+              behavior: 'smooth'
             });
           }
         } else {
           // Document-level scroll
           var maxX = document.documentElement.scrollWidth - window.innerWidth;
           var maxY = document.documentElement.scrollHeight - window.innerHeight;
-          window.scrollTo({ left: data.scrollX * maxX, top: data.scrollY * maxY, behavior: 'smooth' });
+          window.scrollTo({
+            left: data.scrollX * maxX,
+            top: data.scrollY * maxY,
+            behavior: 'smooth'
+          });
         }
-        setTimeout(function() { isRemoteUpdate = false; }, 300);
+        setTimeout(function() { isRemoteUpdate = false; }, 200);
       } else if (data.type === 'SET_SCROLL_SYNC') {
         scrollSyncEnabled = !!data.enabled;
       } else if (data.type === 'REMOTE_MOUSEDOWN') {
-        const el = document.querySelector(data.path);
+        var el = findElement(data.path);
         if (el) {
           isRemoteUpdate = true;
-          const rect = el.getBoundingClientRect();
-          el.dispatchEvent(new MouseEvent('mousedown', { 
-            bubbles: true, clientX: data.x * window.innerWidth, clientY: data.y * window.innerHeight 
+          el.dispatchEvent(new MouseEvent('mousedown', {
+            bubbles: true, clientX: data.x * window.innerWidth, clientY: data.y * window.innerHeight, button: data.button || 0
           }));
           isRemoteUpdate = false;
         }
       } else if (data.type === 'REMOTE_MOUSEUP') {
-        const el = document.querySelector(data.path);
+        var el = findElement(data.path);
         if (el) {
           isRemoteUpdate = true;
-          el.dispatchEvent(new MouseEvent('mouseup', { 
-            bubbles: true, clientX: data.x * window.innerWidth, clientY: data.y * window.innerHeight 
+          el.dispatchEvent(new MouseEvent('mouseup', {
+            bubbles: true, clientX: data.x * window.innerWidth, clientY: data.y * window.innerHeight
           }));
           isRemoteUpdate = false;
         }
       } else if (data.type === 'REMOTE_KEYDOWN') {
         isRemoteUpdate = true;
-        document.dispatchEvent(new KeyboardEvent('keydown', { 
-          key: data.key, code: data.code, bubbles: true, shiftKey: data.shiftKey, ctrlKey: data.ctrlKey 
+        document.dispatchEvent(new KeyboardEvent('keydown', {
+          key: data.key, code: data.code, bubbles: true, shiftKey: data.shiftKey, ctrlKey: data.ctrlKey, altKey: data.altKey
         }));
         isRemoteUpdate = false;
       } else if (data.type === 'REMOTE_KEYUP') {
         isRemoteUpdate = true;
-        document.dispatchEvent(new KeyboardEvent('keyup', { 
-          key: data.key, code: data.code, bubbles: true 
+        document.dispatchEvent(new KeyboardEvent('keyup', {
+          key: data.key, code: data.code, bubbles: true
         }));
         isRemoteUpdate = false;
       } else if (data.type === 'REMOTE_DRAGSTART') {
         isRemoteUpdate = true;
-        var el = data.path ? document.querySelector(data.path) : null;
+        var el = findElement(data.path);
         if (el) {
           el.dispatchEvent(new DragEvent('dragstart', {
             bubbles: true, clientX: data.clientX * window.innerWidth, clientY: data.clientY * window.innerHeight
@@ -407,12 +458,11 @@ export const injectedSyncScript = `
         }
         isRemoteUpdate = false;
       } else if (data.type === 'REMOTE_DRAG') {
-        // Drag events are informational — the remote side tracks position
         isRemoteUpdate = true;
         isRemoteUpdate = false;
       } else if (data.type === 'REMOTE_DRAGEND') {
         isRemoteUpdate = true;
-        var el = data.path ? document.querySelector(data.path) : null;
+        var el = findElement(data.path);
         if (el) {
           el.dispatchEvent(new DragEvent('dragend', {
             bubbles: true, clientX: data.clientX * window.innerWidth, clientY: data.clientY * window.innerHeight
@@ -421,7 +471,7 @@ export const injectedSyncScript = `
         isRemoteUpdate = false;
       } else if (data.type === 'REMOTE_DROP') {
         isRemoteUpdate = true;
-        var dropEl = data.dropPath ? document.querySelector(data.dropPath) : null;
+        var dropEl = findElement(data.dropPath);
         if (dropEl) {
           dropEl.dispatchEvent(new DragEvent('drop', {
             bubbles: true, clientX: data.clientX * window.innerWidth, clientY: data.clientY * window.innerHeight
@@ -429,8 +479,9 @@ export const injectedSyncScript = `
         }
         isRemoteUpdate = false;
       } else if (data.type === 'REQUEST_HTML') {
-        const inputs = document.querySelectorAll('input, select, textarea');
-        inputs.forEach(el => {
+        // Capture current form state into attributes for serialization
+        var inputs = document.querySelectorAll('input, select, textarea');
+        inputs.forEach(function(el) {
             if (el.tagName === 'INPUT') {
                 if (el.type === 'checkbox' || el.type === 'radio') {
                     if (el.checked) el.setAttribute('checked', 'checked');
@@ -441,16 +492,18 @@ export const injectedSyncScript = `
             } else if (el.tagName === 'TEXTAREA') {
                 el.innerHTML = el.value;
             } else if (el.tagName === 'SELECT') {
-                Array.from(el.options).forEach(opt => {
+                Array.from(el.options).forEach(function(opt) {
                     if (opt.selected) opt.setAttribute('selected', 'selected');
                     else opt.removeAttribute('selected');
                 });
             }
         });
-        
-        window.parent.postMessage({ 
-            type: 'SYNC_PROVIDE_HTML', 
-            html: '<!DOCTYPE html>\n<html>' + document.documentElement.innerHTML + '</html>' 
+
+        window.parent.postMessage({
+            type: 'SYNC_PROVIDE_HTML',
+            html: '<!DOCTYPE html>\\n<html>' + document.documentElement.innerHTML + '</html>',
+            scrollX: window.scrollX,
+            scrollY: window.scrollY
         }, '*');
       }
     });
