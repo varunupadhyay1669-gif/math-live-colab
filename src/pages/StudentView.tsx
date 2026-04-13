@@ -94,6 +94,9 @@ export default function StudentView() {
   const [currentStep, setCurrentStep] = useState(999);
   const [gateModal, setGateModal] = useState<{ step: number; gate: GateData } | null>(null);
 
+  // ── Scroll Sync ──
+  const [scrollSyncEnabled, setScrollSyncEnabled] = useState(true);
+
   // ── Sound ──
   const [soundMuted, setSoundMuted] = useState(false);
 
@@ -153,6 +156,7 @@ export default function StudentView() {
       setFiles(state.files || []);
       setActiveFileId(state.activeFileId);
       setIsPaused(state.isPaused);
+      if (typeof state.scrollSyncEnabled === 'boolean') setScrollSyncEnabled(state.scrollSyncEnabled);
       setChatMessages(state.chat || []);
       if (state.lastRunHtml) {
         const f = state.files?.find((f: FileEntry) => f.id === state.activeFileId);
@@ -289,6 +293,12 @@ export default function StudentView() {
       showNotification(`🚧 Checkpoint added at Step ${step}`);
     });
 
+    // ── Scroll Sync ──
+    newSocket.on("scroll_sync_changed", ({ enabled }: { enabled: boolean }) => {
+      setScrollSyncEnabled(enabled);
+      showNotification(enabled ? '🔗 Scroll sync enabled' : '🔓 Free scroll — you can scroll independently');
+    });
+
     // ── Kick ──
     newSocket.on("kicked", () => {
       showNotification("You have been removed from the session");
@@ -305,11 +315,12 @@ export default function StudentView() {
   useEffect(() => {
     const handler = (e: MessageEvent) => {
       if (!socket || !e.data?.type?.startsWith("SYNC_")) return;
+      if (e.data.type === 'SYNC_SCROLL' && !scrollSyncEnabled) return;
       socket.emit("interaction", { roomId, event: e.data });
     };
     window.addEventListener("message", handler);
     return () => window.removeEventListener("message", handler);
-  }, [socket, roomId]);
+  }, [socket, roomId, scrollSyncEnabled]);
 
   // ── Challenge Timer Countdown ──
   useEffect(() => {
@@ -327,6 +338,13 @@ export default function StudentView() {
     }, 1000);
     return () => { if (challengeTimerRef.current) clearInterval(challengeTimerRef.current); };
   }, [challengeTimer?.seconds]);
+
+  // ── Push scroll sync state to iframe ──
+  useEffect(() => {
+    if (iframeRef.current?.contentWindow) {
+      iframeRef.current.contentWindow.postMessage({ type: 'SET_SCROLL_SYNC', enabled: scrollSyncEnabled }, '*');
+    }
+  }, [scrollSyncEnabled, iframeUrl]);
 
   // ── Step sync to iframe ──
   useEffect(() => {

@@ -74,7 +74,9 @@ export default function Room() {
 
   // ── View Mode ──
   type ViewMode = 'split' | 'code' | 'preview';
-  const [viewMode, setViewMode] = useState<ViewMode>('split');
+  const [viewMode, setViewMode] = useState<ViewMode>(
+    typeof window !== 'undefined' && window.innerWidth < 768 ? 'preview' : 'split'
+  );
 
   // ── Core State ──
   const [socket, setSocket] = useState<Socket | null>(null);
@@ -126,6 +128,9 @@ export default function Room() {
   // ── Sync Status ──
   const [lastSyncTime, setLastSyncTime] = useState<number | null>(null);
 
+  // ── Scroll Sync ──
+  const [scrollSyncEnabled, setScrollSyncEnabled] = useState(true);
+
   // ── Step-Lock ──
   const [stepLockEnabled, setStepLockEnabled] = useState(false);
   const [currentStep, setCurrentStep] = useState(1);
@@ -144,6 +149,13 @@ export default function Room() {
 
   // ── Sound ──
   const [soundMuted, setSoundMuted] = useState(false);
+
+  // ── User Panel ──
+  const [showUserPanel, setShowUserPanel] = useState(false);
+
+  // ── Room Password ──
+  const [roomPassword, setRoomPassword] = useState<string>('');
+  const [showShareMenu, setShowShareMenu] = useState(false);
 
   // ── Refs ──
   const iframeRef = useRef<HTMLIFrameElement>(null);
@@ -181,6 +193,7 @@ export default function Room() {
       setFiles(state.files || []);
       setActiveFileId(state.activeFileId);
       setIsPaused(state.isPaused);
+      if (typeof state.scrollSyncEnabled === 'boolean') setScrollSyncEnabled(state.scrollSyncEnabled);
       setUsers(state.users || []);
       setChatMessages(state.chat || []);
       if (state.activeFileId && state.files) {
@@ -296,6 +309,11 @@ export default function Room() {
       }));
     });
 
+    // ── Scroll Sync ──
+    newSocket.on("scroll_sync_changed", ({ enabled }: { enabled: boolean }) => {
+      setScrollSyncEnabled(enabled);
+    });
+
     // ── Step-Lock events ──
     newSocket.on("gate_answered", ({ studentName, step, correct }: { studentName: string; step: number; correct: boolean }) => {
       showNotif(`${correct ? '✅' : '❌'} ${studentName} ${correct ? 'passed' : 'failed'} gate on Step ${step}`);
@@ -313,13 +331,17 @@ export default function Room() {
         socket.emit("sync_html_update", { roomId, html: e.data.html });
       } else if (e.data?.type === 'STEP_INFO') {
         setMaxStep(e.data.maxStep || 0);
+      } else if (e.data?.type === 'SYNC_SCROLL') {
+        if (scrollSyncEnabled) {
+          socket.emit("interaction", { roomId, event: e.data });
+        }
       } else if (e.data?.type?.startsWith("SYNC_")) {
         socket.emit("interaction", { roomId, event: e.data });
       }
     };
     window.addEventListener("message", handler);
     return () => window.removeEventListener("message", handler);
-  }, [socket, roomId]);
+  }, [socket, roomId, scrollSyncEnabled]);
 
   // ── Build iframe URL ──
   useEffect(() => {
@@ -370,6 +392,13 @@ export default function Room() {
       iframeRef.current.contentWindow.postMessage({ type: 'SET_STEP', step: currentStep }, '*');
     }
   }, [currentStep, stepLockEnabled]);
+
+  // ── Push scroll sync state to iframe ──
+  useEffect(() => {
+    if (iframeRef.current?.contentWindow) {
+      iframeRef.current.contentWindow.postMessage({ type: 'SET_SCROLL_SYNC', enabled: scrollSyncEnabled }, '*');
+    }
+  }, [scrollSyncEnabled, iframeUrl]);
 
   // ── Attention timestamp updater ──
   useEffect(() => {
@@ -471,9 +500,22 @@ export default function Room() {
   };
 
   const copyStudentLink = () => {
-    navigator.clipboard.writeText(`${window.location.origin}/live/${roomId}`);
+    const url = `${window.location.origin}/live/${roomId}`;
+    let text = url;
+    if (roomPassword) {
+      text = `Join my MathsLive session:\n${url}\nPasscode: ${roomPassword}`;
+    }
+    navigator.clipboard.writeText(text);
     setLinkCopied(true);
-    setTimeout(() => setLinkCopied(false), 2000);
+    setShowShareMenu(false);
+    setTimeout(() => setLinkCopied(false), 2500);
+  };
+
+  const saveRoomPassword = (pw: string) => {
+    setRoomPassword(pw);
+    if (socket) {
+      socket.emit('set_room_password', { roomId, password: pw || null });
+    }
   };
 
   const sendReaction = (emoji: string) => {
@@ -494,6 +536,17 @@ export default function Room() {
       setLastSyncTime(Date.now());
       showNotif("🔄 Force Synced — all students updated");
     }, 300);
+  };
+
+  const toggleScrollSync = () => {
+    if (!socket) return;
+    const newEnabled = !scrollSyncEnabled;
+    setScrollSyncEnabled(newEnabled);
+    socket.emit("toggle_scroll_sync", { roomId, enabled: newEnabled });
+    if (iframeRef.current?.contentWindow) {
+      iframeRef.current.contentWindow.postMessage({ type: 'SET_SCROLL_SYNC', enabled: newEnabled }, '*');
+    }
+    showNotif(newEnabled ? '🔗 Scroll sync ON' : '🔓 Free scroll — everyone scrolls independently');
   };
 
   const togglePause = () => {
@@ -605,31 +658,32 @@ export default function Room() {
 
       {/* ═══ HEADER ═══ */}
       <header className="flex items-center justify-between px-5 shrink-0"
-        style={{ height: '56px', borderBottom: '1px solid var(--border-subtle)', background: 'var(--bg-secondary)' }}>
+        style={{ height: '54px', borderBottom: '1px solid var(--border-subtle)', background: 'var(--bg-secondary)' }}>
 
-        <div className="flex items-center gap-4">
+        <div className="flex items-center gap-3">
           <button onClick={() => navigate('/')} className="flex items-center gap-2 hover:opacity-80 transition-opacity"
             style={{ background: 'none', border: 'none', cursor: 'pointer' }}>
-            <span className="text-xl">🧮</span>
-            <span className="font-display font-bold text-base" style={{ color: 'var(--text-primary)' }}>MathsLive</span>
+            <span className="text-lg">🧮</span>
+            <span className="font-display font-bold text-[15px]" style={{ color: 'var(--text-primary)' }}>MathsLive</span>
           </button>
 
-          <div className="h-5 w-px" style={{ background: 'var(--border-subtle)' }} />
+          <div className="h-4 w-px hidden sm:block" style={{ background: 'var(--border-default)' }} />
 
-          <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg"
-            style={{ background: 'var(--bg-surface)', border: '1px solid var(--border-subtle)' }}>
-            <span className="text-[11px] font-semibold" style={{ color: 'var(--text-muted)' }}>ROOM</span>
-            <span className="text-[13px] font-mono font-semibold" style={{ color: 'var(--accent-indigo)' }}>{roomId}</span>
+          <div className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-lg"
+            style={{ background: 'var(--bg-surface)' }}>
+            <span className="text-[10px] font-bold" style={{ color: 'var(--text-muted)', letterSpacing: '0.06em' }}>ROOM</span>
+            <span className="text-[12px] font-mono font-bold" style={{ color: 'var(--accent-indigo)' }}>{roomId}</span>
           </div>
 
           {/* View Mode Toggles */}
-          <div className="flex items-center rounded-lg overflow-hidden" style={{ border: '1px solid var(--border-subtle)', background: 'var(--bg-surface)' }}>
+          <div className="flex items-center rounded-lg overflow-hidden"
+            style={{ background: 'var(--bg-surface)', padding: '2px' }}>
             {(['code', 'split', 'preview'] as ViewMode[]).map(mode => (
               <button key={mode} onClick={() => setViewMode(mode)}
-                className="px-4 py-1.5 text-[12px] font-semibold transition-all capitalize"
+                className="px-3.5 py-1.5 text-[12px] font-semibold transition-all capitalize rounded-md"
                 style={{
                   background: viewMode === mode ? 'var(--bg-secondary)' : 'transparent',
-                  color: viewMode === mode ? 'var(--accent-indigo)' : 'var(--text-muted)',
+                  color: viewMode === mode ? 'var(--text-primary)' : 'var(--text-muted)',
                   border: 'none', cursor: 'pointer',
                   boxShadow: viewMode === mode ? 'var(--shadow-sm)' : 'none',
                 }}>
@@ -646,30 +700,94 @@ export default function Room() {
             {formatTime(sessionTimer)}
           </span>
 
-          <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-[12px] font-semibold"
-            style={{
-              background: studentCount > 0 ? 'var(--accent-emerald-light)' : 'var(--bg-surface)',
-              color: studentCount > 0 ? 'var(--accent-emerald)' : 'var(--text-muted)',
-              border: '1px solid var(--border-subtle)',
-            }}>
-            <div className={`connection-dot ${studentCount > 0 ? 'online' : 'offline'}`}
-              style={{ width: 7, height: 7 }} />
-            {studentCount} {studentCount === 1 ? 'student' : 'students'}
+          <div className="relative">
+            <button onClick={() => setShowUserPanel(!showUserPanel)}
+              className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-[12px] font-semibold transition-all"
+              style={{
+                background: showUserPanel ? 'var(--accent-indigo-light)' : (studentCount > 0 ? 'var(--accent-emerald-light)' : 'var(--bg-surface)'),
+                color: showUserPanel ? 'var(--accent-indigo)' : (studentCount > 0 ? 'var(--accent-emerald)' : 'var(--text-muted)'),
+                border: '1px solid var(--border-subtle)',
+                cursor: 'pointer',
+              }}>
+              <div className={`connection-dot ${studentCount > 0 ? 'online' : 'offline'}`}
+                style={{ width: 7, height: 7 }} />
+              {studentCount} {studentCount === 1 ? 'student' : 'students'}
+              <span style={{ fontSize: '8px', opacity: 0.6 }}>{showUserPanel ? '▲' : '▼'}</span>
+            </button>
+            {showUserPanel && (
+              <>
+                <div className="fixed inset-0 z-40" onClick={() => setShowUserPanel(false)} />
+                <div className="absolute top-full right-0 mt-2 z-50 rounded-xl overflow-hidden animate-slide-down"
+                  style={{ width: '280px', background: 'var(--bg-card)', border: '1px solid var(--border-subtle)', boxShadow: 'var(--shadow-xl)', maxHeight: '420px', overflowY: 'auto' }}>
+                  {users.length === 0 ? (
+                    <div className="text-center py-8 px-4">
+                      <div className="text-3xl mb-2 opacity-30">👥</div>
+                      <p className="text-xs" style={{ color: 'var(--text-muted)' }}>No participants yet</p>
+                    </div>
+                  ) : (
+                    <UserList users={users} attention={attention} isTeacher={true} socket={socket} roomId={roomId!} />
+                  )}
+                </div>
+              </>
+            )}
           </div>
 
-          <button onClick={copyStudentLink}
-            className={`btn text-[12px] ${linkCopied ? 'btn-toolbar-active' : ''}`}>
-            {linkCopied ? '✓ Copied' : '🔗 Share Link'}
-          </button>
+          <div className="relative">
+            <button onClick={() => setShowShareMenu(!showShareMenu)}
+              className={`btn text-[12px] ${linkCopied ? 'btn-toolbar-active' : ''}`}>
+              {linkCopied ? '✓ Copied!' : '🔗 Invite'}
+            </button>
+            {showShareMenu && (
+              <>
+                <div className="fixed inset-0 z-40" onClick={() => setShowShareMenu(false)} />
+                <div className="absolute top-full right-0 mt-2 z-50 animate-slide-down"
+                  style={{ width: '300px', background: 'var(--bg-card)', borderRadius: 'var(--radius-lg)', border: '1px solid var(--border-subtle)', boxShadow: 'var(--shadow-xl)', padding: '16px' }}>
+                  <div className="text-[11px] font-bold mb-3" style={{ color: 'var(--text-muted)', letterSpacing: '0.06em', textTransform: 'uppercase' }}>Share with students</div>
+
+                  <div className="flex items-center gap-2 p-2.5 rounded-lg mb-3" style={{ background: 'var(--bg-surface)', border: '1px solid var(--border-subtle)' }}>
+                    <span className="text-[12px] font-mono truncate flex-1" style={{ color: 'var(--accent-indigo)', fontWeight: 600 }}>
+                      {window.location.origin}/live/{roomId}
+                    </span>
+                  </div>
+
+                  <div className="mb-3">
+                    <label className="block text-[11px] font-semibold mb-1.5" style={{ color: 'var(--text-secondary)' }}>
+                      Room Passcode <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}>(optional)</span>
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="e.g. math123"
+                      value={roomPassword}
+                      onChange={(e) => saveRoomPassword(e.target.value)}
+                      className="input-field"
+                      style={{ fontSize: '13px', padding: '8px 12px' }}
+                    />
+                  </div>
+
+                  <button onClick={copyStudentLink}
+                    className="btn-primary w-full justify-center"
+                    style={{ height: '40px', fontSize: '13px', borderRadius: 'var(--radius-sm)' }}>
+                    {roomPassword ? '📋 Copy Link + Passcode' : '📋 Copy Link'}
+                  </button>
+
+                  {roomPassword && (
+                    <p className="text-[11px] mt-2 text-center" style={{ color: 'var(--text-muted)' }}>
+                      Will copy: link + passcode together
+                    </p>
+                  )}
+                </div>
+              </>
+            )}
+          </div>
 
           {/* Library */}
-          <button onClick={() => setShowLibrary(true)} className="btn text-[12px]" title="Simulation Library">
+          <button onClick={() => setShowLibrary(true)} className="btn text-[12px] hidden sm:inline-flex" title="Simulation Library">
             📚
           </button>
 
           {/* Recording */}
           <button onClick={toggleRecording}
-            className={`btn text-[12px] ${isRecording ? 'btn-toolbar-active' : ''}`}
+            className={`btn text-[12px] hidden sm:inline-flex ${isRecording ? 'btn-toolbar-active' : ''}`}
             style={isRecording ? { background: 'var(--accent-rose-light)', color: 'var(--accent-rose)', borderColor: 'rgba(244,63,94,0.3)' } : {}}
             title={isRecording ? 'Stop Recording' : 'Start Recording'}>
             {isRecording ? '⏹ REC' : '⏺ REC'}
@@ -737,7 +855,7 @@ export default function Room() {
             )}
 
             {/* Code Area */}
-            <div className="flex-1 flex flex-col overflow-hidden relative">
+            <div className="flex-1 flex flex-col overflow-hidden relative min-h-0">
               {files.length === 0 ? (
                 <div className="absolute inset-0 flex items-center justify-center p-8">
                   <div className="text-center max-w-sm p-10 rounded-2xl animate-slide-up"
@@ -820,6 +938,8 @@ export default function Room() {
               lastSyncTime={lastSyncTime}
               onOpenQuiz={() => setShowQuizModal(true)}
               onSendReaction={sendReaction}
+              scrollSyncEnabled={scrollSyncEnabled}
+              onToggleScrollSync={toggleScrollSync}
             />
 
             {/* Step Controls */}

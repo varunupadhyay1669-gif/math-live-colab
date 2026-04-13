@@ -3,6 +3,7 @@ import { createServer as createViteServer } from 'vite';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
 import path from 'path';
+import fs from 'fs';
 
 interface FileEntry {
   id: string;
@@ -25,6 +26,8 @@ interface RoomData {
   // Step-lock
   currentStep: number;
   gates: Record<number, { question: string; options: string[]; correctIndex: number }>;
+  // Sync modes
+  scrollSyncEnabled: boolean;
   // Room password (optional)
   password: string | null;
 }
@@ -119,9 +122,100 @@ async function startServer() {
       chat: [],
       currentStep: 1,
       gates: {},
+      scrollSyncEnabled: true,
       password: null,
     };
   }
+
+  // ─── ROOM PERSISTENCE ───
+  const PERSIST_DIR = path.join(process.cwd(), '.rooms');
+  const PERSIST_INTERVAL = 5 * 60 * 1000; // Save every 5 minutes
+  const PERSIST_MAX_AGE = 48 * 60 * 60 * 1000; // Clean files older than 48 hours
+
+  // Ensure persist directory exists
+  try { if (!fs.existsSync(PERSIST_DIR)) fs.mkdirSync(PERSIST_DIR, { recursive: true }); } catch {}
+
+  function serializeRoom(roomId: string, room: RoomData): object {
+    return {
+      roomId,
+      files: room.files,
+      activeFileId: room.activeFileId,
+      lastRunHtml: room.lastRunHtml,
+      isPaused: room.isPaused,
+      createdAt: room.createdAt,
+      lastActivityAt: room.lastActivityAt,
+      chat: room.chat.slice(-100),
+      currentStep: room.currentStep,
+      gates: room.gates,
+      scrollSyncEnabled: room.scrollSyncEnabled,
+      password: room.password,
+    };
+  }
+
+  function saveRooms() {
+    try {
+      let saved = 0;
+      for (const [roomId, room] of rooms.entries()) {
+        if (room.files.length === 0 && !room.lastRunHtml) continue; // Skip empty rooms
+        const data = JSON.stringify(serializeRoom(roomId, room));
+        fs.writeFileSync(path.join(PERSIST_DIR, `${roomId}.json`), data, 'utf-8');
+        saved++;
+      }
+      if (saved > 0) console.log(`💾 Persisted ${saved} rooms`);
+    } catch (err) {
+      console.error('Failed to persist rooms:', err);
+    }
+  }
+
+  function restoreRooms() {
+    try {
+      if (!fs.existsSync(PERSIST_DIR)) return;
+      const files = fs.readdirSync(PERSIST_DIR).filter(f => f.endsWith('.json'));
+      const now = Date.now();
+      let restored = 0;
+      let cleaned = 0;
+      for (const file of files) {
+        const filePath = path.join(PERSIST_DIR, file);
+        try {
+          const raw = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+          // Clean up old files
+          if (raw.lastActivityAt && (now - raw.lastActivityAt > PERSIST_MAX_AGE)) {
+            fs.unlinkSync(filePath);
+            cleaned++;
+            continue;
+          }
+          const room = createRoom();
+          room.files = raw.files || [];
+          room.activeFileId = raw.activeFileId || null;
+          room.lastRunHtml = raw.lastRunHtml || null;
+          room.isPaused = false; // Always start unpaused
+          room.createdAt = raw.createdAt || now;
+          room.lastActivityAt = raw.lastActivityAt || now;
+          room.chat = raw.chat || [];
+          room.currentStep = raw.currentStep || 1;
+          room.gates = raw.gates || {};
+          room.scrollSyncEnabled = raw.scrollSyncEnabled !== false;
+          room.password = raw.password || null;
+          rooms.set(raw.roomId, room);
+          restored++;
+        } catch { fs.unlinkSync(filePath); cleaned++; }
+      }
+      if (restored > 0) console.log(`📂 Restored ${restored} rooms from disk`);
+      if (cleaned > 0) console.log(`🧹 Cleaned ${cleaned} stale room files`);
+    } catch (err) {
+      console.error('Failed to restore rooms:', err);
+    }
+  }
+
+  // Restore rooms on startup
+  restoreRooms();
+
+  // Periodic save
+  setInterval(saveRooms, PERSIST_INTERVAL);
+
+  // Save on process exit
+  process.on('SIGINT', () => { saveRooms(); process.exit(0); });
+  process.on('SIGTERM', () => { saveRooms(); process.exit(0); });
 
   function getRoomUserList(room: RoomData) {
     const list: Array<{ id: string; name: string; role: string }> = [];
@@ -169,6 +263,7 @@ async function startServer() {
         activeFileId: room.activeFileId,
         lastRunHtml: room.lastRunHtml,
         isPaused: room.isPaused,
+        scrollSyncEnabled: room.scrollSyncEnabled,
         users: getRoomUserList(room),
         chat: room.chat.slice(-50), // Last 50 messages
       });
@@ -288,6 +383,14 @@ async function startServer() {
       if (!room) return;
       room.isPaused = false;
       io.to(roomId).emit('session_resumed');
+    });
+
+    // ─── SCROLL SYNC TOGGLE ───
+    socket.on('toggle_scroll_sync', ({ roomId, enabled }: { roomId: string; enabled: boolean }) => {
+      const room = rooms.get(roomId);
+      if (!room) return;
+      room.scrollSyncEnabled = enabled;
+      io.to(roomId).emit('scroll_sync_changed', { enabled });
     });
 
     // ─── REACTIONS ───

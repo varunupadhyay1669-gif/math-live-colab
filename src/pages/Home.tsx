@@ -8,7 +8,6 @@ export default function Home() {
   const [studentName, setStudentName] = useState('');
   const [roomCode, setRoomCode] = useState("");
   const [recentRooms, setRecentRooms] = useState<Array<{ id: string; name: string; date: string }>>([]);
-  const [copied, setCopied] = useState(false);
 
   useEffect(() => {
     try {
@@ -37,176 +36,155 @@ export default function Home() {
     navigate(`/room/${id}?name=${encodeURIComponent(teacherName.trim() || 'Teacher')}`);
   };
 
+  const font = "'Manrope', sans-serif";
+  const mono = "'JetBrains Mono', monospace";
+
+  const [activeCard, setActiveCard] = useState<'teacher' | 'student' | null>(null);
+
   return (
-    <div className="min-h-screen flex flex-col items-center justify-center p-4 md:p-8 relative overflow-hidden"
-      style={{ background: 'var(--gradient-hero)' }}>
+    <div className="min-h-screen overflow-x-hidden relative flex flex-col items-center justify-center" style={{ background: '#0c0e12', color: '#f6f6fc', fontFamily: font }}>
+      {/* Dot grid */}
+      <div className="fixed inset-0 pointer-events-none z-0" style={{ backgroundImage: 'radial-gradient(#46484d 1px, transparent 1px)', backgroundSize: '32px 32px', opacity: 0.15 }} />
+      {/* Glow */}
+      <div className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[800px] h-[800px] rounded-full pointer-events-none z-0" style={{ background: 'rgba(204,151,255,0.05)', filter: 'blur(120px)' }} />
 
-      {/* Soft decorative blobs */}
-      <div className="absolute inset-0 overflow-hidden pointer-events-none">
-        <div className="absolute w-[600px] h-[600px] rounded-full animate-pulse-glow"
-          style={{ top: '-15%', right: '-10%', background: 'radial-gradient(circle, rgba(99,102,241,0.08) 0%, transparent 70%)' }} />
-        <div className="absolute w-[500px] h-[500px] rounded-full animate-pulse-glow"
-          style={{ bottom: '-15%', left: '-10%', background: 'radial-gradient(circle, rgba(139,92,246,0.07) 0%, transparent 70%)', animationDelay: '1.5s' }} />
-        <div className="absolute w-[350px] h-[350px] rounded-full animate-pulse-glow"
-          style={{ top: '30%', left: '45%', background: 'radial-gradient(circle, rgba(244,63,94,0.05) 0%, transparent 70%)', animationDelay: '3s' }} />
-      </div>
-
-      <div className="max-w-4xl w-full relative z-10">
-        {/* Hero */}
-        <div className="text-center mb-12 animate-slide-up">
-          <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full mb-6"
-            style={{ background: 'var(--accent-indigo-light)', border: '1px solid rgba(99,102,241,0.15)' }}>
-            <span className="text-lg">🧮</span>
-            <span style={{ color: 'var(--accent-indigo)', fontSize: '12px', fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase' }}>
-              Interactive Maths Classroom
-            </span>
-          </div>
-
-          <h1 className="font-display text-5xl md:text-7xl font-extrabold tracking-tight mb-4 leading-tight">
-            <span className="gradient-text">MathsLive</span>
-          </h1>
-
-          <p className="text-lg md:text-xl max-w-xl mx-auto leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
-            Upload interactive HTML simulations and teach visually.
-            <br className="hidden md:block" />
-            Your student interacts — <span style={{ color: 'var(--accent-indigo)', fontWeight: 600 }}>in real time</span>.
-          </p>
+      <div className="relative z-10 flex flex-col items-center gap-8 max-w-4xl w-full px-6">
+        {/* Badge */}
+        <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full border border-[#46484d]/20" style={{ background: '#23262c' }}>
+          <span className="w-1.5 h-1.5 rounded-full bg-[#cc97ff] animate-pulse" />
+          <span className="text-[10px] font-bold uppercase text-[#aaabb0]" style={{ letterSpacing: '0.2em' }}>System Status: Active</span>
         </div>
 
-        {/* Cards */}
-        <div className="grid md:grid-cols-2 gap-6 max-w-3xl mx-auto mb-10">
+        {/* Title */}
+        <h1 className="font-extrabold leading-none text-center" style={{ fontSize: 'clamp(56px, 11vw, 120px)', letterSpacing: '-0.05em' }}>
+          Maths<span className="text-[#cc97ff]">Live</span>
+        </h1>
 
+        {/* Subtitle */}
+        <p className="text-lg md:text-xl font-light max-w-2xl mx-auto leading-relaxed text-center" style={{ color: '#aaabb0' }}>
+          A sophisticated computational laboratory for interactive HTML simulations. Experience the precision of mathematics through real-time synced visualization.
+        </p>
+
+        {/* Two buttons */}
+        <div className="pt-4 flex flex-col sm:flex-row items-center justify-center gap-5">
+          <button
+            onClick={() => setActiveCard(activeCard === 'teacher' ? null : 'teacher')}
+            className="flex items-center gap-3 px-8 py-4 bg-[#cc97ff] text-black font-bold rounded-xl text-sm transition-all hover:-translate-y-0.5 active:scale-[0.98]"
+            style={{ boxShadow: '0 0 30px rgba(204,151,255,0.3)' }}>
+            Join as Teacher
+            <span style={{ fontSize: '18px' }}>→</span>
+          </button>
+          <button
+            onClick={() => setActiveCard(activeCard === 'student' ? null : 'student')}
+            className="px-8 py-4 border border-[#46484d]/20 rounded-xl font-bold text-sm text-[#f6f6fc] hover:bg-[#1d2025] transition-all active:scale-[0.98]">
+            Join as Student
+          </button>
+        </div>
+
+        {/* Cards — small, frosted glass, side by side */}
+        <div className="w-full grid md:grid-cols-2 gap-6 mt-4">
           {/* Teacher Card */}
-          <div className="card-hover p-7 animate-slide-up"
-            style={{
-              background: 'var(--bg-card)', borderRadius: 'var(--radius-xl)',
-              border: '1px solid var(--border-subtle)', boxShadow: 'var(--shadow-md)',
-              animationDelay: '0.15s',
-            }}>
-            <div className="flex items-center gap-3 mb-5">
-              <div className="w-11 h-11 rounded-xl flex items-center justify-center text-xl"
-                style={{ background: 'var(--accent-emerald-light)', border: '1px solid rgba(16,185,129,0.15)' }}>
-                🎓
-              </div>
-              <div>
-                <h2 className="font-display text-lg font-bold" style={{ color: 'var(--text-primary)' }}>Launch Session</h2>
-                <p className="text-xs" style={{ color: 'var(--text-muted)' }}>Create a live classroom</p>
-              </div>
+          <div
+            className={`rounded-xl p-8 flex flex-col gap-5 transition-all duration-500 border ${
+              activeCard === 'teacher'
+                ? 'border-[#cc97ff]/30 opacity-100 scale-100'
+                : 'border-[#46484d]/10 opacity-60'
+            }`}
+            style={{ backdropFilter: 'blur(20px)', background: 'rgba(35, 38, 44, 0.6)' }}
+          >
+            <div className="w-10 h-10 rounded-lg bg-[#cc97ff]/10 flex items-center justify-center">
+              <span className="text-[#cc97ff] text-xl">🚀</span>
             </div>
-
-            <div className="space-y-4">
-              <div>
-                <label className="block text-xs font-semibold mb-1.5" style={{ color: 'var(--text-secondary)', letterSpacing: '0.03em' }}>Your Name</label>
-                <input
-                  type="text"
-                  placeholder="e.g. Mr. Sharma"
-                  value={teacherName}
-                  onChange={(e) => setTeacherName(e.target.value)}
-                  className="input-field"
-                  onKeyDown={(e) => e.key === 'Enter' && createRoom()}
-                />
-              </div>
-              <button
-                onClick={createRoom}
-                disabled={!teacherName.trim()}
-                className="btn-primary w-full justify-center text-sm disabled:opacity-40 disabled:cursor-not-allowed disabled:shadow-none"
-              >
-                🚀 Create Room
-              </button>
+            <div>
+              <h3 className="text-xl font-bold mb-1">Launch Session</h3>
+              <p className="text-sm" style={{ color: '#aaabb0' }}>Create a new interactive environment and upload your HTML simulation.</p>
             </div>
+            <div className="space-y-2">
+              <label className="block text-[10px] font-bold uppercase text-[#aaabb0]" style={{ letterSpacing: '0.15em' }}>Session Title</label>
+              <input
+                type="text"
+                placeholder="e.g. Calculus Visualization 101"
+                value={teacherName}
+                onChange={(e) => setTeacherName(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && createRoom()}
+                onFocus={() => setActiveCard('teacher')}
+                className="w-full px-4 py-3 border border-[#46484d]/20 rounded-lg text-sm text-[#f6f6fc] placeholder:text-[#74757a] focus:outline-none focus:border-[#cc97ff] transition-all"
+                style={{ background: '#000000' }}
+              />
+            </div>
+            <button
+              onClick={createRoom}
+              disabled={!teacherName.trim()}
+              className="w-full py-3.5 bg-[#cc97ff] text-black font-bold rounded-lg text-sm transition-all hover:shadow-[0_0_20px_rgba(204,151,255,0.2)] active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed">
+              Initiate Environment
+            </button>
           </div>
 
           {/* Student Card */}
-          <div className="card-hover p-7 animate-slide-up"
-            style={{
-              background: 'var(--bg-card)', borderRadius: 'var(--radius-xl)',
-              border: '1px solid var(--border-subtle)', boxShadow: 'var(--shadow-md)',
-              animationDelay: '0.3s',
-            }}>
-            <div className="flex items-center gap-3 mb-5">
-              <div className="w-11 h-11 rounded-xl flex items-center justify-center text-xl"
-                style={{ background: 'var(--accent-indigo-light)', border: '1px solid rgba(99,102,241,0.15)' }}>
-                🎒
-              </div>
-              <div>
-                <h2 className="font-display text-lg font-bold" style={{ color: 'var(--text-primary)' }}>Join Session</h2>
-                <p className="text-xs" style={{ color: 'var(--text-muted)' }}>Enter your teacher's room</p>
-              </div>
+          <div
+            className={`rounded-xl p-8 flex flex-col gap-5 transition-all duration-500 border ${
+              activeCard === 'student'
+                ? 'border-[#699cff]/30 opacity-100 scale-100'
+                : 'border-[#46484d]/10 opacity-60'
+            }`}
+            style={{ backdropFilter: 'blur(20px)', background: 'rgba(35, 38, 44, 0.6)' }}
+          >
+            <div className="w-10 h-10 rounded-lg bg-[#699cff]/10 flex items-center justify-center">
+              <span className="text-[#699cff] text-xl">👥</span>
             </div>
-
-            <form onSubmit={joinRoom} className="space-y-4">
+            <div>
+              <h3 className="text-xl font-bold mb-1">Join Session</h3>
+              <p className="text-sm" style={{ color: '#aaabb0' }}>Enter a session ID to participate in an active mathematical demonstration.</p>
+            </div>
+            <form onSubmit={joinRoom} className="flex flex-col gap-3">
               <div>
-                <label className="block text-xs font-semibold mb-1.5" style={{ color: 'var(--text-secondary)', letterSpacing: '0.03em' }}>Your Name</label>
+                <label className="block text-[10px] font-bold uppercase text-[#aaabb0] mb-1.5" style={{ letterSpacing: '0.15em' }}>Your Name</label>
                 <input
                   type="text"
                   placeholder="e.g. Arjun"
                   value={studentName}
                   onChange={(e) => setStudentName(e.target.value)}
-                  className="input-field"
+                  onFocus={() => setActiveCard('student')}
+                  className="w-full px-4 py-3 border border-[#46484d]/20 rounded-lg text-sm text-[#f6f6fc] placeholder:text-[#74757a] focus:outline-none focus:border-[#699cff] transition-all"
+                  style={{ background: '#000000' }}
                 />
               </div>
               <div>
-                <label className="block text-xs font-semibold mb-1.5" style={{ color: 'var(--text-secondary)', letterSpacing: '0.03em' }}>Room Code</label>
+                <label className="block text-[10px] font-bold uppercase text-[#aaabb0] mb-1.5" style={{ letterSpacing: '0.15em' }}>Access Code</label>
                 <input
                   type="text"
-                  placeholder="Paste room code"
+                  placeholder="XXX - XXX - XXX"
                   value={roomCode}
                   onChange={(e) => setRoomCode(e.target.value)}
-                  className="input-field text-center"
-                  style={{ fontFamily: "'JetBrains Mono', monospace", letterSpacing: '0.12em' }}
+                  onFocus={() => setActiveCard('student')}
+                  className="w-full px-4 py-3 border border-[#46484d]/20 rounded-lg text-sm text-center text-[#f6f6fc] placeholder:text-[#74757a] focus:outline-none focus:border-[#699cff] transition-all"
+                  style={{ background: '#000000', fontFamily: mono, letterSpacing: '0.5em' }}
                 />
               </div>
               <button
                 type="submit"
                 disabled={!roomCode.trim() || !studentName.trim()}
-                className="btn-primary w-full justify-center text-sm disabled:opacity-40 disabled:cursor-not-allowed disabled:shadow-none"
-              >
-                ✨ Join Classroom
+                className="w-full py-3.5 bg-[#699cff] text-[#001e4a] font-bold rounded-lg text-sm transition-all hover:shadow-[0_0_20px_rgba(105,156,255,0.2)] active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed">
+                Connect to Node
               </button>
             </form>
           </div>
         </div>
 
-        {/* Recent Rooms */}
+        {/* Recent rooms */}
         {recentRooms.length > 0 && (
-          <div className="max-w-3xl mx-auto animate-slide-up" style={{ animationDelay: '0.45s' }}>
-            <h3 className="text-xs font-bold mb-3 text-center" style={{ color: 'var(--text-muted)', letterSpacing: '0.08em', textTransform: 'uppercase' }}>
-              Recent Sessions
-            </h3>
-            <div className="flex flex-wrap justify-center gap-2">
-              {recentRooms.map((room) => (
-                <button
-                  key={room.id}
-                  onClick={() => joinRecent(room.id)}
-                  className="btn"
-                  style={{ fontSize: '12px' }}
-                >
-                  <span style={{ color: 'var(--accent-indigo)', fontFamily: "'JetBrains Mono', monospace", fontSize: '11px', fontWeight: 600 }}>
-                    {room.id}
-                  </span>
-                  <span style={{ color: 'var(--text-muted)' }}>·</span>
-                  <span style={{ color: 'var(--text-secondary)' }}>{room.date}</span>
-                </button>
-              ))}
-            </div>
+          <div className="flex flex-wrap justify-center gap-2 mt-4">
+            {recentRooms.map((room) => (
+              <button
+                key={room.id}
+                onClick={() => joinRecent(room.id)}
+                className="px-3 py-1.5 border border-[#46484d]/20 rounded-lg bg-[#171a1f] hover:border-[#cc97ff]/30 transition-all text-[#aaabb0] hover:text-white text-[11px]"
+                style={{ fontFamily: mono }}>
+                {room.id}
+              </button>
+            ))}
           </div>
         )}
-
-        {/* Feature pills */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 max-w-3xl mx-auto mt-14 animate-slide-up" style={{ animationDelay: '0.55s' }}>
-          {[
-            { icon: '📤', label: 'Upload HTML', color: 'var(--accent-violet-light)' },
-            { icon: '🔄', label: 'Real-time Sync', color: 'var(--accent-indigo-light)' },
-            { icon: '💬', label: 'Live Chat', color: 'var(--accent-emerald-light)' },
-            { icon: '🎯', label: 'Pop Quizzes', color: 'var(--accent-amber-light)' },
-          ].map((f, i) => (
-            <div key={i} className="text-center p-4 rounded-xl transition-all hover:scale-105"
-              style={{ background: f.color, border: '1px solid var(--border-subtle)' }}>
-              <div className="text-2xl mb-1.5">{f.icon}</div>
-              <div className="text-xs font-semibold" style={{ color: 'var(--text-secondary)' }}>{f.label}</div>
-            </div>
-          ))}
-        </div>
       </div>
     </div>
   );
