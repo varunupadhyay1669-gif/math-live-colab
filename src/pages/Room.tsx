@@ -605,11 +605,13 @@ export default function Room() {
 
   const handleForceSync = () => {
     if (!socket) return;
+    // Capture teacher's current live DOM and save it server-side for new students,
+    // then emit force_sync so students get the latest state.
+    // The REQUEST_HTML → SYNC_PROVIDE_HTML → sync_html_update flow stores it.
     postToIframe({ type: 'REQUEST_HTML' });
     setTimeout(() => {
       socket.emit("force_sync", { roomId });
       setLastSyncTime(Date.now());
-      showNotif("🔄 Force Synced — all students updated");
     }, 300);
   };
 
@@ -917,6 +919,18 @@ export default function Room() {
               </svg>
             )}
             <span className="hidden md:inline">{isRecording ? 'Stop' : 'Rec'}</span>
+          </button>
+
+          {/* Fullscreen toggle */}
+          <button onClick={() => {
+            if (document.fullscreenElement) document.exitFullscreen();
+            else document.documentElement.requestFullscreen().catch(() => {});
+          }}
+            className="btn text-[12px]" title="Toggle fullscreen"
+            style={{ display: 'inline-flex', alignItems: 'center' }}>
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/>
+            </svg>
           </button>
 
           {/* Sound toggle */}
