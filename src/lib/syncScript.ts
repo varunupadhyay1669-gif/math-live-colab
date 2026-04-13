@@ -10,6 +10,7 @@ export const injectedSyncScript = `
 
   (function() {
     let isRemoteUpdate = false;
+    let interactionBlocked = false; // When true, block ALL outgoing user events (view-only mode)
 
     // ── Deterministic Randomness ──
     // Overriding Math.random so that both Teacher and Student generate the exact same sequences
@@ -91,7 +92,7 @@ export const injectedSyncScript = `
 
     // ── Input events ──
     document.addEventListener('input', function(e) {
-      if (isRemoteUpdate) return;
+      if (isRemoteUpdate || interactionBlocked) return;
       var path = getElementPath(e.target);
       if (path) {
         window.parent.postMessage({ type: 'SYNC_INPUT', path: path, value: e.target.value, checked: e.target.checked }, '*');
@@ -99,7 +100,7 @@ export const injectedSyncScript = `
     }, true);
 
     document.addEventListener('change', function(e) {
-      if (isRemoteUpdate) return;
+      if (isRemoteUpdate || interactionBlocked) return;
       var path = getElementPath(e.target);
       if (path) {
         window.parent.postMessage({ type: 'SYNC_CHANGE', path: path, value: e.target.value, checked: e.target.checked }, '*');
@@ -108,7 +109,7 @@ export const injectedSyncScript = `
 
     // ── Click events ──
     document.addEventListener('click', function(e) {
-      if (isRemoteUpdate || !e.isTrusted) return;
+      if (isRemoteUpdate || interactionBlocked || !e.isTrusted) return;
       var path = getElementPath(e.target);
       if (path) {
         window.parent.postMessage({ type: 'SYNC_CLICK', path: path, clientX: e.clientX / window.innerWidth, clientY: e.clientY / window.innerHeight }, '*');
@@ -147,7 +148,7 @@ export const injectedSyncScript = `
     }, { passive: true });
 
     document.addEventListener('touchstart', function(e) {
-      if (isRemoteUpdate) return;
+      if (isRemoteUpdate || interactionBlocked) return;
       var touch = e.touches[0];
       if (touch) {
         var el = document.elementFromPoint(touch.clientX, touch.clientY);
@@ -165,7 +166,7 @@ export const injectedSyncScript = `
     var lastScroll = 0;
 
     function sendDocScroll() {
-      if (isRemoteUpdate || !scrollSyncEnabled) return;
+      if (isRemoteUpdate || !scrollSyncEnabled || interactionBlocked) return;
       var now = Date.now();
       if (now - lastScroll < 30) return;
       lastScroll = now;
@@ -184,7 +185,7 @@ export const injectedSyncScript = `
     }
 
     function sendElementScroll(e) {
-      if (isRemoteUpdate || !scrollSyncEnabled) return;
+      if (isRemoteUpdate || !scrollSyncEnabled || interactionBlocked) return;
       var now = Date.now();
       if (now - lastScroll < 30) return;
       lastScroll = now;
@@ -250,7 +251,7 @@ export const injectedSyncScript = `
 
     // ── Mouse down/up events ──
     document.addEventListener('mousedown', function(e) {
-      if (isRemoteUpdate || !e.isTrusted) return;
+      if (isRemoteUpdate || interactionBlocked || !e.isTrusted) return;
       var path = getElementPath(e.target);
       if (path) {
         window.parent.postMessage({
@@ -264,7 +265,7 @@ export const injectedSyncScript = `
     }, true);
 
     document.addEventListener('mouseup', function(e) {
-      if (isRemoteUpdate || !e.isTrusted) return;
+      if (isRemoteUpdate || interactionBlocked || !e.isTrusted) return;
       var path = getElementPath(e.target);
       if (path) {
         window.parent.postMessage({
@@ -281,7 +282,7 @@ export const injectedSyncScript = `
     var lastDrag = 0;
 
     document.addEventListener('dragstart', function(e) {
-      if (isRemoteUpdate) return;
+      if (isRemoteUpdate || interactionBlocked) return;
       dragStartPath = getElementPath(e.target);
       window.parent.postMessage({
         type: 'SYNC_DRAGSTART',
@@ -292,7 +293,7 @@ export const injectedSyncScript = `
     }, true);
 
     document.addEventListener('drag', function(e) {
-      if (isRemoteUpdate || !e.clientX) return;
+      if (isRemoteUpdate || interactionBlocked || !e.clientX) return;
       var now = Date.now();
       if (now - lastDrag < 50) return;
       lastDrag = now;
@@ -305,7 +306,7 @@ export const injectedSyncScript = `
     }, true);
 
     document.addEventListener('dragend', function(e) {
-      if (isRemoteUpdate) return;
+      if (isRemoteUpdate || interactionBlocked) return;
       window.parent.postMessage({
         type: 'SYNC_DRAGEND',
         path: dragStartPath,
@@ -316,7 +317,7 @@ export const injectedSyncScript = `
     }, true);
 
     document.addEventListener('drop', function(e) {
-      if (isRemoteUpdate) return;
+      if (isRemoteUpdate || interactionBlocked) return;
       e.preventDefault();
       var dropPath = getElementPath(e.target);
       window.parent.postMessage({
@@ -334,7 +335,7 @@ export const injectedSyncScript = `
 
     // ── Key events for simulations ──
     document.addEventListener('keydown', function(e) {
-      if (isRemoteUpdate) return;
+      if (isRemoteUpdate || interactionBlocked) return;
       window.parent.postMessage({
         type: 'SYNC_KEYDOWN',
         key: e.key,
@@ -346,7 +347,7 @@ export const injectedSyncScript = `
     }, true);
 
     document.addEventListener('keyup', function(e) {
-      if (isRemoteUpdate) return;
+      if (isRemoteUpdate || interactionBlocked) return;
       window.parent.postMessage({
         type: 'SYNC_KEYUP',
         key: e.key,
@@ -415,9 +416,15 @@ export const injectedSyncScript = `
             behavior: 'smooth'
           });
         }
-        setTimeout(function() { isRemoteUpdate = false; }, 200);
+        setTimeout(function() { isRemoteUpdate = false; }, 500);
       } else if (data.type === 'SET_SCROLL_SYNC') {
         scrollSyncEnabled = !!data.enabled;
+      } else if (data.type === 'SET_INTERACTION_MODE') {
+        interactionBlocked = !data.allowed;
+      } else if (data.type === 'RESET_VIEW') {
+        isRemoteUpdate = true;
+        window.scrollTo({ top: 0, left: 0, behavior: 'smooth' });
+        setTimeout(function() { isRemoteUpdate = false; }, 300);
       } else if (data.type === 'REMOTE_MOUSEDOWN') {
         var el = findElement(data.path);
         if (el) {

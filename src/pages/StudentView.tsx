@@ -97,6 +97,12 @@ export default function StudentView() {
   // ── Scroll Sync ──
   const [scrollSyncEnabled, setScrollSyncEnabled] = useState(true);
 
+  // ── Student Interaction Mode ──
+  const [interactionAllowed, setInteractionAllowed] = useState(false);
+
+  // ── Attention Check ──
+  const [attentionCheckModal, setAttentionCheckModal] = useState(false);
+
   // ── Sound ──
   const [soundMuted, setSoundMuted] = useState(false);
 
@@ -163,6 +169,7 @@ export default function StudentView() {
       setActiveFileId(state.activeFileId);
       setIsPaused(state.isPaused);
       if (typeof state.scrollSyncEnabled === 'boolean') setScrollSyncEnabled(state.scrollSyncEnabled);
+      if (typeof state.studentInteractionAllowed === 'boolean') setInteractionAllowed(state.studentInteractionAllowed);
       setChatMessages(state.chat || []);
       if (state.lastRunHtml) {
         const f = state.files?.find((f: FileEntry) => f.id === state.activeFileId);
@@ -302,6 +309,23 @@ export default function StudentView() {
       showNotification(enabled ? '🔗 Scroll sync enabled' : '🔓 Free scroll — you can scroll independently');
     });
 
+    // ── Student Interaction Mode ──
+    newSocket.on("student_interaction_changed", ({ allowed }: { allowed: boolean }) => {
+      setInteractionAllowed(allowed);
+      showNotification(allowed ? '🖐️ You can now interact with the simulation' : '👁️ View-only mode — teacher is presenting');
+    });
+
+    // ── Reset View ──
+    newSocket.on("reset_view", () => {
+      postToIframe({ type: 'RESET_VIEW' });
+    });
+
+    // ── Attention Check ──
+    newSocket.on("attention_check", () => {
+      setAttentionCheckModal(true);
+      if (sounds && !soundMuted) sounds.raiseHand();
+    });
+
     // ── Kick ──
     newSocket.on("kicked", () => {
       showNotification("You have been removed from the session");
@@ -345,17 +369,29 @@ export default function StudentView() {
       if (!socket) return;
       const type = e.data?.type;
       if (!type) return;
-      
+
       // Filter out internal events that shouldn't be relayed as interactions
       if (type === 'SYNC_PROVIDE_HTML' || type === 'STEP_INFO') return;
-      
+
       if (!type.startsWith('SYNC_')) return;
+      // Always allow cursor (teacher can see where students look)
+      if (type === 'SYNC_CURSOR') {
+        socket.emit("interaction", { roomId, event: e.data });
+        return;
+      }
+      // Block all other interactions when not allowed (view-only mode)
+      if (!interactionAllowed) return;
       if (type === 'SYNC_SCROLL' && !scrollSyncEnabled) return;
       socket.emit("interaction", { roomId, event: e.data });
     };
     window.addEventListener("message", handler);
     return () => window.removeEventListener("message", handler);
-  }, [socket, roomId, scrollSyncEnabled]);
+  }, [socket, roomId, scrollSyncEnabled, interactionAllowed]);
+
+  // ── Push interaction mode to iframe ──
+  useEffect(() => {
+    postToIframe({ type: 'SET_INTERACTION_MODE', allowed: interactionAllowed });
+  }, [interactionAllowed, iframeUrl, postToIframe]);
 
   // ── Challenge Timer Countdown ──
   useEffect(() => {
@@ -420,6 +456,17 @@ export default function StudentView() {
         </div>
 
         <div className="flex items-center gap-2">
+          {/* View-only / Interactive indicator */}
+          <span className="text-[11px] font-bold px-2 py-1"
+            style={{
+              borderRadius: '4px',
+              background: interactionAllowed ? 'rgba(13,175,110,0.12)' : 'rgba(91,95,230,0.12)',
+              color: interactionAllowed ? '#0DAF6E' : '#5B5FE6',
+              letterSpacing: '0.04em',
+            }}>
+            {interactionAllowed ? 'INTERACTIVE' : 'VIEW ONLY'}
+          </span>
+
           {/* Sound toggle */}
           <button onClick={() => { const m = sounds.toggleMute(); setSoundMuted(m); }}
             className="btn text-[12px]" title={soundMuted ? 'Unmute' : 'Mute'}
@@ -459,14 +506,20 @@ export default function StudentView() {
         {/* Full-Screen Iframe */}
         <div className="flex-1 relative">
           {iframeUrl ? (
-            <iframe
-              ref={iframeRef}
-              src={iframeUrl}
-              className="w-full h-full border-none"
-              style={{ background: '#ffffff' }}
-              onLoad={handleIframeLoad}
-              sandbox="allow-scripts allow-same-origin allow-forms allow-modals allow-popups allow-pointer-lock"
-            />
+            <>
+              <iframe
+                ref={iframeRef}
+                src={iframeUrl}
+                className="w-full h-full border-none"
+                style={{ background: '#ffffff', pointerEvents: interactionAllowed ? 'auto' : 'none' }}
+                onLoad={handleIframeLoad}
+                sandbox="allow-scripts allow-same-origin allow-forms allow-modals allow-popups allow-pointer-lock"
+              />
+              {/* View-only overlay — blocks pointer events but still shows teacher's cursor/annotations */}
+              {!interactionAllowed && (
+                <div className="absolute inset-0" style={{ pointerEvents: 'none', zIndex: 1 }} />
+              )}
+            </>
           ) : (
             <div className="flex items-center justify-center h-full" style={{ background: 'var(--bg-primary)' }}>
               <div className="text-center animate-slide-up p-12 rounded-2xl"
@@ -616,6 +669,36 @@ export default function StudentView() {
           studentName={studentName}
           onClose={() => setGateModal(null)}
         />
+      )}
+
+      {/* ══════ ATTENTION CHECK MODAL ══════ */}
+      {attentionCheckModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4"
+          style={{ background: 'rgba(0,0,0,0.4)', backdropFilter: 'blur(6px)' }}>
+          <div className="w-full max-w-sm animate-bounce-in text-center"
+            style={{ background: 'var(--bg-card)', borderRadius: '12px', border: '2px solid #5B5FE6', boxShadow: '0 8px 32px rgba(91,95,230,0.25)', padding: '32px 24px' }}>
+            <div className="text-5xl mb-4" style={{ animation: 'gentle-bounce 1s ease-in-out infinite' }}>
+              <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#5B5FE6" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ margin: '0 auto' }}>
+                <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 010 14.14M15.54 8.46a5 5 0 010 7.07"/>
+              </svg>
+            </div>
+            <h3 className="font-display text-xl font-bold mb-2" style={{ color: 'var(--text-primary)' }}>
+              Attention Check
+            </h3>
+            <p className="text-sm mb-6" style={{ color: 'var(--text-secondary)' }}>
+              Your teacher wants to confirm you're here.
+            </p>
+            <button
+              onClick={() => {
+                setAttentionCheckModal(false);
+                if (socket) socket.emit('attention_ack', { roomId, studentName });
+              }}
+              className="btn-primary w-full justify-center"
+              style={{ height: '44px', fontSize: '15px', borderRadius: '8px' }}>
+              I'm Here!
+            </button>
+          </div>
+        </div>
       )}
     </div>
   );

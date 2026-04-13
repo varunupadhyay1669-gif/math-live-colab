@@ -131,6 +131,13 @@ export default function Room() {
   // ── Scroll Sync ──
   const [scrollSyncEnabled, setScrollSyncEnabled] = useState(true);
 
+  // ── Student Interaction Mode ──
+  const [studentInteractionAllowed, setStudentInteractionAllowed] = useState(false);
+
+  // ── Attention Check ──
+  const [attentionAcks, setAttentionAcks] = useState<Array<{ studentName: string; timestamp: number }>>([]);
+  const [attentionCheckActive, setAttentionCheckActive] = useState(false);
+
   // ── Iframe readiness ──
   const iframeReadyRef = useRef(false);
   const pendingMessagesRef = useRef<any[]>([]);
@@ -201,6 +208,7 @@ export default function Room() {
       setActiveFileId(state.activeFileId);
       setIsPaused(state.isPaused);
       if (typeof state.scrollSyncEnabled === 'boolean') setScrollSyncEnabled(state.scrollSyncEnabled);
+      if (typeof state.studentInteractionAllowed === 'boolean') setStudentInteractionAllowed(state.studentInteractionAllowed);
       setUsers(state.users || []);
       setChatMessages(state.chat || []);
       if (state.activeFileId && state.files) {
@@ -327,6 +335,17 @@ export default function Room() {
     // ── Scroll Sync ──
     newSocket.on("scroll_sync_changed", ({ enabled }: { enabled: boolean }) => {
       setScrollSyncEnabled(enabled);
+    });
+
+    // ── Student Interaction Mode ──
+    newSocket.on("student_interaction_changed", ({ allowed }: { allowed: boolean }) => {
+      setStudentInteractionAllowed(allowed);
+    });
+
+    // ── Attention Check Acks ──
+    newSocket.on("attention_ack", ({ studentName, timestamp }: { studentName: string; timestamp: number }) => {
+      setAttentionAcks(prev => [...prev, { studentName, timestamp }]);
+      showNotif(`${studentName} is here`);
     });
 
     // ── Step-Lock events ──
@@ -606,6 +625,31 @@ export default function Room() {
     socket.emit("toggle_scroll_sync", { roomId, enabled: newEnabled });
     postToIframe({ type: 'SET_SCROLL_SYNC', enabled: newEnabled });
     showNotif(newEnabled ? '🔗 Scroll sync ON' : '🔓 Free scroll — everyone scrolls independently');
+  };
+
+  const toggleStudentInteraction = () => {
+    if (!socket) return;
+    const newAllowed = !studentInteractionAllowed;
+    setStudentInteractionAllowed(newAllowed);
+    socket.emit("toggle_student_interaction", { roomId, allowed: newAllowed });
+    showNotif(newAllowed ? '🖐️ Students can now interact with the simulation' : '👁️ Students are now view-only');
+  };
+
+  const resetView = () => {
+    if (!socket) return;
+    socket.emit("reset_view", { roomId });
+    postToIframe({ type: 'RESET_VIEW' });
+    showNotif('⬆️ Reset view — scrolled everyone to top');
+  };
+
+  const sendAttentionCheck = () => {
+    if (!socket) return;
+    setAttentionAcks([]);
+    setAttentionCheckActive(true);
+    socket.emit("attention_check", { roomId });
+    showNotif('📢 Attention check sent — waiting for responses');
+    // Auto-dismiss after 30s
+    setTimeout(() => setAttentionCheckActive(false), 30000);
   };
 
   const togglePause = () => {
@@ -1036,6 +1080,10 @@ export default function Room() {
               onSendReaction={sendReaction}
               scrollSyncEnabled={scrollSyncEnabled}
               onToggleScrollSync={toggleScrollSync}
+              studentInteractionAllowed={studentInteractionAllowed}
+              onToggleStudentInteraction={toggleStudentInteraction}
+              onResetView={resetView}
+              onAttentionCheck={sendAttentionCheck}
             />
 
             {/* Step Controls */}

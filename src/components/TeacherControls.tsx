@@ -27,6 +27,10 @@ interface TeacherControlsProps {
   onSendReaction: (emoji: string) => void;
   scrollSyncEnabled: boolean;
   onToggleScrollSync: () => void;
+  studentInteractionAllowed: boolean;
+  onToggleStudentInteraction: () => void;
+  onResetView: () => void;
+  onAttentionCheck: () => void;
 }
 
 const PEN_COLORS = ['#5B5FE6', '#111318', '#0DAF6E', '#0C8FD0', '#E5394B', '#E09600'];
@@ -41,6 +45,8 @@ export default function TeacherControls({
   challengeTimer, onStartTimer, onStopTimer,
   lastSyncTime, onOpenQuiz, onSendReaction,
   scrollSyncEnabled, onToggleScrollSync,
+  studentInteractionAllowed, onToggleStudentInteraction,
+  onResetView, onAttentionCheck,
 }: TeacherControlsProps) {
   const [showTimerMenu, setShowTimerMenu] = useState(false);
   const [showReactionMenu, setShowReactionMenu] = useState(false);
@@ -102,6 +108,33 @@ export default function TeacherControls({
               <polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/>
             </svg>
             Sync
+          </button>
+          <button onClick={onResetView} className="tg-btn" title="Scroll everyone to top">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{display:'inline',verticalAlign:'middle',marginRight:'3px',marginTop:'-1px'}}>
+              <line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/>
+            </svg>
+            Top
+          </button>
+        </div>
+
+        {/* Student Control Group */}
+        <div className="toolbar-group">
+          <button onClick={onToggleStudentInteraction}
+            className={`tg-btn ${studentInteractionAllowed ? 'active-accent' : ''}`}
+            title={studentInteractionAllowed ? 'Students can interact — click to make view-only' : 'Students are view-only — click to allow interaction'}>
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{display:'inline',verticalAlign:'middle',marginRight:'3px',marginTop:'-1px'}}>
+              {studentInteractionAllowed
+                ? <><path d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 01-3.46 0"/></>
+                : <><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></>
+              }
+            </svg>
+            {studentInteractionAllowed ? 'Interactive' : 'View Only'}
+          </button>
+          <button onClick={onAttentionCheck} className="tg-btn" title="Send attention check to all students">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{display:'inline',verticalAlign:'middle',marginRight:'3px',marginTop:'-1px'}}>
+              <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 010 14.14M15.54 8.46a5 5 0 010 7.07"/>
+            </svg>
+            Roll Call
           </button>
         </div>
 

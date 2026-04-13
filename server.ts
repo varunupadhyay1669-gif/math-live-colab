@@ -28,6 +28,7 @@ interface RoomData {
   gates: Record<number, { question: string; options: string[]; correctIndex: number }>;
   // Sync modes
   scrollSyncEnabled: boolean;
+  studentInteractionAllowed: boolean; // When false, students are view-only (like screen share)
   // Room password (optional)
   password: string | null;
 }
@@ -123,6 +124,7 @@ async function startServer() {
       currentStep: 1,
       gates: {},
       scrollSyncEnabled: true,
+      studentInteractionAllowed: false, // View-only by default
       password: null,
     };
   }
@@ -148,6 +150,7 @@ async function startServer() {
       currentStep: room.currentStep,
       gates: room.gates,
       scrollSyncEnabled: room.scrollSyncEnabled,
+      studentInteractionAllowed: room.studentInteractionAllowed,
       password: room.password,
     };
   }
@@ -195,6 +198,7 @@ async function startServer() {
           room.currentStep = raw.currentStep || 1;
           room.gates = raw.gates || {};
           room.scrollSyncEnabled = raw.scrollSyncEnabled !== false;
+          room.studentInteractionAllowed = !!raw.studentInteractionAllowed;
           room.password = raw.password || null;
           rooms.set(raw.roomId, room);
           restored++;
@@ -264,6 +268,7 @@ async function startServer() {
         lastRunHtml: room.lastRunHtml,
         isPaused: room.isPaused,
         scrollSyncEnabled: room.scrollSyncEnabled,
+        studentInteractionAllowed: room.studentInteractionAllowed,
         users: getRoomUserList(room),
         chat: room.chat.slice(-50), // Last 50 messages
       });
@@ -393,6 +398,35 @@ async function startServer() {
       io.to(roomId).emit('scroll_sync_changed', { enabled });
     });
 
+    // ─── STUDENT INTERACTION TOGGLE ───
+    socket.on('toggle_student_interaction', ({ roomId, allowed }: { roomId: string; allowed: boolean }) => {
+      const room = rooms.get(roomId);
+      if (!room || room.teacherSocketId !== socket.id) return; // Only teacher
+      room.studentInteractionAllowed = allowed;
+      io.to(roomId).emit('student_interaction_changed', { allowed });
+      console.log(`${allowed ? '🖐️' : '👁️'} Room ${roomId}: Student interaction ${allowed ? 'enabled' : 'disabled (view-only)'}`);
+    });
+
+    // ─── RESET VIEW (scroll everyone to top) ───
+    socket.on('reset_view', ({ roomId }: { roomId: string }) => {
+      const room = rooms.get(roomId);
+      if (!room || room.teacherSocketId !== socket.id) return;
+      io.to(roomId).emit('reset_view');
+    });
+
+    // ─── ATTENTION CHECK ───
+    socket.on('attention_check', ({ roomId }: { roomId: string }) => {
+      const room = rooms.get(roomId);
+      if (!room || room.teacherSocketId !== socket.id) return;
+      io.to(roomId).emit('attention_check', { timestamp: Date.now() });
+    });
+
+    socket.on('attention_ack', ({ roomId, studentName }: { roomId: string; studentName: string }) => {
+      const room = rooms.get(roomId);
+      if (!room || !room.teacherSocketId) return;
+      io.to(room.teacherSocketId).emit('attention_ack', { studentId: socket.id, studentName, timestamp: Date.now() });
+    });
+
     // ─── REACTIONS ───
     socket.on('send_reaction', ({ roomId, emoji, fromName }: { roomId: string; emoji: string; fromName: string }) => {
       io.to(roomId).emit('reaction', { emoji, fromName, senderId: socket.id });
@@ -487,11 +521,30 @@ async function startServer() {
       updateRoomActivity(roomId);
       event.userId = socket.id;
       const room = rooms.get(roomId);
-      if (room) {
-        const user = room.users.get(socket.id);
-        if (user) event.userName = user.name;
+      if (!room) return;
+
+      const user = room.users.get(socket.id);
+      if (user) event.userName = user.name;
+      event.role = user?.role || 'unknown';
+
+      if (user?.role === 'teacher') {
+        // Teacher → broadcast to all students (one-way sync)
+        socket.to(roomId).emit('interaction', event);
+      } else if (user?.role === 'student') {
+        // Student → only relay if interaction is allowed, and only cursor to teacher
+        if (event.type === 'SYNC_CURSOR') {
+          // Always allow cursor so teacher can see where students are looking
+          if (room.teacherSocketId) {
+            io.to(room.teacherSocketId).emit('interaction', event);
+          }
+        } else if (room.studentInteractionAllowed) {
+          // Student interactions → only to teacher (not other students)
+          if (room.teacherSocketId) {
+            io.to(room.teacherSocketId).emit('interaction', event);
+          }
+        }
+        // When not allowed: student events are silently dropped (view-only mode)
       }
-      socket.to(roomId).emit('interaction', event);
     });
 
     // ─── ATTENTION DETECTION ───
