@@ -133,19 +133,42 @@ export const injectedSyncScript = `
     // ── Scroll sync (toggleable, smooth) ──
     let scrollSyncEnabled = true;
     let lastScroll = 0;
-    function sendScrollSync() {
+    function sendScrollSync(e) {
       if (isRemoteUpdate || !scrollSyncEnabled) return;
       const now = Date.now();
-      if (now - lastScroll < 80) return;
+      if (now - lastScroll < 60) return;
       lastScroll = now;
-      const maxW = document.documentElement.scrollWidth - window.innerWidth;
-      const maxH = document.documentElement.scrollHeight - window.innerHeight;
-      if (maxW > 0 || maxH > 0) {
-        window.parent.postMessage({ 
-          type: 'SYNC_SCROLL', 
-          scrollX: maxW > 0 ? window.scrollX / maxW : 0, 
-          scrollY: maxH > 0 ? window.scrollY / maxH : 0 
-        }, '*');
+
+      var target = e ? e.target : null;
+
+      // Document-level scroll
+      if (!target || target === document || target === document.documentElement) {
+        var maxW = document.documentElement.scrollWidth - window.innerWidth;
+        var maxH = document.documentElement.scrollHeight - window.innerHeight;
+        if (maxW > 0 || maxH > 0) {
+          window.parent.postMessage({ 
+            type: 'SYNC_SCROLL', 
+            scrollX: maxW > 0 ? window.scrollX / maxW : 0, 
+            scrollY: maxH > 0 ? window.scrollY / maxH : 0 
+          }, '*');
+        }
+        return;
+      }
+
+      // Element-level scroll (scrollable containers)
+      if (target && target.nodeType === 1) {
+        var path = getElementPath(target);
+        if (!path) return;
+        var maxTop = target.scrollHeight - target.clientHeight;
+        var maxLeft = target.scrollWidth - target.clientWidth;
+        if (maxTop > 0 || maxLeft > 0) {
+          window.parent.postMessage({
+            type: 'SYNC_SCROLL',
+            path: path,
+            scrollTop: maxTop > 0 ? target.scrollTop / maxTop : 0,
+            scrollLeft: maxLeft > 0 ? target.scrollLeft / maxLeft : 0
+          }, '*');
+        }
       }
     }
     window.addEventListener('scroll', sendScrollSync, { passive: true, capture: true });
@@ -283,10 +306,25 @@ export const injectedSyncScript = `
       } else if (data.type === 'REMOTE_SCROLL') {
         if (!scrollSyncEnabled) return;
         isRemoteUpdate = true;
-        const maxX = document.documentElement.scrollWidth - window.innerWidth;
-        const maxY = document.documentElement.scrollHeight - window.innerHeight;
-        window.scrollTo({ left: data.scrollX * maxX, top: data.scrollY * maxY, behavior: 'smooth' });
-        setTimeout(() => { isRemoteUpdate = false; }, 300);
+        if (data.path) {
+          // Element-level scroll
+          var scrollEl = document.querySelector(data.path);
+          if (scrollEl) {
+            var maxT = scrollEl.scrollHeight - scrollEl.clientHeight;
+            var maxL = scrollEl.scrollWidth - scrollEl.clientWidth;
+            scrollEl.scrollTo({ 
+              left: (data.scrollLeft || 0) * maxL, 
+              top: (data.scrollTop || 0) * maxT, 
+              behavior: 'smooth' 
+            });
+          }
+        } else {
+          // Document-level scroll
+          var maxX = document.documentElement.scrollWidth - window.innerWidth;
+          var maxY = document.documentElement.scrollHeight - window.innerHeight;
+          window.scrollTo({ left: data.scrollX * maxX, top: data.scrollY * maxY, behavior: 'smooth' });
+        }
+        setTimeout(function() { isRemoteUpdate = false; }, 300);
       } else if (data.type === 'SET_SCROLL_SYNC') {
         scrollSyncEnabled = !!data.enabled;
       } else if (data.type === 'REMOTE_MOUSEDOWN') {
