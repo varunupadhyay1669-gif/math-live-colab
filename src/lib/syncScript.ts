@@ -133,46 +133,85 @@ export const injectedSyncScript = `
     // ── Scroll sync (toggleable, smooth) ──
     let scrollSyncEnabled = true;
     let lastScroll = 0;
-    function sendScrollSync(e) {
+
+    function sendDocScroll() {
       if (isRemoteUpdate || !scrollSyncEnabled) return;
-      const now = Date.now();
-      if (now - lastScroll < 60) return;
+      var now = Date.now();
+      if (now - lastScroll < 50) return;
       lastScroll = now;
-
-      var target = e ? e.target : null;
-
-      // Document-level scroll
-      if (!target || target === document || target === document.documentElement) {
-        var maxW = document.documentElement.scrollWidth - window.innerWidth;
-        var maxH = document.documentElement.scrollHeight - window.innerHeight;
-        if (maxW > 0 || maxH > 0) {
-          window.parent.postMessage({ 
-            type: 'SYNC_SCROLL', 
-            scrollX: maxW > 0 ? window.scrollX / maxW : 0, 
-            scrollY: maxH > 0 ? window.scrollY / maxH : 0 
-          }, '*');
-        }
-        return;
-      }
-
-      // Element-level scroll (scrollable containers)
-      if (target && target.nodeType === 1) {
-        var path = getElementPath(target);
-        if (!path) return;
-        var maxTop = target.scrollHeight - target.clientHeight;
-        var maxLeft = target.scrollWidth - target.clientWidth;
-        if (maxTop > 0 || maxLeft > 0) {
-          window.parent.postMessage({
-            type: 'SYNC_SCROLL',
-            path: path,
-            scrollTop: maxTop > 0 ? target.scrollTop / maxTop : 0,
-            scrollLeft: maxLeft > 0 ? target.scrollLeft / maxLeft : 0
-          }, '*');
-        }
+      var maxW = document.documentElement.scrollWidth - window.innerWidth;
+      var maxH = document.documentElement.scrollHeight - window.innerHeight;
+      if (maxW > 0 || maxH > 0) {
+        window.parent.postMessage({ 
+          type: 'SYNC_SCROLL', 
+          scrollX: maxW > 0 ? window.scrollX / maxW : 0, 
+          scrollY: maxH > 0 ? window.scrollY / maxH : 0 
+        }, '*');
       }
     }
-    window.addEventListener('scroll', sendScrollSync, { passive: true, capture: true });
-    document.addEventListener('scroll', sendScrollSync, { passive: true, capture: true });
+
+    function sendElementScroll(e) {
+      if (isRemoteUpdate || !scrollSyncEnabled) return;
+      var now = Date.now();
+      if (now - lastScroll < 50) return;
+      lastScroll = now;
+      var el = e.currentTarget || e.target;
+      if (!el || el.nodeType !== 1) return;
+      var path = getElementPath(el);
+      if (!path) return;
+      var maxTop = el.scrollHeight - el.clientHeight;
+      var maxLeft = el.scrollWidth - el.clientWidth;
+      if (maxTop > 0 || maxLeft > 0) {
+        window.parent.postMessage({
+          type: 'SYNC_SCROLL',
+          path: path,
+          scrollTop: maxTop > 0 ? el.scrollTop / maxTop : 0,
+          scrollLeft: maxLeft > 0 ? el.scrollLeft / maxLeft : 0
+        }, '*');
+      }
+    }
+
+    // Document-level scroll
+    window.addEventListener('scroll', sendDocScroll, { passive: true });
+
+    // Discover scrollable elements and attach direct listeners
+    var _scrollTag = '__syncScroll';
+    function _attachScrollListeners() {
+      var all = document.querySelectorAll('*');
+      for (var i = 0; i < all.length; i++) {
+        var el = all[i];
+        if (el[_scrollTag]) continue;
+        var sH = el.scrollHeight > el.clientHeight + 2;
+        var sW = el.scrollWidth > el.clientWidth + 2;
+        if (!sH && !sW) continue;
+        try {
+          var cs = window.getComputedStyle(el);
+          var oy = cs.overflowY;
+          var ox = cs.overflowX;
+          if (oy === 'auto' || oy === 'scroll' || oy === 'overlay' ||
+              ox === 'auto' || ox === 'scroll' || ox === 'overlay') {
+            el[_scrollTag] = true;
+            el.addEventListener('scroll', sendElementScroll, { passive: true });
+          }
+        } catch(ignore) {}
+      }
+    }
+
+    function _initScrollMonitor() {
+      _attachScrollListeners();
+      try {
+        new MutationObserver(function() { setTimeout(_attachScrollListeners, 150); })
+          .observe(document.documentElement || document.body, { childList: true, subtree: true });
+      } catch(ignore) {}
+      setInterval(_attachScrollListeners, 3000);
+    }
+
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', _initScrollMonitor);
+    } else {
+      setTimeout(_initScrollMonitor, 100);
+    }
+    window.addEventListener('load', function() { setTimeout(_attachScrollListeners, 300); });
 
     // ── Drag events ──
     document.addEventListener('mousedown', (e) => {
