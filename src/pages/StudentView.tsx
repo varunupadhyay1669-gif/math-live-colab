@@ -191,23 +191,27 @@ export default function StudentView() {
       setActiveFileId(data.fileId);
       if (data.html) {
         setCurrentFileName(data.fileName || 'Simulation');
+        // File switch is a genuine reload — update HTML
         setCurrentHtml(data.html);
-        showNotification(`📂 Switched to: ${data.fileName || 'new file'}`);
+        showNotification(`Switched to: ${data.fileName || 'new file'}`);
       }
     });
 
-    newSocket.on("run_preview", ({ html }: { fileId: string; html: string }) => setCurrentHtml(html));
+    newSocket.on("run_preview", ({ html }: { fileId: string; html: string }) => {
+      // Only update if HTML actually changed — avoids full iframe reload (blink + scroll reset)
+      setCurrentHtml(prev => prev === html ? prev : html);
+    });
 
     newSocket.on("force_sync_state", (state: any) => {
       if (state.files) setFiles(state.files);
       if (state.activeFileId) setActiveFileId(state.activeFileId);
       if (state.lastRunHtml) {
-        setCurrentHtml(state.lastRunHtml);
+        // Only rebuild iframe if HTML actually changed
+        setCurrentHtml(prev => prev === state.lastRunHtml ? prev : state.lastRunHtml);
         const f = state.files?.find((f: FileEntry) => f.id === state.activeFileId);
         setCurrentFileName(f?.name || 'Simulation');
       }
       if (typeof state.isPaused === 'boolean') setIsPaused(state.isPaused);
-      showNotification("🔄 Synced with teacher");
     });
 
     newSocket.on("file_deleted", ({ fileId, newActiveId }: { fileId: string; newActiveId: string | null }) => {

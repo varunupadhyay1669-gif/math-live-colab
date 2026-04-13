@@ -243,7 +243,8 @@ export default function Room() {
         skipOwnPreviewRef.current = false;
         return;
       }
-      setPreviewHtml(html);
+      // Only rebuild iframe if HTML actually changed
+      setPreviewHtml(prev => prev === html ? prev : html);
     });
     newSocket.on("chat_message", (msg: ChatMessage) => {
       setChatMessages(prev => [...prev, msg]);
@@ -412,16 +413,10 @@ export default function Room() {
     return () => window.removeEventListener("message", handler);
   }, [socket, roomId, scrollSyncEnabled]);
 
-  // ── Periodic auto-sync: every 10s, push teacher's live DOM to students ──
-  useEffect(() => {
-    if (!socket || !roomId) return;
-    const interval = setInterval(() => {
-      if (iframeRef.current?.contentWindow && iframeReadyRef.current) {
-        iframeRef.current.contentWindow.postMessage({ type: 'REQUEST_HTML' }, '*');
-      }
-    }, 10000);
-    return () => clearInterval(interval);
-  }, [socket, roomId]);
+  // NOTE: Periodic auto-sync removed — it was causing full iframe reloads on student
+  // side every 10s, making the page blink and scroll jump to top.
+  // Interactions are already synced in real-time via SYNC_* events.
+  // Full HTML sync only happens on: file switch, file upload, manual Force Sync.
 
   // ── Build iframe URL ──
   useEffect(() => {

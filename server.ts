@@ -351,9 +351,10 @@ async function startServer() {
     socket.on('sync_html_update', ({ roomId, html }: { roomId: string; html: string }) => {
       const room = rooms.get(roomId);
       if (!room || !room.activeFileId) return;
+      // Only update the stored HTML for new-student catch-up.
+      // Do NOT broadcast run_preview — that causes full iframe reload on students
+      // (blink + scroll-to-top). Real-time sync uses SYNC_* interaction events.
       room.lastRunHtml = html;
-      // Force all students to match the teacher's current live DOM
-      io.to(roomId).emit('run_preview', { fileId: room.activeFileId, html });
     });
 
     // ─── FORCE SYNC (Server-authoritative) ───
