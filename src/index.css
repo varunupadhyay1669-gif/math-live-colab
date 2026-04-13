@@ -1,42 +1,5 @@
-@import "tailwindcss";
 @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Manrope:wght@200;300;400;500;600;700;800&display=swap');
-
-/* ===== Dark Landing Page Styles ===== */
-.dot-grid-bg {
-  background-image: radial-gradient(#3a3c41 0.5px, transparent 0.5px);
-  background-size: 24px 24px;
-  opacity: 0.12;
-}
-.glass-panel {
-  backdrop-filter: blur(16px);
-  background: rgba(17, 19, 24, 0.45);
-}
-.neon-glow-primary { box-shadow: 0 0 25px rgba(204, 151, 255, 0.35); }
-.neon-glow-secondary { box-shadow: 0 0 25px rgba(105, 156, 255, 0.35); }
-
-@keyframes scanline-move {
-  0% { transform: translateY(-100%); }
-  100% { transform: translateY(100%); }
-}
-.scanline-overlay::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  background: linear-gradient(to bottom, transparent 50%, rgba(204, 151, 255, 0.05) 50.5%, transparent 51%);
-  background-size: 100% 4px;
-  animation: scanline-move 10s linear infinite;
-  pointer-events: none;
-}
-
-@keyframes ticker-scroll {
-  0% { transform: translateX(0); }
-  100% { transform: translateX(-50%); }
-}
-.ticker-scroll-anim {
-  display: flex;
-  white-space: nowrap;
-  animation: ticker-scroll 60s linear infinite;
-}
+@import "tailwindcss";
 
 /* ===== Ultra-Modern Design System ===== */
 :root {
