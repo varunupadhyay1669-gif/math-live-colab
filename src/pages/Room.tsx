@@ -720,31 +720,40 @@ export default function Room() {
         <div className="flex items-center gap-3">
           <button onClick={() => navigate('/')} className="flex items-center gap-2 hover:opacity-80 transition-opacity"
             style={{ background: 'none', border: 'none', cursor: 'pointer' }}>
-            <span className="text-lg">🧮</span>
-            <span className="font-display font-bold text-[15px]" style={{ color: 'var(--text-primary)' }}>MathsLive</span>
+            <span className="font-display font-extrabold text-[16px]" style={{ color: '#111318', letterSpacing: '-0.03em' }}>
+              Maths<span style={{ color: '#5B5FE6' }}>Live</span>
+            </span>
           </button>
 
           <div className="h-4 w-px hidden sm:block" style={{ background: 'var(--border-default)' }} />
 
-          <div className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-lg"
-            style={{ background: 'var(--bg-surface)' }}>
+          <div className="hidden sm:flex items-center gap-1.5 px-2.5 py-1"
+            style={{ background: 'var(--bg-surface)', borderRadius: '6px', border: '1px solid var(--border-subtle)' }}>
             <span className="text-[10px] font-bold" style={{ color: 'var(--text-muted)', letterSpacing: '0.06em' }}>ROOM</span>
-            <span className="text-[12px] font-mono font-bold" style={{ color: 'var(--accent-indigo)' }}>{roomId}</span>
+            <span className="text-[12px] font-mono font-bold" style={{ color: '#5B5FE6' }}>{roomId}</span>
           </div>
 
           {/* View Mode Toggles */}
-          <div className="flex items-center rounded-lg overflow-hidden"
-            style={{ background: 'var(--bg-surface)', padding: '2px' }}>
+          <div className="toolbar-group">
             {(['code', 'split', 'preview'] as ViewMode[]).map(mode => (
               <button key={mode} onClick={() => setViewMode(mode)}
-                className="px-3.5 py-1.5 text-[12px] font-semibold transition-all capitalize rounded-md"
-                style={{
-                  background: viewMode === mode ? 'var(--bg-secondary)' : 'transparent',
-                  color: viewMode === mode ? 'var(--text-primary)' : 'var(--text-muted)',
-                  border: 'none', cursor: 'pointer',
-                  boxShadow: viewMode === mode ? 'var(--shadow-sm)' : 'none',
-                }}>
-                {mode}
+                className={`tg-btn${viewMode === mode ? ' active-accent' : ''}`}>
+                {mode === 'code' && (
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/>
+                  </svg>
+                )}
+                {mode === 'split' && (
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <rect x="3" y="3" width="18" height="18" rx="2"/><line x1="12" y1="3" x2="12" y2="21"/>
+                  </svg>
+                )}
+                {mode === 'preview' && (
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>
+                  </svg>
+                )}
+                <span className="text-[12px] font-semibold capitalize">{mode}</span>
               </button>
             ))}
           </div>
@@ -791,8 +800,13 @@ export default function Room() {
 
           <div className="relative">
             <button onClick={() => setShowShareMenu(!showShareMenu)}
-              className={`btn text-[12px] ${linkCopied ? 'btn-toolbar-active' : ''}`}>
-              {linkCopied ? '✓ Copied!' : '🔗 Invite'}
+              className={`btn text-[12px] ${linkCopied ? 'btn-accent' : ''}`}
+              style={{ display: 'inline-flex', alignItems: 'center', gap: '5px' }}>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71"/>
+                <path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71"/>
+              </svg>
+              {linkCopied ? 'Copied!' : 'Invite'}
             </button>
             {showShareMenu && (
               <>
@@ -823,8 +837,11 @@ export default function Room() {
 
                   <button onClick={copyStudentLink}
                     className="btn-primary w-full justify-center"
-                    style={{ height: '40px', fontSize: '13px', borderRadius: 'var(--radius-sm)' }}>
-                    {roomPassword ? '📋 Copy Link + Passcode' : '📋 Copy Link'}
+                    style={{ height: '40px', fontSize: '13px', borderRadius: '6px', gap: '6px' }}>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/>
+                    </svg>
+                    {roomPassword ? 'Copy Link + Passcode' : 'Copy Link'}
                   </button>
 
                   {roomPassword && (
@@ -838,22 +855,44 @@ export default function Room() {
           </div>
 
           {/* Library */}
-          <button onClick={() => setShowLibrary(true)} className="btn text-[12px] hidden sm:inline-flex" title="Simulation Library">
-            📚
+          <button onClick={() => setShowLibrary(true)} className="btn text-[12px] hidden sm:inline-flex" title="Simulation Library"
+            style={{ display: 'inline-flex', alignItems: 'center', gap: '5px' }}>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M4 19.5A2.5 2.5 0 016.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 014 19.5v-15A2.5 2.5 0 016.5 2z"/>
+            </svg>
+            <span className="hidden md:inline">Library</span>
           </button>
 
           {/* Recording */}
           <button onClick={toggleRecording}
-            className={`btn text-[12px] hidden sm:inline-flex ${isRecording ? 'btn-toolbar-active' : ''}`}
-            style={isRecording ? { background: 'var(--accent-rose-light)', color: 'var(--accent-rose)', borderColor: 'rgba(244,63,94,0.3)' } : {}}
+            className={`btn text-[12px] hidden sm:inline-flex ${isRecording ? 'btn-danger' : ''}`}
+            style={{ display: 'inline-flex', alignItems: 'center', gap: '5px' }}
             title={isRecording ? 'Stop Recording' : 'Start Recording'}>
-            {isRecording ? '⏹ REC' : '⏺ REC'}
+            {isRecording ? (
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="none">
+                <rect x="6" y="6" width="12" height="12" rx="2"/>
+              </svg>
+            ) : (
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="none">
+                <circle cx="12" cy="12" r="6"/>
+              </svg>
+            )}
+            <span className="hidden md:inline">{isRecording ? 'Stop' : 'Rec'}</span>
           </button>
 
           {/* Sound toggle */}
           <button onClick={() => { const m = sounds.toggleMute(); setSoundMuted(m); }}
-            className="btn text-[12px]" title={soundMuted ? 'Unmute' : 'Mute'}>
-            {soundMuted ? '🔇' : '🔊'}
+            className="btn text-[12px]" title={soundMuted ? 'Unmute' : 'Mute'}
+            style={{ display: 'inline-flex', alignItems: 'center' }}>
+            {soundMuted ? (
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/>
+              </svg>
+            ) : (
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 010 14.14M15.54 8.46a5 5 0 010 7.07"/>
+              </svg>
+            )}
           </button>
         </div>
       </header>

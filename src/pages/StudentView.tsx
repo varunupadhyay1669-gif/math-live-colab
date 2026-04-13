@@ -406,31 +406,46 @@ export default function StudentView() {
       <header className="flex items-center justify-between px-5 shrink-0"
         style={{ height: '52px', borderBottom: '1px solid var(--border-subtle)', background: 'var(--bg-secondary)' }}>
 
-        <div className="flex items-center gap-4">
-          <span className="text-lg">🧮</span>
-          <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg"
-            style={{ background: 'var(--bg-surface)', border: '1px solid var(--border-subtle)' }}>
+        <div className="flex items-center gap-3">
+          <span className="font-display font-extrabold text-[15px]" style={{ color: '#111318', letterSpacing: '-0.03em' }}>
+            Maths<span style={{ color: '#5B5FE6' }}>Live</span>
+          </span>
+          <div className="flex items-center gap-2 px-2.5 py-1"
+            style={{ background: 'var(--bg-surface)', borderRadius: '6px', border: '1px solid var(--border-subtle)' }}>
             <span className="text-[13px] font-display font-semibold" style={{ color: 'var(--text-primary)' }}>
-              {currentFileName || 'MathsLive'}
+              {currentFileName || 'Session'}
             </span>
             <ConnectionStatus socket={socket} connected={connected} />
           </div>
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2">
           {/* Sound toggle */}
           <button onClick={() => { const m = sounds.toggleMute(); setSoundMuted(m); }}
-            className="btn text-[12px]" title={soundMuted ? 'Unmute' : 'Mute'}>
-            {soundMuted ? '🔇' : '🔊'}
+            className="btn text-[12px]" title={soundMuted ? 'Unmute' : 'Mute'}
+            style={{ display: 'inline-flex', alignItems: 'center' }}>
+            {soundMuted ? (
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/>
+              </svg>
+            ) : (
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 010 14.14M15.54 8.46a5 5 0 010 7.07"/>
+              </svg>
+            )}
           </button>
 
           {/* Chat Toggle */}
           <button onClick={toggleChat}
-            className={`btn text-[12px] relative ${chatOpen ? 'btn-toolbar-active' : ''}`}>
-            💬 Chat
+            className={`btn text-[12px] relative ${chatOpen ? 'btn-accent' : ''}`}
+            style={{ display: 'inline-flex', alignItems: 'center', gap: '5px' }}>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/>
+            </svg>
+            Chat
             {unreadChat > 0 && (
               <span className="absolute -top-2 -right-2 w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold text-white animate-bounce-in"
-                style={{ background: 'var(--accent-rose)', boxShadow: '0 2px 6px rgba(244,63,94,0.4)' }}>
+                style={{ background: '#E5394B', boxShadow: '0 2px 6px rgba(229,57,75,0.4)' }}>
                 {unreadChat}
               </span>
             )}
