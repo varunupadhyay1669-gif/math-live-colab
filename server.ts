@@ -31,6 +31,8 @@ interface RoomData {
   studentInteractionAllowed: boolean; // When false, students are view-only (like screen share)
   // Room password (optional)
   password: string | null;
+  // Students waiting for HTML sync from teacher (joined before teacher's DOM capture arrives)
+  pendingSyncStudents: string[];
 }
 
 async function startServer() {
@@ -126,6 +128,7 @@ async function startServer() {
       scrollSyncEnabled: true,
       studentInteractionAllowed: false, // View-only by default
       password: null,
+      pendingSyncStudents: [],
     };
   }
 
@@ -309,6 +312,8 @@ async function startServer() {
       if (role === 'teacher') {
         room.teacherSocketId = socket.id;
       } else if (role === 'student' && room.teacherSocketId) {
+        // Track this student as needing fresh HTML from teacher's live DOM
+        room.pendingSyncStudents.push(socket.id);
         // Auto-request the teacher to send their live DOM state to catch up this student
         io.to(room.teacherSocketId).emit('request_html_sync');
       }
@@ -329,6 +334,21 @@ async function startServer() {
 
       // Broadcast updated user list
       io.to(roomId).emit('user_list', getRoomUserList(room));
+    });
+
+    // ─── REQUEST CONTENT (student fallback) ───
+    // If a student missed the initial HTML delivery, they can request it again
+    socket.on('request_content', ({ roomId }: { roomId: string }) => {
+      const room = rooms.get(roomId);
+      if (!room) return;
+      if (room.lastRunHtml) {
+        socket.emit('run_preview', { fileId: room.activeFileId, html: room.lastRunHtml });
+      }
+      // Also ask teacher for fresh DOM if available
+      if (room.teacherSocketId) {
+        room.pendingSyncStudents.push(socket.id);
+        io.to(room.teacherSocketId).emit('request_html_sync');
+      }
     });
 
     // ─── SET ROOM PASSWORD ───
@@ -416,10 +436,18 @@ async function startServer() {
     socket.on('sync_html_update', ({ roomId, html }: { roomId: string; html: string }) => {
       const room = rooms.get(roomId);
       if (!room || !room.activeFileId) return;
-      // Only update the stored HTML for new-student catch-up.
-      // Do NOT broadcast run_preview — that causes full iframe reload on students
-      // (blink + scroll-to-top). Real-time sync uses SYNC_* interaction events.
+      // Store for future students
       room.lastRunHtml = html;
+      // Send to any students waiting for the teacher's live DOM
+      // (these students joined after the teacher and need the current content)
+      if (room.pendingSyncStudents.length > 0) {
+        const pending = room.pendingSyncStudents;
+        room.pendingSyncStudents = [];
+        for (const studentId of pending) {
+          io.to(studentId).emit('run_preview', { fileId: room.activeFileId, html });
+        }
+        console.log(`📤 Sent live HTML to ${pending.length} pending student(s) in room ${roomId}`);
+      }
     });
 
     // ─── FORCE SYNC (Server-authoritative) ───
@@ -718,6 +746,27 @@ async function startServer() {
 
     socket.on('disconnect', () => {
       console.log('User disconnected:', socket.id);
+    });
+  });
+
+  // ─── HTTP API: Room content fallback ───
+  // Students can fetch room HTML via plain HTTP if Socket.io delivery fails
+  app.use(express.json());
+  app.get('/api/room/:roomId/content', (req, res) => {
+    const { roomId } = req.params;
+    const room = rooms.get(roomId);
+    if (!room) {
+      res.status(404).json({ error: 'Room not found' });
+      return;
+    }
+    if (!room.lastRunHtml) {
+      res.status(204).send(); // No content yet
+      return;
+    }
+    res.json({
+      html: room.lastRunHtml,
+      activeFileId: room.activeFileId,
+      fileName: room.files.find(f => f.id === room.activeFileId)?.name || 'Simulation',
     });
   });
 

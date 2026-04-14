@@ -376,6 +376,42 @@ export default function StudentView() {
     };
   }, [roomId, navigate, studentName]);
 
+  // ── HTTP Fallback: fetch content if Socket.io delivery fails ──
+  // This handles cases where the student is far away (e.g., different country)
+  // and the large HTML payload gets dropped by Socket.io or network proxies.
+  const httpFallbackRef = useRef<ReturnType<typeof setTimeout>>();
+  const fetchContentViaHttp = useCallback(async () => {
+    if (!roomId) return;
+    // First try: ask server via socket (fastest, re-triggers teacher DOM capture)
+    if (socket && connected) {
+      socket.emit('request_content', { roomId });
+    }
+    // Second try: HTTP fallback (works even if socket is flaky)
+    try {
+      const res = await fetch(`/api/room/${roomId}/content`);
+      if (res.status === 200) {
+        const data = await res.json();
+        if (data.html && !currentHtml) {
+          setCurrentFileName(data.fileName || 'Simulation');
+          setCurrentHtml(data.html);
+          showNotification("✅ Content loaded");
+        }
+      }
+    } catch {
+      // Silently fail — socket path may still deliver
+    }
+  }, [roomId, currentHtml, socket, connected]);
+
+  useEffect(() => {
+    // If we're connected but have no content after 5 seconds, try HTTP fallback
+    if (connected && !currentHtml) {
+      httpFallbackRef.current = setTimeout(() => {
+        fetchContentViaHttp();
+      }, 5000);
+    }
+    return () => { if (httpFallbackRef.current) clearTimeout(httpFallbackRef.current); };
+  }, [connected, currentHtml, fetchContentViaHttp]);
+
   // ── Helper: safely post message to iframe (queues if not ready) ──
   const postToIframe = useCallback((msg: any) => {
     if (iframeReadyRef.current && iframeRef.current?.contentWindow) {
@@ -603,6 +639,15 @@ export default function StudentView() {
                       style={{ background: 'var(--accent-indigo)', animation: `dot-pulse 1.5s ease-in-out infinite`, animationDelay: `${i * 0.3}s` }} />
                   ))}
                 </div>
+                {connected && (
+                  <button onClick={fetchContentViaHttp}
+                    className="btn mt-6" style={{ fontSize: '13px' }}>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                      <polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/>
+                    </svg>
+                    Retry Loading
+                  </button>
+                )}
               </div>
             </div>
           )}
