@@ -767,71 +767,61 @@ export default function Room() {
       )}
 
       {/* ═══ HEADER ═══ */}
-      <header className="flex items-center justify-between px-5 shrink-0"
-        style={{ height: '54px', borderBottom: '1px solid var(--border-subtle)', background: 'var(--bg-secondary)' }}>
-
-        <div className="flex items-center gap-3">
-          <button onClick={() => navigate('/')} className="flex items-center gap-2 hover:opacity-80 transition-opacity"
+      <header className="app-header">
+        <div className="header-section">
+          <button onClick={() => navigate('/')} className="flex items-center hover:opacity-80 transition-opacity"
             style={{ background: 'none', border: 'none', cursor: 'pointer' }}>
-            <span className="font-display font-extrabold text-[16px]" style={{ color: '#111318', letterSpacing: '-0.03em' }}>
-              Maths<span style={{ color: '#5B5FE6' }}>Live</span>
+            <span className="font-display font-extrabold text-[15px]" style={{ color: 'var(--text-primary)', letterSpacing: '-0.03em' }}>
+              Maths<span style={{ color: 'var(--accent-indigo)' }}>Live</span>
             </span>
           </button>
 
-          <div className="h-4 w-px hidden sm:block" style={{ background: 'var(--border-default)' }} />
+          <div className="header-divider hidden sm:block" />
 
-          <div className="hidden sm:flex items-center gap-1.5 px-2.5 py-1"
-            style={{ background: 'var(--bg-surface)', borderRadius: '6px', border: '1px solid var(--border-subtle)' }}>
-            <span className="text-[10px] font-bold" style={{ color: 'var(--text-muted)', letterSpacing: '0.06em' }}>ROOM</span>
-            <span className="text-[12px] font-mono font-bold" style={{ color: '#5B5FE6' }}>{roomId}</span>
-          </div>
+          <span className="hidden sm:inline text-[12px] font-mono font-semibold" style={{ color: 'var(--text-muted)' }}>{roomId}</span>
+
+          <div className="header-divider hidden sm:block" />
 
           {/* View Mode Toggles */}
-          <div className="toolbar-group">
+          <div style={{ display: 'flex', gap: '2px' }}>
             {(['code', 'split', 'preview'] as ViewMode[]).map(mode => (
               <button key={mode} onClick={() => setViewMode(mode)}
-                className={`tg-btn${viewMode === mode ? ' active-accent' : ''}`}>
+                className={`tb-btn ${viewMode === mode ? 'active' : ''}`}
+                data-tip={mode.charAt(0).toUpperCase() + mode.slice(1)}>
                 {mode === 'code' && (
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                     <polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/>
                   </svg>
                 )}
                 {mode === 'split' && (
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                     <rect x="3" y="3" width="18" height="18" rx="2"/><line x1="12" y1="3" x2="12" y2="21"/>
                   </svg>
                 )}
                 {mode === 'preview' && (
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                     <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>
                   </svg>
                 )}
-                <span className="text-[12px] font-semibold capitalize">{mode}</span>
               </button>
             ))}
           </div>
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="header-section">
           <ConnectionStatus socket={socket} connected={connected} />
 
-          <span className="text-[13px] font-mono hidden sm:block" style={{ color: 'var(--text-muted)' }}>
+          <span className="text-[12px] font-mono hidden sm:block" style={{ color: 'var(--text-muted)', fontVariantNumeric: 'tabular-nums' }}>
             {formatTime(sessionTimer)}
           </span>
 
+          <div className="header-divider hidden sm:block" />
+
+          {/* Students pill */}
           <div className="relative">
-            <button onClick={() => setShowUserPanel(!showUserPanel)}
-              className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-[12px] font-semibold transition-all"
-              style={{
-                background: showUserPanel ? 'var(--accent-indigo-light)' : (studentCount > 0 ? 'var(--accent-emerald-light)' : 'var(--bg-surface)'),
-                color: showUserPanel ? 'var(--accent-indigo)' : (studentCount > 0 ? 'var(--accent-emerald)' : 'var(--text-muted)'),
-                border: '1px solid var(--border-subtle)',
-                cursor: 'pointer',
-              }}>
-              <div className={`connection-dot ${studentCount > 0 ? 'online' : 'offline'}`}
-                style={{ width: 7, height: 7 }} />
-              {studentCount} {studentCount === 1 ? 'student' : 'students'}
-              <span style={{ fontSize: '8px', opacity: 0.6 }}>{showUserPanel ? '▲' : '▼'}</span>
+            <button onClick={() => setShowUserPanel(!showUserPanel)} className="status-pill" style={{ cursor: 'pointer', border: 'none' }}>
+              <div className={`connection-dot ${studentCount > 0 ? 'online' : 'offline'}`} />
+              <span style={{ fontVariantNumeric: 'tabular-nums' }}>{studentCount}</span>
             </button>
             {showUserPanel && (
               <>
@@ -851,10 +841,11 @@ export default function Room() {
             )}
           </div>
 
+          {/* Invite */}
           <div className="relative">
             <button onClick={() => setShowShareMenu(!showShareMenu)}
-              className={`btn text-[12px] ${linkCopied ? 'btn-accent' : ''}`}
-              style={{ display: 'inline-flex', alignItems: 'center', gap: '5px' }}>
+              className={linkCopied ? 'btn-accent' : 'btn'}
+              style={{ height: '32px', padding: '0 12px', fontSize: '12.5px' }}>
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71"/>
                 <path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71"/>
@@ -868,7 +859,7 @@ export default function Room() {
                   style={{ width: '300px', background: 'var(--bg-card)', borderRadius: 'var(--radius-lg)', border: '1px solid var(--border-subtle)', boxShadow: 'var(--shadow-xl)', padding: '16px' }}>
                   <div className="text-[11px] font-bold mb-3" style={{ color: 'var(--text-muted)', letterSpacing: '0.06em', textTransform: 'uppercase' }}>Share with students</div>
 
-                  <div className="flex items-center gap-2 p-2.5 rounded-lg mb-3" style={{ background: 'var(--bg-surface)', border: '1px solid var(--border-subtle)' }}>
+                  <div className="flex items-center gap-2 p-2.5 rounded-lg mb-3" style={{ background: 'var(--bg-surface)' }}>
                     <span className="text-[12px] font-mono truncate flex-1" style={{ color: 'var(--accent-indigo)', fontWeight: 600 }}>
                       {window.location.origin}/live/{roomId}
                     </span>
@@ -878,77 +869,53 @@ export default function Room() {
                     <label className="block text-[11px] font-semibold mb-1.5" style={{ color: 'var(--text-secondary)' }}>
                       Room Passcode <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}>(optional)</span>
                     </label>
-                    <input
-                      type="text"
-                      placeholder="e.g. math123"
-                      value={roomPassword}
+                    <input type="text" placeholder="e.g. math123" value={roomPassword}
                       onChange={(e) => saveRoomPassword(e.target.value)}
-                      className="input-field"
-                      style={{ fontSize: '13px', padding: '8px 12px' }}
-                    />
+                      className="input-field" style={{ fontSize: '13px', padding: '8px 12px' }} />
                   </div>
 
-                  <button onClick={copyStudentLink}
-                    className="btn-primary w-full justify-center"
-                    style={{ height: '40px', fontSize: '13px', borderRadius: '6px', gap: '6px' }}>
+                  <button onClick={copyStudentLink} className="btn-primary w-full justify-center"
+                    style={{ height: '38px', fontSize: '13px', borderRadius: '8px', gap: '6px' }}>
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                       <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/>
                     </svg>
                     {roomPassword ? 'Copy Link + Passcode' : 'Copy Link'}
                   </button>
-
-                  {roomPassword && (
-                    <p className="text-[11px] mt-2 text-center" style={{ color: 'var(--text-muted)' }}>
-                      Will copy: link + passcode together
-                    </p>
-                  )}
                 </div>
               </>
             )}
           </div>
 
-          {/* Library */}
-          <button onClick={() => setShowLibrary(true)} className="btn text-[12px] hidden sm:inline-flex" title="Simulation Library"
-            style={{ display: 'inline-flex', alignItems: 'center', gap: '5px' }}>
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <div className="header-divider hidden sm:block" />
+
+          {/* Icon buttons: Library, Record, Fullscreen, Sound */}
+          <button onClick={() => setShowLibrary(true)} className="btn-icon hidden sm:inline-flex" data-tip="Library">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M4 19.5A2.5 2.5 0 016.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 014 19.5v-15A2.5 2.5 0 016.5 2z"/>
             </svg>
-            <span className="hidden md:inline">Library</span>
           </button>
 
-          {/* Recording */}
           <button onClick={toggleRecording}
-            className={`btn text-[12px] hidden sm:inline-flex ${isRecording ? 'btn-danger' : ''}`}
-            style={{ display: 'inline-flex', alignItems: 'center', gap: '5px' }}
-            title={isRecording ? 'Stop Recording' : 'Start Recording'}>
+            className={`btn-icon hidden sm:inline-flex ${isRecording ? 'active-rose' : ''}`}
+            data-tip={isRecording ? 'Stop Recording' : 'Record'}>
             {isRecording ? (
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="none">
-                <rect x="6" y="6" width="12" height="12" rx="2"/>
-              </svg>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="none"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
             ) : (
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="none">
-                <circle cx="12" cy="12" r="6"/>
-              </svg>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="6"/></svg>
             )}
-            <span className="hidden md:inline">{isRecording ? 'Stop' : 'Rec'}</span>
           </button>
 
-          {/* Fullscreen toggle */}
           <button onClick={() => {
             if (document.fullscreenElement) document.exitFullscreen();
             else document.documentElement.requestFullscreen().catch(() => {});
-          }}
-            className="btn text-[12px]" title="Toggle fullscreen"
-            style={{ display: 'inline-flex', alignItems: 'center' }}>
+          }} className="btn-icon" data-tip="Fullscreen">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/>
             </svg>
           </button>
 
-          {/* Sound toggle */}
           <button onClick={() => { const m = sounds.toggleMute(); setSoundMuted(m); }}
-            className="btn text-[12px]" title={soundMuted ? 'Unmute' : 'Mute'}
-            style={{ display: 'inline-flex', alignItems: 'center' }}>
+            className="btn-icon" data-tip={soundMuted ? 'Unmute' : 'Mute'}>
             {soundMuted ? (
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/>

@@ -480,50 +480,44 @@ export default function StudentView() {
     <div className="h-screen w-screen flex flex-col overflow-hidden" style={{ background: 'var(--bg-primary)' }}>
 
       {/* ══════ HEADER ══════ */}
-      <header className="flex items-center justify-between px-5 shrink-0"
-        style={{ height: '52px', borderBottom: '1px solid var(--border-subtle)', background: 'var(--bg-secondary)' }}>
-
-        <div className="flex items-center gap-3">
-          <span className="font-display font-extrabold text-[15px]" style={{ color: '#111318', letterSpacing: '-0.03em' }}>
-            Maths<span style={{ color: '#5B5FE6' }}>Live</span>
+      <header className="app-header">
+        <div className="header-section">
+          <span className="font-display font-extrabold text-[15px]" style={{ color: 'var(--text-primary)', letterSpacing: '-0.03em' }}>
+            Maths<span style={{ color: 'var(--accent-indigo)' }}>Live</span>
           </span>
-          <div className="flex items-center gap-2 px-2.5 py-1"
-            style={{ background: 'var(--bg-surface)', borderRadius: '6px', border: '1px solid var(--border-subtle)' }}>
-            <span className="text-[13px] font-display font-semibold" style={{ color: 'var(--text-primary)' }}>
-              {currentFileName || 'Session'}
-            </span>
-            <ConnectionStatus socket={socket} connected={connected} />
-          </div>
+
+          <div className="header-divider" />
+
+          <span className="text-[13px] font-semibold" style={{ color: 'var(--text-secondary)' }}>
+            {currentFileName || 'Session'}
+          </span>
+          <ConnectionStatus socket={socket} connected={connected} />
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="header-section">
           {/* View-only / Interactive indicator */}
-          <span className="text-[11px] font-bold px-2 py-1"
-            style={{
-              borderRadius: '4px',
-              background: interactionAllowed ? 'rgba(13,175,110,0.12)' : 'rgba(91,95,230,0.12)',
-              color: interactionAllowed ? '#0DAF6E' : '#5B5FE6',
-              letterSpacing: '0.04em',
-            }}>
+          <span className="status-pill" style={{
+            background: interactionAllowed ? 'var(--accent-emerald-light)' : 'var(--accent-indigo-light)',
+            color: interactionAllowed ? 'var(--accent-emerald)' : 'var(--accent-indigo)',
+            fontSize: '11px', fontWeight: 700, letterSpacing: '0.03em', padding: '3px 10px',
+          }}>
             {interactionAllowed ? 'INTERACTIVE' : 'VIEW ONLY'}
           </span>
 
-          {/* Fullscreen toggle */}
+          <div className="header-divider" />
+
+          {/* Icon buttons */}
           <button onClick={() => {
             if (document.fullscreenElement) document.exitFullscreen();
             else document.documentElement.requestFullscreen().catch(() => {});
-          }}
-            className="btn text-[12px]" title="Toggle fullscreen"
-            style={{ display: 'inline-flex', alignItems: 'center' }}>
+          }} className="btn-icon" data-tip="Fullscreen">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/>
             </svg>
           </button>
 
-          {/* Sound toggle */}
           <button onClick={() => { const m = sounds.toggleMute(); setSoundMuted(m); }}
-            className="btn text-[12px]" title={soundMuted ? 'Unmute' : 'Mute'}
-            style={{ display: 'inline-flex', alignItems: 'center' }}>
+            className="btn-icon" data-tip={soundMuted ? 'Unmute' : 'Mute'}>
             {soundMuted ? (
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/>
@@ -536,16 +530,13 @@ export default function StudentView() {
           </button>
 
           {/* Chat Toggle */}
-          <button onClick={toggleChat}
-            className={`btn text-[12px] relative ${chatOpen ? 'btn-accent' : ''}`}
-            style={{ display: 'inline-flex', alignItems: 'center', gap: '5px' }}>
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <button onClick={toggleChat} className={`btn-icon relative ${chatOpen ? 'active' : ''}`} data-tip="Chat">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/>
             </svg>
-            Chat
             {unreadChat > 0 && (
-              <span className="absolute -top-2 -right-2 w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold text-white animate-bounce-in"
-                style={{ background: '#E5394B', boxShadow: '0 2px 6px rgba(229,57,75,0.4)' }}>
+              <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] rounded-full flex items-center justify-center text-[10px] font-bold text-white animate-bounce-in"
+                style={{ background: 'var(--accent-rose)', boxShadow: '0 2px 6px rgba(239,68,68,0.35)', padding: '0 4px' }}>
                 {unreadChat}
               </span>
             )}
