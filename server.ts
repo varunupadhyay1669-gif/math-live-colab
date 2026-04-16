@@ -364,10 +364,29 @@ async function startServer() {
       if (!isValidRoomId(roomId)) return;
       updateRoomActivity(roomId);
       const room = rooms.get(roomId);
-      if (!room) return;
+      if (!room) {
+        socket.emit('upload_error', { message: 'Room not found' });
+        return;
+      }
+      // Validate file object
+      if (!file || typeof file !== 'object') {
+        socket.emit('upload_error', { message: 'Invalid file data' });
+        return;
+      }
+      // Validate HTML content exists
+      if (!file.html || typeof file.html !== 'string') {
+        socket.emit('upload_error', { message: 'File content is missing or invalid' });
+        return;
+      }
+      // Validate non-empty content (after trimming)
+      const trimmedHtml = file.html.trim();
+      if (trimmedHtml.length === 0) {
+        socket.emit('upload_error', { message: 'File is empty' });
+        return;
+      }
       // Validate file size
-      if (file?.html && file.html.length > MAX_FILE_SIZE) {
-        socket.emit('upload_error', { message: 'File too large (max 2MB)' });
+      if (file.html.length > MAX_FILE_SIZE) {
+        socket.emit('upload_error', { message: `File too large (${(file.html.length / 1024 / 1024).toFixed(1)}MB, max 2MB)` });
         return;
       }
       // Validate file count
@@ -379,7 +398,7 @@ async function startServer() {
       room.activeFileId = file.id;
       room.lastRunHtml = file.html;
       io.to(roomId).emit('file_uploaded', file);
-      io.to(roomId).emit('active_file_changed', { fileId: file.id, fileName: file.name, html: file.html });
+      io.to(roomId).emit('active_file_changed', { fileId: file.id, fileName: file.name, html: file.html, currentStep: room.currentStep });
       // Auto-push HTML to all connected clients immediately
       io.to(roomId).emit('run_preview', { fileId: file.id, html: file.html });
     });
@@ -412,7 +431,7 @@ async function startServer() {
       if (file) {
         room.lastRunHtml = file.html;
         // Send file content WITH the active_file_changed so student never reads stale state
-        io.to(roomId).emit('active_file_changed', { fileId, fileName: file.name, html: file.html });
+        io.to(roomId).emit('active_file_changed', { fileId, fileName: file.name, html: file.html, currentStep: room.currentStep });
         io.to(roomId).emit('run_preview', { fileId, html: file.html });
       }
     });

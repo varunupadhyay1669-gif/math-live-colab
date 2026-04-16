@@ -197,8 +197,11 @@ export default function StudentView() {
       sounds.join();
     });
 
-    newSocket.on("active_file_changed", (data: { fileId: string; fileName?: string; html?: string }) => {
+    newSocket.on("active_file_changed", (data: { fileId: string; fileName?: string; html?: string; currentStep?: number }) => {
       setActiveFileId(data.fileId);
+      if (typeof data.currentStep === 'number') {
+        setCurrentStep(data.currentStep);
+      }
       if (data.html) {
         setCurrentFileName(data.fileName || 'Simulation');
         // File switch is a genuine reload — update HTML

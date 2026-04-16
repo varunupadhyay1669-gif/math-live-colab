@@ -161,6 +161,66 @@ export const injectedSyncScript = `
     var scrollSyncEnabled = true;
     var lastScroll = 0;
 
+    // Find a meaningful anchor element near the top of the visible area
+    var _lastAnchorTime = 0;
+    var _lastAnchorResult = null;
+    var _lastAnchorContainer = null;
+    function _findAnchor(scrollContainer) {
+      var now = Date.now();
+      // Cache anchor for 120ms to avoid expensive DOM queries on every scroll tick
+      if (now - _lastAnchorTime < 120 && _lastAnchorContainer === scrollContainer && _lastAnchorResult) {
+        // Update offset for cached anchor (position may have changed slightly)
+        try {
+          var cachedEl = document.querySelector(_lastAnchorResult.anchor);
+          if (cachedEl) {
+            var cr = cachedEl.getBoundingClientRect();
+            _lastAnchorResult.anchorOffsetPx = !scrollContainer ? -cr.top : (scrollContainer.getBoundingClientRect().top - cr.top);
+            return _lastAnchorResult;
+          }
+        } catch(e) {}
+      }
+      _lastAnchorTime = now;
+      _lastAnchorContainer = scrollContainer;
+
+      var isDoc = !scrollContainer;
+      var vpHeight = isDoc ? window.innerHeight : scrollContainer.clientHeight;
+      var scanY = vpHeight * 0.15; // 15% into the visible viewport
+      // Check elements with semantic meaning — prefer quiz/step markers, then headings, then containers
+      var root = isDoc ? document : scrollContainer;
+      var candidates = root.querySelectorAll(
+        '[data-step], [data-question], .question, .slide, .card, .panel, .problem, section, article, h1, h2, h3, h4, h5, h6, li, tr'
+      );
+      // If too few semantic elements, also check divs/paragraphs
+      if (candidates.length < 3) {
+        candidates = root.querySelectorAll(
+          '[data-step], [data-question], .question, .slide, .card, .panel, .problem, section, article, h1, h2, h3, h4, h5, h6, p, li, tr, div'
+        );
+      }
+      var best = null;
+      var bestDist = Infinity;
+      var limit = Math.min(candidates.length, 500); // Cap for performance
+      for (var i = 0; i < limit; i++) {
+        var c = candidates[i];
+        var rect = c.getBoundingClientRect();
+        // Use viewport-relative top (no need to add scrollTop)
+        var dist = Math.abs(rect.top - scanY);
+        if (dist < bestDist) {
+          bestDist = dist;
+          best = c;
+        }
+      }
+      if (best && bestDist < vpHeight) {
+        var p = getElementPath(best);
+        if (p) {
+          var bestRect = best.getBoundingClientRect();
+          _lastAnchorResult = { anchor: p, anchorOffsetPx: isDoc ? -bestRect.top : (scrollContainer.getBoundingClientRect().top - bestRect.top) };
+          return _lastAnchorResult;
+        }
+      }
+      _lastAnchorResult = null;
+      return null;
+    }
+
     function sendDocScroll() {
       if (isRemote() || !scrollSyncEnabled || interactionBlocked) return;
       var now = Date.now();
@@ -168,8 +228,7 @@ export const injectedSyncScript = `
       lastScroll = now;
       var maxW = Math.max(0, document.documentElement.scrollWidth - window.innerWidth);
       var maxH = Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
-      // AUTONOMOUS: [ORDER-3] Guard against zero/negative max to avoid NaN
-      window.parent.postMessage({
+      var msg = {
         type: 'SYNC_SCROLL',
         scrollX: maxW > 0 ? window.scrollX / maxW : 0,
         scrollY: maxH > 0 ? window.scrollY / maxH : 0,
@@ -177,7 +236,11 @@ export const injectedSyncScript = `
         absScrollY: window.scrollY,
         maxScrollX: maxW,
         maxScrollY: maxH
-      }, '*');
+      };
+      // Add anchor for cross-resolution sync
+      var a = _findAnchor(null);
+      if (a) { msg.anchor = a.anchor; msg.anchorOffsetPx = a.anchorOffsetPx; }
+      window.parent.postMessage(msg, '*');
     }
 
     function sendElementScroll(e) {
@@ -192,12 +255,16 @@ export const injectedSyncScript = `
       var maxTop = Math.max(0, el.scrollHeight - el.clientHeight);
       var maxLeft = Math.max(0, el.scrollWidth - el.clientWidth);
       if (maxTop > 0 || maxLeft > 0) {
-        window.parent.postMessage({
+        var msg = {
           type: 'SYNC_SCROLL', path: path,
           scrollTop: maxTop > 0 ? el.scrollTop / maxTop : 0,
           scrollLeft: maxLeft > 0 ? el.scrollLeft / maxLeft : 0,
           absScrollTop: el.scrollTop, absScrollLeft: el.scrollLeft
-        }, '*');
+        };
+        // Add anchor for cross-resolution sync
+        var a = _findAnchor(el);
+        if (a) { msg.anchor = a.anchor; msg.anchorOffsetPx = a.anchorOffsetPx; }
+        window.parent.postMessage(msg, '*');
       }
     }
 
@@ -347,17 +414,43 @@ export const injectedSyncScript = `
         if (!scrollSyncEnabled) return;
         enterRemote();
         try {
-          if (data.path) {
-            var scrollEl = findElement(data.path);
-            if (scrollEl) {
-              var maxT = Math.max(0, scrollEl.scrollHeight - scrollEl.clientHeight);
-              var maxL = Math.max(0, scrollEl.scrollWidth - scrollEl.clientWidth);
-              scrollEl.scrollTo({ left: (data.scrollLeft || 0) * maxL, top: (data.scrollTop || 0) * maxT, behavior: 'smooth' });
+          // Try anchor-based sync first (works across different screen sizes)
+          var anchorUsed = false;
+          if (data.anchor) {
+            var anchorEl = findElement(data.anchor);
+            if (anchorEl) {
+              var anchorRect = anchorEl.getBoundingClientRect();
+              if (data.path) {
+                // Element-level: scroll container so anchor is at the right offset
+                var scrollEl = findElement(data.path);
+                if (scrollEl) {
+                  var containerRect = scrollEl.getBoundingClientRect();
+                  var targetScrollTop = scrollEl.scrollTop + anchorRect.top - containerRect.top + (data.anchorOffsetPx || 0);
+                  scrollEl.scrollTo({ top: Math.max(0, targetScrollTop), left: scrollEl.scrollLeft, behavior: 'smooth' });
+                  anchorUsed = true;
+                }
+              } else {
+                // Document-level: scroll so anchor is at the right offset from viewport top
+                var targetTop = window.scrollY + anchorRect.top + (data.anchorOffsetPx || 0);
+                window.scrollTo({ top: Math.max(0, targetTop), behavior: 'smooth' });
+                anchorUsed = true;
+              }
             }
-          } else {
-            var maxX = Math.max(0, document.documentElement.scrollWidth - window.innerWidth);
-            var maxY = Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
-            window.scrollTo({ left: data.scrollX * maxX, top: data.scrollY * maxY, behavior: 'smooth' });
+          }
+          // Fallback to ratio-based sync if anchor not available
+          if (!anchorUsed) {
+            if (data.path) {
+              var scrollEl = findElement(data.path);
+              if (scrollEl) {
+                var maxT = Math.max(0, scrollEl.scrollHeight - scrollEl.clientHeight);
+                var maxL = Math.max(0, scrollEl.scrollWidth - scrollEl.clientWidth);
+                scrollEl.scrollTo({ left: (data.scrollLeft || 0) * maxL, top: (data.scrollTop || 0) * maxT, behavior: 'smooth' });
+              }
+            } else {
+              var maxX = Math.max(0, document.documentElement.scrollWidth - window.innerWidth);
+              var maxY = Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
+              window.scrollTo({ left: data.scrollX * maxX, top: data.scrollY * maxY, behavior: 'smooth' });
+            }
           }
         } catch(ignore) {}
         // AUTONOMOUS: [ORDER-1] Use delayed exit for smooth scroll animation duration

@@ -227,6 +227,9 @@ export default function Room() {
       setFiles(prev => [...prev, file]);
       sounds.tick();
     });
+    newSocket.on("upload_error", ({ message }: { message: string }) => {
+      showNotif(`⚠️ Upload failed: ${message}`);
+    });
     newSocket.on("file_updated", ({ fileId, html }: { fileId: string; html: string }) => {
       setFiles(prev => prev.map(f => f.id === fileId ? { ...f, html } : f));
     });
@@ -499,9 +502,14 @@ export default function Room() {
     if (!uploadedFiles || !socket) return;
     Array.from(uploadedFiles).forEach((file: File) => {
       if (file.size > 2 * 1024 * 1024) { showNotif(`⚠️ ${file.name} is too large (max 2MB)`); return; }
+      if (file.size === 0) { showNotif(`⚠️ ${file.name} is empty`); return; }
       const reader = new FileReader();
       reader.onload = (ev) => {
         const content = ev.target?.result as string;
+        if (!content || content.trim().length === 0) {
+          showNotif(`⚠️ ${file.name} has no content`);
+          return;
+        }
         const entry: FileEntry = {
           id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
           name: file.name.replace(/\.html?$/i, ''),
@@ -514,7 +522,12 @@ export default function Room() {
         showNotif(`✅ Uploaded: ${entry.name}`);
       };
       reader.onerror = () => showNotif(`⚠️ Failed to read ${file.name}`);
-      reader.readAsText(file);
+      reader.onabort = () => showNotif(`⚠️ Upload of ${file.name} was cancelled`);
+      try {
+        reader.readAsText(file);
+      } catch (err) {
+        showNotif(`⚠️ Cannot read ${file.name}: ${err}`);
+      }
     });
     e.target.value = '';
   };
@@ -527,9 +540,14 @@ export default function Room() {
     if (droppedFiles.length === 0) { showNotif("⚠️ Only .html files please"); return; }
     droppedFiles.forEach((file: File) => {
       if (file.size > 2 * 1024 * 1024) { showNotif(`⚠️ ${file.name} is too large (max 2MB)`); return; }
+      if (file.size === 0) { showNotif(`⚠️ ${file.name} is empty`); return; }
       const reader = new FileReader();
       reader.onload = (ev) => {
         const content = ev.target?.result as string;
+        if (!content || content.trim().length === 0) {
+          showNotif(`⚠️ ${file.name} has no content`);
+          return;
+        }
         const entry: FileEntry = {
           id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
           name: file.name.replace(/\.html?$/i, ''),
@@ -542,7 +560,12 @@ export default function Room() {
         showNotif(`✅ Uploaded: ${entry.name}`);
       };
       reader.onerror = () => showNotif(`⚠️ Failed to read ${file.name}`);
-      reader.readAsText(file);
+      reader.onabort = () => showNotif(`⚠️ Upload of ${file.name} was cancelled`);
+      try {
+        reader.readAsText(file);
+      } catch (err) {
+        showNotif(`⚠️ Cannot read ${file.name}: ${err}`);
+      }
     });
   };
 
