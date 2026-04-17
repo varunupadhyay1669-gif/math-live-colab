@@ -38,7 +38,7 @@ export default function AnnotationLayer({
   const animFrameRef = useRef<number>();
   const localLaserRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
 
-  const getCanvasCoords = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
+  const getCanvasCoords = useCallback((e: React.PointerEvent<HTMLCanvasElement> | React.MouseEvent<HTMLCanvasElement>) => {
     const canvas = canvasRef.current;
     if (!canvas) return { x: 0, y: 0 };
     const rect = canvas.getBoundingClientRect();
@@ -154,26 +154,34 @@ export default function AnnotationLayer({
     };
   }, [socket, renderStrokes]);
 
-  // ── Drawing handlers ──
-  const startDraw = (e: React.MouseEvent<HTMLCanvasElement>) => {
+  // ── Drawing handlers (Pointer Events — supports mouse, pen tablet, and touch) ──
+  const startDraw = (e: React.PointerEvent<HTMLCanvasElement>) => {
     if (!interactive) return;
-    const isRightClick = e.button === 2 || e.buttons === 2;
+    // Right-click = transient highlight (mouse only; pen tablets use barrel button which also maps to button 2)
+    const isRightClick = e.button === 2;
     if (!drawMode && !laserMode) return;
     if (!drawMode && !isRightClick) return;
+    // Capture the pointer so we keep receiving events even if the pen moves
+    // outside the canvas bounds mid-stroke (crucial for pen tablets with
+    // mapped regions that don't match 1:1)
+    try { (e.currentTarget as HTMLCanvasElement).setPointerCapture(e.pointerId); } catch {}
     isDrawingRef.current = true;
     const pt = getCanvasCoords(e);
     currentStrokeRef.current = [pt];
     isTransientRef.current = isRightClick ? true : (drawMode && penType === 'transient');
   };
 
-  const moveDraw = (e: React.MouseEvent<HTMLCanvasElement>) => {
+  const moveDraw = (e: React.PointerEvent<HTMLCanvasElement>) => {
     if (!isDrawingRef.current) return;
     const pt = getCanvasCoords(e);
     currentStrokeRef.current.push(pt);
     renderStrokes();
   };
 
-  const endDraw = () => {
+  const endDraw = (e?: React.PointerEvent<HTMLCanvasElement>) => {
+    if (e) {
+      try { (e.currentTarget as HTMLCanvasElement).releasePointerCapture(e.pointerId); } catch {}
+    }
     if (!isDrawingRef.current) return;
     isDrawingRef.current = false;
     const points = currentStrokeRef.current;
@@ -185,7 +193,7 @@ export default function AnnotationLayer({
     currentStrokeRef.current = [];
   };
 
-  const handleMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
+  const handlePointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
     moveDraw(e);
     if (!interactive || (!laserMode && !drawMode)) return;
     const canvas = canvasRef.current;
@@ -199,9 +207,10 @@ export default function AnnotationLayer({
     }
   };
 
-  const handleMouseLeave = () => {
-    endDraw();
-    if (interactive && socket) {
+  const handlePointerLeave = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    // Don't end stroke here — pointer capture keeps the stroke alive.
+    // Only clear the laser pointer broadcast (not while drawing).
+    if (!isDrawingRef.current && interactive && socket) {
       socket.emit('laser_pointer', { roomId, x: 0, y: 0, active: false });
     }
   };
@@ -227,12 +236,16 @@ export default function AnnotationLayer({
         style={{
           cursor: interactive ? (drawMode ? 'crosshair' : laserMode ? 'none' : 'default') : 'default',
           pointerEvents: interactive && (drawMode || laserMode) ? 'auto' : 'none',
+          // Prevent the browser from handling the pointer for scroll/pinch/pan —
+          // required so pen tablets and touch screens deliver events to our handlers
+          touchAction: 'none',
           zIndex: 10,
         }}
-        onMouseDown={startDraw}
-        onMouseMove={handleMouseMove}
-        onMouseUp={endDraw}
-        onMouseLeave={handleMouseLeave}
+        onPointerDown={startDraw}
+        onPointerMove={handlePointerMove}
+        onPointerUp={endDraw}
+        onPointerCancel={endDraw}
+        onPointerLeave={handlePointerLeave}
         onContextMenu={(e) => e.preventDefault()}
         onWheel={(e) => {
           if (iframeRef.current?.contentWindow) {

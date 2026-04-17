@@ -371,13 +371,9 @@ export default function Room() {
       setLeaderboard(lb);
     });
 
-    // ── Room Hard Reset ──
-    newSocket.on("room_reset", () => {
-      setFiles([]);
-      setActiveFileId(null);
-      setHtmlCode("");
-      setPreviewHtml("");
-      setIframeUrl("");
+    // ── Room Hard Reset (files are PRESERVED — only progress/session state is cleared) ──
+    newSocket.on("room_reset", (payload?: { activeFileId?: string | null; files?: FileEntry[]; lastRunHtml?: string | null }) => {
+      // Clear session progress/state
       setChatMessages([]);
       setCursors({});
       setCurrentStep(1);
@@ -391,7 +387,18 @@ export default function Room() {
       setStudentFeedback([]);
       setAttention({});
       setAttentionAcks([]);
-      showNotif("🔄 Session reset — all content cleared");
+      // Keep uploaded files — sync from server's authoritative state if provided
+      if (payload?.files) setFiles(payload.files);
+      if (payload?.activeFileId !== undefined) setActiveFileId(payload.activeFileId);
+      // Reload the active file into preview so it starts fresh from the top
+      if (payload?.activeFileId && payload.files) {
+        const active = payload.files.find(f => f.id === payload.activeFileId);
+        if (active) {
+          setHtmlCode(active.html);
+          setPreviewHtml(active.html);
+        }
+      }
+      showNotif("🔄 Session reset — starting from the beginning");
     });
 
     return () => { newSocket.disconnect(); };
@@ -531,7 +538,7 @@ export default function Room() {
 
   const handleHardReset = () => {
     if (!socket) return;
-    const ok = window.confirm("⚠️ Hard Reset\n\nThis will clear ALL content for everyone:\n• All uploaded files\n• Chat history\n• Step locks & gates\n• Zoom & scroll state\n\nThis cannot be undone. Continue?");
+    const ok = window.confirm("🔄 Reset Session\n\nThis will start the lesson over from the beginning:\n• Chat history cleared\n• Steps reset to 1\n• All gates & quiz answers cleared\n• XP & leaderboard cleared\n• Everyone scrolled back to top\n\n✅ Uploaded files are kept safe.\n\nContinue?");
     if (!ok) return;
     socket.emit("hard_reset", { roomId });
   };

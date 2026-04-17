@@ -606,7 +606,9 @@ async function startServer() {
     });
 
     socket.on('draw_clear', ({ roomId }: { roomId: string }) => {
-      socket.to(roomId).emit('draw_clear');
+      // Broadcast to the FULL room including sender — the teacher who
+      // pressed Clear also needs their own canvas cleared.
+      io.to(roomId).emit('draw_clear');
     });
 
     // ─── LASER POINTER ───
@@ -752,23 +754,30 @@ async function startServer() {
     });
 
     // ─── HARD RESET (teacher only) ───
+    // Resets session progress but PRESERVES uploaded content (files, activeFile,
+    // lastRunHtml) so teachers don't lose their lesson material. The effect is
+    // "start from the beginning": chat cleared, steps reset, gates/scores cleared,
+    // scroll to top, unpaused.
     socket.on('hard_reset', ({ roomId }: { roomId: string }) => {
       const room = rooms.get(roomId);
       if (!room) return;
       if (room.teacherSocketId !== socket.id) return; // Only teacher
-      room.files = [];
-      room.activeFileId = null;
-      room.lastRunHtml = null;
       room.chat = [];
       room.currentStep = 1;
       room.gates = {};
       room.isPaused = false;
       room.scores = {};
-      room.pendingSyncStudents = [];
       updateRoomActivity(roomId);
-      io.to(roomId).emit('room_reset');
+      io.to(roomId).emit('room_reset', {
+        // Include preserved content so clients can restore it after clearing local state
+        activeFileId: room.activeFileId,
+        files: room.files,
+        lastRunHtml: room.lastRunHtml,
+      });
       io.to(roomId).emit('leaderboard_update', []);
-      console.log(`🔄 Room ${roomId}: Hard reset by teacher`);
+      // Also scroll everyone to top for a clean start
+      io.to(roomId).emit('reset_view');
+      console.log(`🔄 Room ${roomId}: Session reset by teacher (content preserved)`);
     });
 
     // ─── KICK USER ───

@@ -421,13 +421,9 @@ export default function StudentView() {
       }
     });
 
-    // ── Hard Reset ──
-    newSocket.on("room_reset", () => {
-      setCurrentHtml("");
-      setIframeUrl("");
-      setCurrentFileName("");
-      setFiles([]);
-      setActiveFileId(null);
+    // ── Hard Reset (content preserved — only session progress is cleared) ──
+    newSocket.on("room_reset", (payload?: { activeFileId?: string | null; files?: FileEntry[]; lastRunHtml?: string | null }) => {
+      // Clear session progress/state
       setChatMessages([]);
       setCursors({});
       setCurrentStep(999);
@@ -438,7 +434,21 @@ export default function StudentView() {
       setLeaderboard([]);
       setQuizModal(null);
       setGateModal(null);
-      showNotification("🔄 Teacher reset the session");
+      // Keep uploaded files list in sync with authoritative server state
+      if (payload?.files) setFiles(payload.files);
+      if (payload?.activeFileId !== undefined) setActiveFileId(payload.activeFileId);
+      // Reload the active file into preview so it restarts fresh from the top —
+      // but DO NOT blank out the iframe (content stays visible)
+      if (payload?.activeFileId && payload.files) {
+        const active = payload.files.find(f => f.id === payload.activeFileId);
+        if (active) {
+          setCurrentHtml(active.html);
+          setCurrentFileName(active.name);
+        }
+      } else if (payload?.lastRunHtml) {
+        setCurrentHtml(payload.lastRunHtml);
+      }
+      showNotification("🔄 Teacher restarted the session");
     });
 
     return () => {
