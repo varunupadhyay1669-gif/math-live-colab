@@ -16,6 +16,7 @@ import CursorOverlay from "../components/CursorOverlay";
 import AnnotationLayer from "../components/AnnotationLayer";
 import StepGate from "../components/StepGate";
 import ConnectionStatus from "../components/ConnectionStatus";
+import Leaderboard from "../components/Leaderboard";
 
 // ── Types ──
 interface FileEntry {
@@ -96,6 +97,18 @@ export default function StudentView() {
 
   // ── Scroll Sync ──
   const [scrollSyncEnabled, setScrollSyncEnabled] = useState(true);
+
+  // ── Zoom Sync (read-only; controlled by teacher) ──
+  const [zoomLevel, setZoomLevel] = useState(1);
+
+  // ── Gamification ──
+  const [myXp, setMyXp] = useState(0);
+  const [myStreak, setMyStreak] = useState(0);
+  const [myLevel, setMyLevel] = useState(1);
+  const [xpFloater, setXpFloater] = useState<{ id: number; amount: number } | null>(null);
+  const [levelUpBanner, setLevelUpBanner] = useState(false);
+  const [leaderboard, setLeaderboard] = useState<Array<{ studentName: string; xp: number; streak: number }>>([]);
+  const [showLeaderboard, setShowLeaderboard] = useState(false);
 
   // ── Student Interaction Mode ──
   const [interactionAllowed, setInteractionAllowed] = useState(false);
@@ -273,6 +286,10 @@ export default function StudentView() {
     });
 
     newSocket.on("interaction", (event: any) => {
+      // Track zoom level so we can re-apply on iframe reload
+      if (event.type === "SYNC_ZOOM" && typeof event.zoom === 'number') {
+        setZoomLevel(event.zoom);
+      }
       if (event.type === "SYNC_CURSOR") {
         setCursors(prev => ({
           ...prev,
@@ -372,6 +389,58 @@ export default function StudentView() {
       setTimeout(() => navigate("/"), 2000);
     });
 
+    // ── Gamification ──
+    newSocket.on("gate_result", ({ correct, xpGained, xp, streak, level, levelUp }: {
+      correct: boolean; xpGained?: number; xp?: number; streak?: number; level?: number; levelUp?: boolean;
+    }) => {
+      if (correct && xpGained && xpGained > 0) {
+        setMyXp(xp || 0);
+        setMyStreak(streak || 0);
+        setMyLevel(level || 1);
+        setXpFloater({ id: Date.now(), amount: xpGained });
+        setTimeout(() => setXpFloater(null), 1800);
+        sounds.success();
+        if (levelUp) {
+          setLevelUpBanner(true);
+          sounds.celebration();
+          setTimeout(() => setLevelUpBanner(false), 3500);
+        }
+      } else if (!correct) {
+        setMyStreak(0);
+      }
+    });
+
+    newSocket.on("leaderboard_update", (lb: Array<{ studentName: string; xp: number; streak: number }>) => {
+      setLeaderboard(lb);
+      // Keep student's own stats in sync from authoritative server data
+      const mine = lb.find(e => e.studentName === studentName);
+      if (mine) {
+        setMyXp(mine.xp);
+        setMyStreak(mine.streak);
+        setMyLevel(Math.floor(mine.xp / 100) + 1);
+      }
+    });
+
+    // ── Hard Reset ──
+    newSocket.on("room_reset", () => {
+      setCurrentHtml("");
+      setIframeUrl("");
+      setCurrentFileName("");
+      setFiles([]);
+      setActiveFileId(null);
+      setChatMessages([]);
+      setCursors({});
+      setCurrentStep(999);
+      setZoomLevel(1);
+      setMyXp(0);
+      setMyStreak(0);
+      setMyLevel(1);
+      setLeaderboard([]);
+      setQuizModal(null);
+      setGateModal(null);
+      showNotification("🔄 Teacher reset the session");
+    });
+
     return () => {
       cleanupAttention?.();
       if (attentionTimeoutRef.current) clearTimeout(attentionTimeoutRef.current);
@@ -441,7 +510,16 @@ export default function StudentView() {
     if (currentStep < 999) {
       iframeRef.current?.contentWindow?.postMessage({ type: 'SET_STEP', step: currentStep }, '*');
     }
-  }, [scrollSyncEnabled, currentStep]);
+    if (zoomLevel !== 1) {
+      // Use REMOTE_ZOOM on student side so it applies silently without echoing back
+      iframeRef.current?.contentWindow?.postMessage({ type: 'REMOTE_ZOOM', zoom: zoomLevel }, '*');
+    }
+  }, [scrollSyncEnabled, currentStep, zoomLevel]);
+
+  // Re-push zoom when level changes
+  useEffect(() => {
+    postToIframe({ type: 'REMOTE_ZOOM', zoom: zoomLevel });
+  }, [zoomLevel, postToIframe]);
 
   // ── Relay iframe messages ──
   useEffect(() => {
@@ -534,6 +612,60 @@ export default function StudentView() {
         </div>
 
         <div className="header-section">
+          {/* ── XP Badge ── */}
+          <button onClick={() => setShowLeaderboard(true)}
+            className="flex items-center gap-2 px-2.5 py-1 rounded-full transition-all"
+            data-tip="View leaderboard"
+            style={{
+              background: 'linear-gradient(135deg, rgba(99,102,241,0.12), rgba(139,92,246,0.12))',
+              border: '1px solid rgba(99,102,241,0.25)',
+              cursor: 'pointer',
+              position: 'relative',
+            }}
+            onMouseEnter={e => (e.currentTarget.style.transform = 'translateY(-1px)')}
+            onMouseLeave={e => (e.currentTarget.style.transform = 'translateY(0)')}
+          >
+            <span style={{ fontSize: 11, fontWeight: 800, color: '#6366F1', letterSpacing: 0.5 }}>
+              LVL {myLevel}
+            </span>
+            <div style={{ width: 40, height: 4, borderRadius: 2, background: 'rgba(99,102,241,0.15)', overflow: 'hidden' }}>
+              <div style={{
+                width: `${myXp % 100}%`,
+                height: '100%',
+                background: 'linear-gradient(90deg, #6366F1, #8B5CF6)',
+                transition: 'width 0.5s cubic-bezier(.34,1.56,.64,1)',
+              }} />
+            </div>
+            <span style={{ fontSize: 11, fontWeight: 800, color: '#6366F1', fontVariantNumeric: 'tabular-nums' }}>
+              {myXp} XP
+            </span>
+            {myStreak >= 2 && (
+              <span style={{ fontSize: 11, fontWeight: 700, color: '#F59E0B', marginLeft: 2 }}>
+                🔥{myStreak}
+              </span>
+            )}
+            {/* Floating +XP animation */}
+            {xpFloater && (
+              <span
+                key={xpFloater.id}
+                style={{
+                  position: 'absolute',
+                  top: -10, right: 8,
+                  fontSize: 13,
+                  fontWeight: 800,
+                  color: '#10B981',
+                  pointerEvents: 'none',
+                  animation: 'xpFloat 1.8s cubic-bezier(.34,1.56,.64,1) forwards',
+                  textShadow: '0 1px 2px rgba(255,255,255,0.9)',
+                }}
+              >
+                +{xpFloater.amount}
+              </span>
+            )}
+          </button>
+
+          <div className="header-divider" />
+
           {/* View-only / Interactive indicator */}
           <span className="status-pill" style={{
             background: interactionAllowed ? 'var(--accent-emerald-light)' : 'var(--accent-indigo-light)',
@@ -817,6 +949,37 @@ export default function StudentView() {
           </div>
         </div>
       )}
+
+      {/* ══════ LEVEL-UP BANNER ══════ */}
+      {levelUpBanner && (
+        <div className="fixed inset-0 z-[60] pointer-events-none flex items-center justify-center">
+          <div
+            className="px-8 py-6 rounded-2xl text-center"
+            style={{
+              background: 'linear-gradient(135deg, #6366F1 0%, #8B5CF6 50%, #EC4899 100%)',
+              color: '#fff',
+              boxShadow: '0 40px 120px rgba(99,102,241,0.5), 0 0 0 1px rgba(255,255,255,0.15) inset',
+              animation: 'levelUpPop 3.5s cubic-bezier(.34,1.56,.64,1) forwards',
+            }}
+          >
+            <div style={{ fontSize: 52, lineHeight: 1 }}>⭐</div>
+            <div style={{ fontSize: 12, fontWeight: 800, letterSpacing: 2, opacity: 0.9, marginTop: 8 }}>
+              LEVEL UP!
+            </div>
+            <div style={{ fontSize: 32, fontWeight: 900, marginTop: 4 }}>
+              Level {myLevel}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ══════ LEADERBOARD ══════ */}
+      <Leaderboard
+        entries={leaderboard}
+        open={showLeaderboard}
+        onClose={() => setShowLeaderboard(false)}
+        currentStudentName={studentName}
+      />
     </div>
   );
 }

@@ -161,6 +161,23 @@ export const injectedSyncScript = `
     var scrollSyncEnabled = true;
     var lastScroll = 0;
 
+    // ── Zoom sync ──
+    var currentZoom = 1;
+    function _applyZoom(z) {
+      currentZoom = z;
+      var root = document.documentElement;
+      // Prefer CSS zoom (fast, preserves layout; widely supported in Chromium, Safari, Edge)
+      try {
+        root.style.zoom = String(z);
+      } catch(e) {}
+      // Firefox doesn't support CSS zoom — use transform scale as fallback
+      if (!('zoom' in root.style)) {
+        root.style.transformOrigin = '0 0';
+        root.style.transform = z === 1 ? '' : 'scale(' + z + ')';
+        root.style.width = z === 1 ? '' : (100 / z) + '%';
+      }
+    }
+
     // Find a meaningful anchor element near the top of the visible area
     var _lastAnchorTime = 0;
     var _lastAnchorResult = null;
@@ -455,6 +472,17 @@ export const injectedSyncScript = `
         } catch(ignore) {}
         // AUTONOMOUS: [ORDER-1] Use delayed exit for smooth scroll animation duration
         setTimeout(function() { exitRemote(); }, 600);
+      } else if (data.type === 'SET_ZOOM') {
+        // Teacher-initiated zoom: apply + broadcast via SYNC_ZOOM
+        var z = Math.max(0.5, Math.min(3, Number(data.zoom) || 1));
+        _applyZoom(z);
+        window.parent.postMessage({ type: 'SYNC_ZOOM', zoom: z }, '*');
+      } else if (data.type === 'REMOTE_ZOOM') {
+        // Student receives zoom from teacher — apply silently (no echo)
+        var z2 = Math.max(0.5, Math.min(3, Number(data.zoom) || 1));
+        enterRemote();
+        try { _applyZoom(z2); } catch(e) {}
+        setTimeout(function() { exitRemote(); }, 200);
       } else if (data.type === 'SET_SCROLL_SYNC') {
         scrollSyncEnabled = !!data.enabled;
       } else if (data.type === 'SET_INTERACTION_MODE') {

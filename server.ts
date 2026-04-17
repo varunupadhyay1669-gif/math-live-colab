@@ -33,6 +33,8 @@ interface RoomData {
   password: string | null;
   // Students waiting for HTML sync from teacher (joined before teacher's DOM capture arrives)
   pendingSyncStudents: string[];
+  // Gamification: track XP and streaks per student name (keyed by studentName for persistence across reconnects)
+  scores: Record<string, { xp: number; streak: number; bestStreak: number; correct: number; total: number }>;
 }
 
 async function startServer() {
@@ -129,6 +131,7 @@ async function startServer() {
       studentInteractionAllowed: false, // View-only by default
       password: null,
       pendingSyncStudents: [],
+      scores: {},
     };
   }
 
@@ -155,6 +158,7 @@ async function startServer() {
       scrollSyncEnabled: room.scrollSyncEnabled,
       studentInteractionAllowed: room.studentInteractionAllowed,
       password: room.password,
+      scores: room.scores,
     };
   }
 
@@ -203,6 +207,7 @@ async function startServer() {
           room.scrollSyncEnabled = raw.scrollSyncEnabled !== false;
           room.studentInteractionAllowed = !!raw.studentInteractionAllowed;
           room.password = raw.password || null;
+          room.scores = raw.scores || {};
           rooms.set(raw.roomId, room);
           restored++;
         } catch { fs.unlinkSync(filePath); cleaned++; }
@@ -701,12 +706,69 @@ async function startServer() {
       const gate = room.gates[step];
       if (!gate) { socket.emit('gate_result', { correct: false }); return; }
       const isCorrect = gate.correctIndex === answerIndex;
-      socket.emit('gate_result', { correct: isCorrect });
+
+      // ── Gamification: update XP & streaks ──
+      const name = (studentName || 'Student').trim().slice(0, 40);
+      if (!room.scores[name]) {
+        room.scores[name] = { xp: 0, streak: 0, bestStreak: 0, correct: 0, total: 0 };
+      }
+      const s = room.scores[name];
+      s.total += 1;
+      let xpGained = 0;
+      let levelUp = false;
+      if (isCorrect) {
+        s.streak += 1;
+        s.correct += 1;
+        // Base 10 XP + streak bonus (capped)
+        xpGained = 10 + Math.min(s.streak - 1, 10) * 2;
+        const oldLevel = Math.floor(s.xp / 100);
+        s.xp += xpGained;
+        const newLevel = Math.floor(s.xp / 100);
+        levelUp = newLevel > oldLevel;
+        if (s.streak > s.bestStreak) s.bestStreak = s.streak;
+      } else {
+        s.streak = 0;
+      }
+
+      socket.emit('gate_result', {
+        correct: isCorrect,
+        xpGained,
+        xp: s.xp,
+        streak: s.streak,
+        level: Math.floor(s.xp / 100) + 1,
+        levelUp,
+      });
       if (room.teacherSocketId) {
         io.to(room.teacherSocketId).emit('gate_answered', {
-          studentName, step, correct: isCorrect,
+          studentName: name, step, correct: isCorrect, xpGained, streak: s.streak, xp: s.xp,
         });
       }
+      // Broadcast leaderboard to everyone in room
+      const leaderboard = Object.entries(room.scores)
+        .map(([n, sc]) => ({ studentName: n, xp: sc.xp, streak: sc.streak, bestStreak: sc.bestStreak, correct: sc.correct, total: sc.total }))
+        .sort((a, b) => b.xp - a.xp)
+        .slice(0, 20);
+      io.to(roomId).emit('leaderboard_update', leaderboard);
+    });
+
+    // ─── HARD RESET (teacher only) ───
+    socket.on('hard_reset', ({ roomId }: { roomId: string }) => {
+      const room = rooms.get(roomId);
+      if (!room) return;
+      if (room.teacherSocketId !== socket.id) return; // Only teacher
+      room.files = [];
+      room.activeFileId = null;
+      room.lastRunHtml = null;
+      room.chat = [];
+      room.currentStep = 1;
+      room.gates = {};
+      room.isPaused = false;
+      room.scores = {};
+      room.pendingSyncStudents = [];
+      updateRoomActivity(roomId);
+      io.to(roomId).emit('room_reset');
+      io.to(roomId).emit('leaderboard_update', []);
+      console.log(`🔄 Room ${roomId}: Hard reset by teacher`);
     });
 
     // ─── KICK USER ───

@@ -21,6 +21,7 @@ import AttentionIndicator from "../components/AttentionIndicator";
 import UserList from "../components/UserList";
 import SimulationLibrary from "../components/SimulationLibrary";
 import ConnectionStatus from "../components/ConnectionStatus";
+import Leaderboard from "../components/Leaderboard";
 
 // ── Types ──
 interface FileEntry {
@@ -130,6 +131,13 @@ export default function Room() {
 
   // ── Scroll Sync ──
   const [scrollSyncEnabled, setScrollSyncEnabled] = useState(true);
+
+  // ── Zoom Sync ──
+  const [zoomLevel, setZoomLevel] = useState(1);
+
+  // ── Gamification ──
+  const [leaderboard, setLeaderboard] = useState<Array<{ studentName: string; xp: number; streak: number }>>([]);
+  const [showLeaderboard, setShowLeaderboard] = useState(false);
 
   // ── Student Interaction Mode ──
   const [studentInteractionAllowed, setStudentInteractionAllowed] = useState(false);
@@ -358,6 +366,34 @@ export default function Room() {
       if (correct) sounds.success();
     });
 
+    // ── Gamification ──
+    newSocket.on("leaderboard_update", (lb: Array<{ studentName: string; xp: number; streak: number }>) => {
+      setLeaderboard(lb);
+    });
+
+    // ── Room Hard Reset ──
+    newSocket.on("room_reset", () => {
+      setFiles([]);
+      setActiveFileId(null);
+      setHtmlCode("");
+      setPreviewHtml("");
+      setIframeUrl("");
+      setChatMessages([]);
+      setCursors({});
+      setCurrentStep(1);
+      setMaxStep(0);
+      setGates({});
+      setStepLockEnabled(false);
+      setZoomLevel(1);
+      setLeaderboard([]);
+      setQuizAnswers([]);
+      setHandRaised(null);
+      setStudentFeedback([]);
+      setAttention({});
+      setAttentionAcks([]);
+      showNotif("🔄 Session reset — all content cleared");
+    });
+
     return () => { newSocket.disconnect(); };
   }, [roomId, navigate, teacherName]);
 
@@ -389,7 +425,10 @@ export default function Room() {
     if (stepLockEnabled && currentStep) {
       iframeRef.current?.contentWindow?.postMessage({ type: 'SET_STEP', step: currentStep }, '*');
     }
-  }, [scrollSyncEnabled, stepLockEnabled, currentStep]);
+    if (zoomLevel !== 1) {
+      iframeRef.current?.contentWindow?.postMessage({ type: 'SET_ZOOM', zoom: zoomLevel }, '*');
+    }
+  }, [scrollSyncEnabled, stepLockEnabled, currentStep, zoomLevel]);
 
   // ── Relay iframe messages ──
   useEffect(() => {
@@ -480,6 +519,22 @@ export default function Room() {
   useEffect(() => {
     postToIframe({ type: 'SET_SCROLL_SYNC', enabled: scrollSyncEnabled });
   }, [scrollSyncEnabled, iframeUrl, postToIframe]);
+
+  // ── Zoom: push to iframe when level changes ──
+  useEffect(() => {
+    postToIframe({ type: 'SET_ZOOM', zoom: zoomLevel });
+  }, [zoomLevel, postToIframe]);
+
+  const handleZoomIn = () => setZoomLevel(z => Math.min(3, +(z + 0.1).toFixed(2)));
+  const handleZoomOut = () => setZoomLevel(z => Math.max(0.5, +(z - 0.1).toFixed(2)));
+  const handleZoomReset = () => setZoomLevel(1);
+
+  const handleHardReset = () => {
+    if (!socket) return;
+    const ok = window.confirm("⚠️ Hard Reset\n\nThis will clear ALL content for everyone:\n• All uploaded files\n• Chat history\n• Step locks & gates\n• Zoom & scroll state\n\nThis cannot be undone. Continue?");
+    if (!ok) return;
+    socket.emit("hard_reset", { roomId });
+  };
 
   // ── Attention timestamp updater ──
   useEffect(() => {
@@ -1095,6 +1150,13 @@ export default function Room() {
               onToggleStudentInteraction={toggleStudentInteraction}
               onResetView={resetView}
               onAttentionCheck={sendAttentionCheck}
+              zoomLevel={zoomLevel}
+              onZoomIn={handleZoomIn}
+              onZoomOut={handleZoomOut}
+              onZoomReset={handleZoomReset}
+              onHardReset={handleHardReset}
+              leaderboardCount={leaderboard.length}
+              onToggleLeaderboard={() => setShowLeaderboard(v => !v)}
             />
 
             {/* Step Controls */}
@@ -1261,6 +1323,13 @@ export default function Room() {
         onLoad={handleLoadFromLibrary}
         currentHtml={previewHtml}
         currentName={activeFile?.name}
+      />
+
+      {/* ═══ LEADERBOARD ═══ */}
+      <Leaderboard
+        entries={leaderboard}
+        open={showLeaderboard}
+        onClose={() => setShowLeaderboard(false)}
       />
     </div>
   );

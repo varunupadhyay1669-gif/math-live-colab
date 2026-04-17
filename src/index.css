@@ -605,6 +605,28 @@ h1, h2, h3, h4, .font-display {
 .animate-float { animation: gentle-bounce 3s ease-in-out infinite; }
 .animate-float-slow { animation: gentle-bounce 5s ease-in-out infinite; }
 
+/* Gamification animations */
+@keyframes xpFloat {
+  0% { opacity: 0; transform: translateY(0) scale(0.8); }
+  15% { opacity: 1; transform: translateY(-6px) scale(1.15); }
+  70% { opacity: 1; transform: translateY(-28px) scale(1); }
+  100% { opacity: 0; transform: translateY(-42px) scale(0.9); }
+}
+@keyframes levelUpPop {
+  0% { opacity: 0; transform: scale(0.3) rotate(-8deg); }
+  30% { opacity: 1; transform: scale(1.08) rotate(2deg); }
+  45% { transform: scale(0.98) rotate(-1deg); }
+  60% { transform: scale(1.02) rotate(0.5deg); }
+  75% { transform: scale(1) rotate(0deg); }
+  90% { opacity: 1; transform: scale(1); }
+  100% { opacity: 0; transform: scale(0.85); }
+}
+@keyframes scale-in {
+  from { opacity: 0; transform: scale(0.92); }
+  to { opacity: 1; transform: scale(1); }
+}
+.animate-scale-in { animation: scale-in 0.25s cubic-bezier(.34,1.56,.64,1) forwards; }
+
 .gradient-text {
   background: var(--gradient-primary);
   background-size: 200% 200%;
