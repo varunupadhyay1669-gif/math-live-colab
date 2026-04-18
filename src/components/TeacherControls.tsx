@@ -42,7 +42,8 @@ interface TeacherControlsProps {
   leaderboardCount: number;
   onToggleLeaderboard: () => void;
   // Whiteboard
-  onOpenWhiteboard: () => void;
+  onToggleWhiteboard: () => void;
+  whiteboardMode: boolean;
 }
 
 const PEN_COLORS = ['#5B5FE6', '#0F1117', '#10B981', '#0EA5E9', '#EF4444', '#F59E0B'];
@@ -61,7 +62,7 @@ export default function TeacherControls({
   onResetView, onAttentionCheck,
   zoomLevel, onZoomIn, onZoomOut, onZoomReset,
   onHardReset, leaderboardCount, onToggleLeaderboard,
-  onOpenWhiteboard,
+  onToggleWhiteboard, whiteboardMode,
 }: TeacherControlsProps) {
   const [showTimerMenu, setShowTimerMenu] = useState(false);
   const [showReactionMenu, setShowReactionMenu] = useState(false);
@@ -215,7 +216,7 @@ export default function TeacherControls({
           </svg>
         </button>
 
-        <button onClick={onOpenWhiteboard} className="tb-btn active-indigo" data-tip="Open whiteboard">
+        <button onClick={onToggleWhiteboard} className={`tb-btn ${whiteboardMode ? 'active-indigo' : ''}`} data-tip={whiteboardMode ? 'Exit whiteboard' : 'Open whiteboard'}>
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
             <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
             <circle cx="8.5" cy="8.5" r="1.5"/>

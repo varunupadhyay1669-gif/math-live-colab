@@ -141,7 +141,10 @@ export default function Room() {
   const [showLeaderboard, setShowLeaderboard] = useState(false);
 
   // ── Whiteboard ──
-  const [showWhiteboard, setShowWhiteboard] = useState(false);
+  const [whiteboardMode, setWhiteboardMode] = useState(false);
+  const [whiteboardScrollX, setWhiteboardScrollX] = useState(0);
+  const [whiteboardScrollY, setWhiteboardScrollY] = useState(0);
+  const whiteboardRef = useRef<import('../components/Whiteboard').WhiteboardRef>(null);
 
   // ── Student Interaction Mode ──
   const [studentInteractionAllowed, setStudentInteractionAllowed] = useState(false);
@@ -536,9 +539,20 @@ export default function Room() {
     postToIframe({ type: 'SET_ZOOM', zoom: zoomLevel });
   }, [zoomLevel, postToIframe]);
 
-  const handleZoomIn = () => setZoomLevel(z => Math.min(3, +(z + 0.1).toFixed(2)));
-  const handleZoomOut = () => setZoomLevel(z => Math.max(0.5, +(z - 0.1).toFixed(2)));
-  const handleZoomReset = () => setZoomLevel(1);
+  const handleZoomIn = () => {
+    const newZoom = Math.min(3, +(zoomLevel + 0.1).toFixed(2));
+    setZoomLevel(newZoom);
+    if (socket) socket.emit('zoom_changed', { roomId, zoom: newZoom });
+  };
+  const handleZoomOut = () => {
+    const newZoom = Math.max(0.5, +(zoomLevel - 0.1).toFixed(2));
+    setZoomLevel(newZoom);
+    if (socket) socket.emit('zoom_changed', { roomId, zoom: newZoom });
+  };
+  const handleZoomReset = () => {
+    setZoomLevel(1);
+    if (socket) socket.emit('zoom_changed', { roomId, zoom: 1 });
+  };
 
   const handleHardReset = () => {
     if (!socket) return;
@@ -1168,7 +1182,14 @@ export default function Room() {
               onHardReset={handleHardReset}
               leaderboardCount={leaderboard.length}
               onToggleLeaderboard={() => setShowLeaderboard(v => !v)}
-              onOpenWhiteboard={() => setShowWhiteboard(true)}
+              onToggleWhiteboard={() => {
+                const newMode = !whiteboardMode;
+                setWhiteboardMode(newMode);
+                if (socket) {
+                  socket.emit('whiteboard_mode_toggle', { roomId, active: newMode });
+                }
+              }}
+              whiteboardMode={whiteboardMode}
             />
 
             {/* Step Controls */}
@@ -1182,9 +1203,21 @@ export default function Room() {
               gates={gates}
             />
 
-            {/* Iframe */}
+            {/* Iframe or Whiteboard */}
             <div className="flex-1 relative overflow-hidden m-3 rounded-xl preview-frame">
-              {iframeUrl ? (
+              {whiteboardMode ? (
+                <Whiteboard
+                  ref={whiteboardRef}
+                  socket={socket}
+                  roomId={roomId!}
+                  isTeacher={true}
+                  interactive={true}
+                  zoomLevel={zoomLevel}
+                  scrollX={whiteboardScrollX}
+                  scrollY={whiteboardScrollY}
+                  isActive={true}
+                />
+              ) : iframeUrl ? (
                 <iframe ref={iframeRef} src={iframeUrl} className="w-full h-full border-none"
                   style={{ background: '#ffffff' }}
                   onLoad={handleIframeLoad}
@@ -1344,15 +1377,6 @@ export default function Room() {
         onClose={() => setShowLeaderboard(false)}
       />
 
-      {/* ═══ WHITEBOARD ═══ */}
-      <Whiteboard
-        socket={socket}
-        roomId={roomId!}
-        isOpen={showWhiteboard}
-        onClose={() => setShowWhiteboard(false)}
-        isTeacher={true}
-        interactive={true}
-      />
     </div>
   );
 }

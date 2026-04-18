@@ -112,7 +112,10 @@ export default function StudentView() {
   const [showLeaderboard, setShowLeaderboard] = useState(false);
 
   // ── Whiteboard ──
-  const [showWhiteboard, setShowWhiteboard] = useState(false);
+  const [whiteboardMode, setWhiteboardMode] = useState(false);
+  const [whiteboardScrollX, setWhiteboardScrollX] = useState(0);
+  const [whiteboardScrollY, setWhiteboardScrollY] = useState(0);
+  const whiteboardRef = useRef<import('../components/Whiteboard').WhiteboardRef>(null);
 
   // ── Student Interaction Mode ──
   const [interactionAllowed, setInteractionAllowed] = useState(false);
@@ -351,6 +354,22 @@ export default function StudentView() {
     newSocket.on("student_interaction_changed", ({ allowed }: { allowed: boolean }) => {
       setInteractionAllowed(allowed);
       showNotification(allowed ? '🖐️ You can now interact with the simulation' : '👁️ View-only mode — teacher is presenting');
+    });
+
+    // ── Whiteboard Mode ──
+    newSocket.on("whiteboard_mode_changed", ({ active }: { active: boolean }) => {
+      setWhiteboardMode(active);
+    });
+
+    // ── Whiteboard Scroll Sync ──
+    newSocket.on("whiteboard_scroll", ({ scrollX, scrollY }: { scrollX: number; scrollY: number }) => {
+      setWhiteboardScrollX(scrollX);
+      setWhiteboardScrollY(scrollY);
+    });
+
+    // ── Zoom Sync ──
+    newSocket.on("zoom_changed", ({ zoom }: { zoom: number }) => {
+      setZoomLevel(zoom);
     });
 
     // ── Reset View ──
@@ -626,7 +645,7 @@ export default function StudentView() {
 
           {/* ── Whiteboard Button ── */}
           <button
-            onClick={() => setShowWhiteboard(true)}
+            onClick={() => setWhiteboardMode(true)}
             className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all hover:scale-105"
             style={{
               background: 'linear-gradient(135deg, rgba(99,102,241,0.12), rgba(139,92,246,0.12))',
@@ -776,8 +795,20 @@ export default function StudentView() {
       <div className="flex-1 flex overflow-hidden relative">
 
         {/* Full-Screen Iframe */}
-        <div className="flex-1 relative">
-          {iframeUrl ? (
+        <div className="flex-1 relative overflow-hidden m-3 rounded-xl" style={{ background: '#ffffff', border: '1px solid var(--border-subtle)' }}>
+          {whiteboardMode ? (
+            <Whiteboard
+              ref={whiteboardRef}
+              socket={socket}
+              roomId={roomId!}
+              isTeacher={false}
+              interactive={interactionAllowed}
+              zoomLevel={zoomLevel}
+              scrollX={whiteboardScrollX}
+              scrollY={whiteboardScrollY}
+              isActive={true}
+            />
+          ) : iframeUrl ? (
             <>
               <iframe
                 ref={iframeRef}
@@ -1020,15 +1051,6 @@ export default function StudentView() {
         currentStudentName={studentName}
       />
 
-      {/* ══════ WHITEBOARD ══════ */}
-      <Whiteboard
-        socket={socket}
-        roomId={roomId!}
-        isOpen={showWhiteboard}
-        onClose={() => setShowWhiteboard(false)}
-        isTeacher={false}
-        interactive={interactionAllowed}
-      />
     </div>
   );
 }

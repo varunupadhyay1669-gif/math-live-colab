@@ -632,6 +632,16 @@ async function startServer() {
       io.to(roomId).emit('whiteboard_reset');
     });
 
+    socket.on('whiteboard_mode_toggle', ({ roomId, active }: { roomId: string; active: boolean }) => {
+      // Broadcast whiteboard mode change to all users in room
+      io.to(roomId).emit('whiteboard_mode_changed', { active });
+    });
+
+    socket.on('whiteboard_scroll', ({ roomId, scrollX, scrollY }: { roomId: string; scrollX: number; scrollY: number }) => {
+      // Broadcast scroll position to all other users in room
+      socket.to(roomId).emit('whiteboard_scroll', { scrollX, scrollY });
+    });
+
     // ─── LASER POINTER ───
     socket.on('laser_pointer', ({ roomId, x, y, active }: { roomId: string; x: number; y: number; active: boolean }) => {
       socket.to(roomId).emit('laser_pointer', { x, y, active });
