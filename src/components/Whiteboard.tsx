@@ -79,41 +79,54 @@ export default function Whiteboard({ socket, roomId, isOpen, onClose, isTeacher,
       ctx.lineWidth = stroke.width;
       ctx.lineCap = 'round';
       ctx.lineJoin = 'round';
-      stroke.points.forEach((p, i) => {
-        if (i === 0) ctx.moveTo(p.x * canvas.width, p.y * canvas.height);
-        else ctx.lineTo(p.x * canvas.width, p.y * canvas.height);
+
+      stroke.points.forEach((point, index) => {
+        const x = point.x * canvas.width;
+        const y = point.y * canvas.height;
+        if (index === 0) {
+          ctx.moveTo(x, y);
+        } else {
+          ctx.lineTo(x, y);
+        }
       });
+
       ctx.stroke();
     });
 
     // Draw current stroke
-    if (currentStroke.length > 1) {
+    if (currentStroke.length > 0) {
       ctx.beginPath();
       ctx.strokeStyle = tool === 'eraser' ? '#ffffff' : color;
       ctx.lineWidth = width;
       ctx.lineCap = 'round';
       ctx.lineJoin = 'round';
-      currentStroke.forEach((p, i) => {
-        if (i === 0) ctx.moveTo(p.x * canvas.width, p.y * canvas.height);
-        else ctx.lineTo(p.x * canvas.width, p.y * canvas.height);
+
+      currentStroke.forEach((point, index) => {
+        const x = point.x * canvas.width;
+        const y = point.y * canvas.height;
+        if (index === 0) {
+          ctx.moveTo(x, y);
+        } else {
+          ctx.lineTo(x, y);
+        }
       });
+
       ctx.stroke();
     }
-  }, [strokes, currentStroke, imageUrl, color, width, tool]);
+  }, [strokes, currentStroke, imageUrl, tool, color, width]);
 
-  // Resize canvas to fit container
+  // Initialize canvas size
   useEffect(() => {
-    if (!isOpen) return;
-    const canvas = canvasRef.current;
-    const container = containerRef.current;
-    if (!canvas || !container) return;
+    if (!isOpen || !containerRef.current || !canvasRef.current) return;
 
     const resize = () => {
+      const container = containerRef.current;
+      const canvas = canvasRef.current;
+      if (!container || !canvas) return;
+
       const rect = container.getBoundingClientRect();
-      canvas.width = rect.width * 2;
-      canvas.height = rect.height * 2;
-      canvas.style.width = rect.width + 'px';
-      canvas.style.height = rect.height + 'px';
+      canvas.width = rect.width;
+      canvas.height = rect.height;
       redrawCanvas();
     };
 
@@ -126,6 +139,48 @@ export default function Whiteboard({ socket, roomId, isOpen, onClose, isTeacher,
   useEffect(() => {
     redrawCanvas();
   }, [redrawCanvas]);
+
+  // Handle clipboard paste for images
+  const handlePaste = useCallback(async (e: ClipboardEvent) => {
+    if (!isOpen) return;
+    
+    const items = e.clipboardData?.items;
+    if (!items) return;
+
+    for (const item of Array.from(items)) {
+      if (item.type.startsWith('image/')) {
+        e.preventDefault();
+        const blob = item.getAsFile();
+        if (!blob) continue;
+
+        const reader = new FileReader();
+        reader.onload = (event) => {
+          const dataUrl = event.target?.result as string;
+          if (dataUrl) {
+            setImageUrl(dataUrl);
+            const img = new Image();
+            img.onload = () => {
+              imageRef.current = img;
+              redrawCanvas();
+            };
+            img.src = dataUrl;
+            if (socket) {
+              socket.emit('whiteboard_set_image', { roomId, imageUrl: dataUrl });
+            }
+          }
+        };
+        reader.readAsDataURL(blob);
+        break; // Only handle first image
+      }
+    }
+  }, [isOpen, roomId, socket, redrawCanvas]);
+
+  // Attach paste listener
+  useEffect(() => {
+    if (!isOpen) return;
+    window.addEventListener('paste', handlePaste);
+    return () => window.removeEventListener('paste', handlePaste);
+  }, [isOpen, handlePaste]);
 
   // Socket event handlers for receiving whiteboard data
   useEffect(() => {
@@ -289,6 +344,11 @@ export default function Whiteboard({ socket, roomId, isOpen, onClose, isTeacher,
                 View Only
               </span>
             )}
+            {isTeacher && (
+              <span className="text-xs px-2 py-1 rounded-full ml-2" style={{ background: 'var(--accent-indigo-light)', color: 'var(--accent-indigo)' }}>
+                Tip: Press Ctrl+V to paste image
+              </span>
+            )}
           </div>
           <div className="flex items-center gap-2">
             {isTeacher && (
@@ -446,8 +506,16 @@ export default function Whiteboard({ socket, roomId, isOpen, onClose, isTeacher,
                   <circle cx="8.5" cy="8.5" r="1.5"/>
                   <polyline points="21 15 16 10 5 21"/>
                 </svg>
-                <p style={{ color: 'var(--text-muted)', fontSize: '14px' }}>
-                  {isTeacher ? 'Upload an image or start drawing' : 'Waiting for teacher to add content...'}
+                <h3 className="font-display font-bold" style={{ color: 'var(--text-primary)' }}>Collaborative Whiteboard</h3>
+                {!interactive && (
+                  <span className="text-xs px-2 py-1 rounded-full" style={{ background: 'var(--bg-locked)', color: 'var(--text-muted)' }}>
+                    View Only
+                  </span>
+                )}
+                <p style={{ color: 'var(--text-muted)', marginTop: 8 }}>
+                  {isTeacher
+                    ? 'Upload an image or start drawing. You can also press Ctrl+V to paste an image from your clipboard.'
+                    : 'Waiting for the teacher to upload an image...'}
                 </p>
               </div>
             </div>
@@ -457,23 +525,26 @@ export default function Whiteboard({ socket, roomId, isOpen, onClose, isTeacher,
         {/* Upload Modal */}
         {showUpload && (
           <div className="absolute inset-0 z-10 flex items-center justify-center" style={{ background: 'rgba(0,0,0,0.5)' }}>
-            <div className="p-6 rounded-xl max-w-sm" style={{ background: 'var(--bg-card)', border: '1px solid var(--border-subtle)' }}>
-              <h4 className="font-bold mb-4" style={{ color: 'var(--text-primary)' }}>Upload Image</h4>
+            <div className="bg-white rounded-xl p-6 w-96">
+              <h3 className="text-lg font-bold mb-4">Upload Image</h3>
               <input
                 type="file"
                 accept="image/*"
                 onChange={handleImageUpload}
-                className="block w-full text-sm mb-4"
+                className="w-full mb-4"
               />
-              <div className="flex gap-2 justify-end">
+              <div className="flex gap-2">
                 <button
                   onClick={() => setShowUpload(false)}
-                  className="btn text-xs px-3 py-1.5"
-                  style={{ background: 'var(--bg-locked)', color: 'var(--text-secondary)' }}
+                  className="flex-1 py-2 rounded-lg font-medium"
+                  style={{ background: 'var(--bg-surface)', color: 'var(--text-secondary)' }}
                 >
                   Cancel
                 </button>
               </div>
+              <p className="text-xs text-center mt-3" style={{ color: 'var(--text-muted)' }}>
+                Or simply press Ctrl+V to paste an image from your clipboard
+              </p>
             </div>
           </div>
         )}
