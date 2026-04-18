@@ -347,6 +347,10 @@ h1, h2, h3, h4, .font-display {
   background: var(--accent-rose-light);
   color: var(--accent-rose);
 }
+.tb-btn.active-indigo {
+  background: var(--accent-indigo-light);
+  color: var(--accent-indigo);
+}
 
 /* Toolbar button with label (for important toggles) */
 .tb-btn-label {

@@ -22,6 +22,7 @@ import UserList from "../components/UserList";
 import SimulationLibrary from "../components/SimulationLibrary";
 import ConnectionStatus from "../components/ConnectionStatus";
 import Leaderboard from "../components/Leaderboard";
+import Whiteboard from "../components/Whiteboard";
 
 // ── Types ──
 interface FileEntry {
@@ -138,6 +139,9 @@ export default function Room() {
   // ── Gamification ──
   const [leaderboard, setLeaderboard] = useState<Array<{ studentName: string; xp: number; streak: number }>>([]);
   const [showLeaderboard, setShowLeaderboard] = useState(false);
+
+  // ── Whiteboard ──
+  const [showWhiteboard, setShowWhiteboard] = useState(false);
 
   // ── Student Interaction Mode ──
   const [studentInteractionAllowed, setStudentInteractionAllowed] = useState(false);
@@ -1164,6 +1168,7 @@ export default function Room() {
               onHardReset={handleHardReset}
               leaderboardCount={leaderboard.length}
               onToggleLeaderboard={() => setShowLeaderboard(v => !v)}
+              onOpenWhiteboard={() => setShowWhiteboard(true)}
             />
 
             {/* Step Controls */}
@@ -1337,6 +1342,16 @@ export default function Room() {
         entries={leaderboard}
         open={showLeaderboard}
         onClose={() => setShowLeaderboard(false)}
+      />
+
+      {/* ═══ WHITEBOARD ═══ */}
+      <Whiteboard
+        socket={socket}
+        roomId={roomId!}
+        isOpen={showWhiteboard}
+        onClose={() => setShowWhiteboard(false)}
+        isTeacher={true}
+        interactive={true}
       />
     </div>
   );

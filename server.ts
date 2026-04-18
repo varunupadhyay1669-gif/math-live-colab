@@ -611,6 +611,27 @@ async function startServer() {
       io.to(roomId).emit('draw_clear');
     });
 
+    // ─── WHITEBOARD ───
+    socket.on('whiteboard_draw', ({ roomId, stroke }: any) => {
+      // Broadcast stroke to all other users in room
+      socket.to(roomId).emit('whiteboard_stroke', { stroke, senderId: socket.id });
+    });
+
+    socket.on('whiteboard_set_image', ({ roomId, imageUrl }: { roomId: string; imageUrl: string }) => {
+      // Broadcast image to all users including sender
+      io.to(roomId).emit('whiteboard_image', { imageUrl });
+    });
+
+    socket.on('whiteboard_clear', ({ roomId }: { roomId: string }) => {
+      // Clear image and all strokes
+      io.to(roomId).emit('whiteboard_clear');
+    });
+
+    socket.on('whiteboard_reset', ({ roomId }: { roomId: string }) => {
+      // Clear only strokes, keep image
+      io.to(roomId).emit('whiteboard_reset');
+    });
+
     // ─── LASER POINTER ───
     socket.on('laser_pointer', ({ roomId, x, y, active }: { roomId: string; x: number; y: number; active: boolean }) => {
       socket.to(roomId).emit('laser_pointer', { x, y, active });
