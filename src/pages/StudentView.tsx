@@ -760,13 +760,19 @@ export default function StudentView() {
                 ref={iframeRef}
                 src={iframeUrl}
                 className="w-full h-full border-none"
-                style={{ background: '#ffffff', pointerEvents: interactionAllowed ? 'auto' : 'none' }}
+                style={{ background: '#ffffff' }}
                 onLoad={handleIframeLoad}
                 sandbox="allow-scripts allow-same-origin allow-forms allow-modals allow-popups allow-pointer-lock"
               />
-              {/* View-only overlay — blocks pointer events but still shows teacher's cursor/annotations */}
+              {/* View-only overlay — blocks pointer events on content when not allowed */}
               {!interactionAllowed && (
-                <div className="absolute inset-0" style={{ pointerEvents: 'none', zIndex: 1 }} />
+                <div
+                  className="absolute inset-0"
+                  style={{ pointerEvents: 'auto', zIndex: 1, cursor: 'not-allowed' }}
+                  onWheel={(e) => e.preventDefault()}
+                  onTouchMove={(e) => e.preventDefault()}
+                  onMouseDown={(e) => e.preventDefault()}
+                />
               )}
             </>
           ) : (

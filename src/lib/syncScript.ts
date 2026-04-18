@@ -16,6 +16,49 @@ export const injectedSyncScript = `
     function exitRemote() { remoteDepth = Math.max(0, remoteDepth - 1); }
 
     var interactionBlocked = false;
+    var lockedWindowX = 0;
+    var lockedWindowY = 0;
+
+    function updateLockedWindowPos() {
+      lockedWindowX = window.scrollX || 0;
+      lockedWindowY = window.scrollY || 0;
+    }
+
+    function blockScrollEvent(e) {
+      if (!interactionBlocked || isRemote()) return false;
+      try { e.preventDefault(); } catch(ignore) {}
+      try { e.stopPropagation(); } catch(ignore) {}
+      return true;
+    }
+
+    // Strict scroll blocking for view-only mode
+    function enforceScrollLock() {
+      if (!interactionBlocked || isRemote()) return;
+      var currX = window.scrollX || 0;
+      var currY = window.scrollY || 0;
+      if (currX !== lockedWindowX || currY !== lockedWindowY) {
+        enterRemote();
+        window.scrollTo(lockedWindowX, lockedWindowY);
+        setTimeout(function() { exitRemote(); }, 0);
+      }
+    }
+
+    function isScrollKey(e) {
+      var k = e.key;
+      return k === 'ArrowUp' || k === 'ArrowDown' || k === 'ArrowLeft' || k === 'ArrowRight' ||
+             k === 'PageUp' || k === 'PageDown' || k === 'Home' || k === 'End' ||
+             k === ' ' || k === 'Spacebar' || k === 'Space';
+    }
+
+    function isEditableTarget(t) {
+      if (!t) return false;
+      try {
+        var tag = (t.tagName || '').toLowerCase();
+        if (tag === 'input' || tag === 'textarea' || tag === 'select') return true;
+        if (t.isContentEditable) return true;
+      } catch(ignore) {}
+      return false;
+    }
 
     // AUTONOMOUS: [ORDER-3] CSS.escape polyfill for older browsers
     if (typeof CSS === 'undefined' || !CSS.escape) {
@@ -141,7 +184,31 @@ export const injectedSyncScript = `
           window.parent.postMessage({ type: 'SYNC_CURSOR', x: touch.clientX / window.innerWidth, y: touch.clientY / window.innerHeight }, '*');
         }
       }
-    }, { passive: true });
+      // In view-only mode, block touch scroll/pan gestures (must be passive:false to allow preventDefault)
+      if (interactionBlocked && !isRemote()) {
+        try { e.preventDefault(); } catch(ignore) {}
+        try { e.stopPropagation(); } catch(ignore) {}
+      }
+    }, { passive: false });
+
+    // Strict view-only lock: prevent student-originated scroll inputs via wheel
+    document.addEventListener('wheel', function(e) {
+      if (blockScrollEvent(e)) {
+        // Also immediately snap back to locked position for stronger enforcement
+        enforceScrollLock();
+      }
+    }, { capture: true, passive: false });
+
+    // Block keyboard scroll keys in view-only mode
+    document.addEventListener('keydown', function(e) {
+      if (!interactionBlocked || isRemote()) return;
+      if (!isScrollKey(e)) return;
+      if (isEditableTarget(e.target)) return;
+      try { e.preventDefault(); } catch(ignore) {}
+      try { e.stopPropagation(); } catch(ignore) {}
+      // Enforce scroll lock immediately
+      enforceScrollLock();
+    }, true);
 
     document.addEventListener('touchstart', function(e) {
       if (isRemote() || interactionBlocked) return;
@@ -285,7 +352,15 @@ export const injectedSyncScript = `
       }
     }
 
-    window.addEventListener('scroll', sendDocScroll, { passive: true });
+    // Send scroll sync updates (only when not blocked or during remote updates)
+    window.addEventListener('scroll', function() {
+      if (interactionBlocked && !isRemote()) {
+        // In view-only mode, revert any student scroll attempts immediately
+        enforceScrollLock();
+        return;
+      }
+      sendDocScroll();
+    }, { passive: true });
 
     // AUTONOMOUS: [ORDER-4] Debounce DOM scanning to prevent perf issues (was 150ms, now 800ms)
     var _scrollTag = '__syncScroll';
@@ -471,7 +546,10 @@ export const injectedSyncScript = `
           }
         } catch(ignore) {}
         // AUTONOMOUS: [ORDER-1] Use delayed exit for smooth scroll animation duration
-        setTimeout(function() { exitRemote(); }, 600);
+        setTimeout(function() {
+          updateLockedWindowPos();
+          exitRemote();
+        }, 600);
       } else if (data.type === 'SET_ZOOM') {
         // Teacher-initiated zoom: apply + broadcast via SYNC_ZOOM
         var z = Math.max(0.5, Math.min(3, Number(data.zoom) || 1));
@@ -487,6 +565,8 @@ export const injectedSyncScript = `
         scrollSyncEnabled = !!data.enabled;
       } else if (data.type === 'SET_INTERACTION_MODE') {
         interactionBlocked = !data.allowed;
+        // Capture the current position as lock-point when entering view-only mode.
+        if (interactionBlocked) updateLockedWindowPos();
       } else if (data.type === 'RESET_VIEW') {
         enterRemote();
         try { window.scrollTo({ top: 0, left: 0, behavior: 'smooth' }); } catch(ignore) {}
