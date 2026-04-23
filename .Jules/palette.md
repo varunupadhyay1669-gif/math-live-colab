@@ -1,0 +1,3 @@
+## 2025-04-23 - App-specific Tooltip Pattern Missing aria-label
+**Learning:** The application heavily relies on a custom `data-tip` attribute pattern for tooltips on icon-only buttons (or just uses simple text characters like "✕" or "↑" for icon-only buttons) without accompanying standard `aria-label`s for screen readers. While visual users get context via tooltips on hover, assistive technologies miss out.
+**Action:** When working on UI components in this app, always ensure that buttons utilizing `data-tip` or displaying only symbols/icons have an explicitly defined `aria-label` attribute to guarantee screen reader accessibility.
