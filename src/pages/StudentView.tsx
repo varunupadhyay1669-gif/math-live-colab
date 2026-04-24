@@ -671,13 +671,10 @@ export default function StudentView() {
             {currentFileName || 'Session'}
           </span>
 
-const toggleChat = () => {
-  setChatOpen(!chatOpen);
-  if (!chatOpen) setUnreadChat(0);
-};
+          <div className="header-divider" />
 
-return (
-  <div className="h-screen w-screen flex flex-col overflow-hidden" style={{ background: 'var(--bg-primary)' }}>
+          {/* Level / XP pill */}
+          <button
             className="flex items-center gap-2 px-2.5 py-1 rounded-full transition-all"
             data-tip="View leaderboard"
             style={{
