@@ -133,6 +133,11 @@ export default function Room() {
   // ── Scroll Sync ──
   const [scrollSyncEnabled, setScrollSyncEnabled] = useState(true);
 
+  // ── Temporary Explanation Content ──
+  const [tempContent, setTempContent] = useState<{ html: string; name: string } | null>(null);
+  const [showTempContent, setShowTempContent] = useState(false);
+  const tempFileInputRef = useRef<HTMLInputElement>(null);
+
   // ── Zoom Sync ──
   const [zoomLevel, setZoomLevel] = useState(1);
 
@@ -289,6 +294,18 @@ export default function Room() {
       setReactions(prev => [...prev, { id, emoji }]);
       setTimeout(() => setReactions(prev => prev.filter(r => r.id !== id)), 2500);
     });
+
+    // ── Temporary Explanation Content ──
+    newSocket.on("temp_content", ({ html, name }: { html: string; name: string }) => {
+      setTempContent({ html, name });
+      setShowTempContent(true);
+      showNotif(`📚 Showing explanation: ${name}`);
+    });
+    newSocket.on("clear_temp_content", () => {
+      setShowTempContent(false);
+      showNotif('↩️ Back to main content');
+    });
+
     newSocket.on("interaction", (event: any) => {
       if (event.type === "SYNC_CURSOR") {
         setCursors(prev => ({
@@ -831,6 +848,31 @@ export default function Room() {
     showNotif("🎯 Quiz sent!");
   };
 
+  // ── Temporary Explanation Content ──
+  const handleUploadExplanation = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !socket) return;
+    if (file.size > 2 * 1024 * 1024) { showNotif(`⚠️ File too large (max 2MB)`); return; }
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const content = String(event.target?.result || '');
+      const name = file.name.replace(/\.html?$/i, '');
+      setTempContent({ html: content, name });
+      socket.emit('show_temp_content', { roomId, html: content, name });
+      setShowTempContent(true);
+      showNotif(`📚 Showing explanation: ${name}`);
+    };
+    reader.readAsText(file);
+    e.target.value = '';
+  };
+
+  const clearTempContent = () => {
+    if (!socket) return;
+    socket.emit('clear_temp_content', { roomId });
+    setShowTempContent(false);
+    showNotif('↩️ Back to main content');
+  };
+
   const handleSetStep = (step: number) => {
     setCurrentStep(step);
     if (socket) socket.emit('set_step', { roomId, step });
@@ -1226,6 +1268,63 @@ export default function Room() {
               whiteboardMode={whiteboardMode}
             />
 
+            {/* Temporary Explanation Content Bar */}
+            {showTempContent && tempContent && (
+              <div className="px-4 py-2 flex items-center justify-between"
+                style={{ background: 'linear-gradient(135deg, rgba(245,158,11,0.12), rgba(251,191,36,0.12))', borderBottom: '1px solid rgba(245,158,11,0.25)' }}>
+                <div className="flex items-center gap-2">
+                  <span style={{ color: '#D97706' }}>📚</span>
+                  <span className="font-medium text-sm" style={{ color: '#92400E' }}>
+                    Showing explanation: {tempContent.name}
+                  </span>
+                </div>
+                <button
+                  onClick={clearTempContent}
+                  className="flex items-center gap-1 px-3 py-1 rounded-md text-sm font-medium transition-all"
+                  style={{
+                    background: 'rgba(245,158,11,0.2)',
+                    color: '#B45309',
+                    border: '1px solid rgba(245,158,11,0.3)'
+                  }}
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path d="M3 12h18M3 12l6-6M3 12l6 6"/>
+                  </svg>
+                  Back to Content
+                </button>
+              </div>
+            )}
+
+            {/* Upload Explanation Button (when no temp content) */}
+            {!showTempContent && (
+              <div className="px-4 py-2">
+                <button
+                  onClick={() => tempFileInputRef.current?.click()}
+                  className="flex items-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium transition-all"
+                  style={{
+                    background: 'linear-gradient(135deg, rgba(99,102,241,0.12), rgba(139,92,246,0.12))',
+                    border: '1px solid rgba(99,102,241,0.25)',
+                    color: '#6366F1'
+                  }}
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                    <polyline points="14 2 14 8 20 8"/>
+                    <line x1="12" y1="18" x2="12" y2="12"/>
+                    <line x1="9" y1="15" x2="15" y2="15"/>
+                  </svg>
+                  Upload Explanation HTML
+                </button>
+                <input
+                  ref={tempFileInputRef}
+                  type="file"
+                  accept=".html,.htm"
+                  onChange={handleUploadExplanation}
+                  className="hidden"
+                />
+              </div>
+            )}
+
             {/* Step Controls */}
             <StepControls
               socket={socket} roomId={roomId!}
@@ -1239,7 +1338,25 @@ export default function Room() {
 
             {/* Iframe or Whiteboard */}
             <div className="flex-1 relative overflow-hidden m-3 rounded-xl preview-frame">
-              {whiteboardMode ? (
+              {showTempContent && tempContent ? (
+                // Temporary explanation content overlay
+                <iframe
+                  src={(() => {
+                    const scripts = injectedSyncScript + stepLockScript;
+                    let content = tempContent.html;
+                    if (content.includes("<head>")) {
+                      content = content.replace("<head>", "<head>" + scripts);
+                    } else {
+                      content = scripts + content;
+                    }
+                    const blob = new Blob([content], { type: 'text/html' });
+                    return URL.createObjectURL(blob);
+                  })()}
+                  className="w-full h-full border-none"
+                  style={{ background: '#ffffff' }}
+                  sandbox="allow-scripts allow-same-origin allow-forms allow-modals allow-popups allow-pointer-lock"
+                />
+              ) : whiteboardMode ? (
                 <Whiteboard
                   ref={whiteboardRef}
                   socket={socket}

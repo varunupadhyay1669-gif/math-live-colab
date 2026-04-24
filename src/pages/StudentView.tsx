@@ -120,6 +120,10 @@ export default function StudentView() {
   // ── Follow Teacher Clicks ──
   const [followTeacherClicks, setFollowTeacherClicks] = useState(false);
 
+  // ── Temporary Explanation Content ──
+  const [tempContent, setTempContent] = useState<{ html: string; name: string } | null>(null);
+  const [showTempContent, setShowTempContent] = useState(false);
+
   // ── Student Interaction Mode ──
   const [interactionAllowed, setInteractionAllowed] = useState(false);
 
@@ -283,6 +287,17 @@ export default function StudentView() {
       setQuizSubmitted(false);
       showNotification("🎯 You have a question from your teacher!");
       sounds.raiseHand();
+    });
+
+    // ── Temporary Explanation Content ──
+    newSocket.on("temp_content", ({ html, name }: { html: string; name: string }) => {
+      setTempContent({ html, name });
+      setShowTempContent(true);
+      showNotification(`📚 Teacher is showing explanation: ${name}`);
+    });
+    newSocket.on("clear_temp_content", () => {
+      setShowTempContent(false);
+      showNotification('↩️ Back to main content');
     });
 
     newSocket.on("spotlight", (data: { x: number; y: number; active: boolean }) => {
@@ -793,7 +808,25 @@ return (
 
         {/* Full-Screen Iframe */}
         <div className="flex-1 relative overflow-hidden m-3 rounded-xl" style={{ background: '#ffffff', border: '1px solid var(--border-subtle)' }}>
-          {whiteboardMode ? (
+          {showTempContent && tempContent ? (
+            // Temporary explanation content overlay
+            <iframe
+              src={(() => {
+                const scripts = injectedSyncScript + stepLockScript;
+                let content = tempContent.html;
+                if (content.includes("<head>")) {
+                  content = content.replace("<head>", "<head>" + scripts);
+                } else {
+                  content = scripts + content;
+                }
+                const blob = new Blob([content], { type: 'text/html' });
+                return URL.createObjectURL(blob);
+              })()}
+              className="w-full h-full border-none"
+              style={{ background: '#ffffff' }}
+              sandbox="allow-scripts allow-same-origin allow-forms allow-modals allow-popups allow-pointer-lock"
+            />
+          ) : whiteboardMode ? (
             <Whiteboard
               ref={whiteboardRef}
               socket={socket}

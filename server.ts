@@ -647,6 +647,17 @@ async function startServer() {
       socket.to(roomId).emit('whiteboard_scroll', { scrollX, scrollY });
     });
 
+    // ─── TEMPORARY EXPLANATION CONTENT ───
+    socket.on('show_temp_content', ({ roomId, html, name }: { roomId: string; html: string; name: string }) => {
+      // Broadcast temporary explanation content to all users in room
+      io.to(roomId).emit('temp_content', { html, name });
+    });
+
+    socket.on('clear_temp_content', ({ roomId }: { roomId: string }) => {
+      // Clear temporary content and return to main content
+      io.to(roomId).emit('clear_temp_content');
+    });
+
     // ─── LASER POINTER ───
     socket.on('laser_pointer', ({ roomId, x, y, active }: { roomId: string; x: number; y: number; active: boolean }) => {
       socket.to(roomId).emit('laser_pointer', { x, y, active });
