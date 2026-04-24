@@ -858,11 +858,13 @@ export default function StudentView() {
         {/* Full-Screen Iframe */}
         <div className="flex-1 relative overflow-hidden m-3 rounded-xl" style={{ background: '#ffffff', border: '1px solid var(--border-subtle)' }}>
           {showTempContent && tempContent && tempContentUrl ? (
-            // Temporary explanation content overlay
+            // Temporary explanation content overlay — uses same ref so scroll sync works
             <iframe
+              ref={iframeRef}
               src={tempContentUrl}
               className="w-full h-full border-none"
               style={{ background: '#ffffff' }}
+              onLoad={handleIframeLoad}
               sandbox="allow-scripts allow-same-origin allow-forms allow-modals allow-popups allow-pointer-lock"
             />
           ) : whiteboardMode ? (
