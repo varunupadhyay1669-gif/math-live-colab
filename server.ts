@@ -35,6 +35,8 @@ interface RoomData {
   pendingSyncStudents: string[];
   // Gamification: track XP and streaks per student name (keyed by studentName for persistence across reconnects)
   scores: Record<string, { xp: number; streak: number; bestStreak: number; correct: number; total: number }>;
+  // Monotonic interaction sequence for ordering guarantees
+  interactionSeq: number;
 }
 
 async function startServer() {
@@ -132,6 +134,7 @@ async function startServer() {
       password: null,
       pendingSyncStudents: [],
       scores: {},
+      interactionSeq: 0,
     };
   }
 
@@ -701,6 +704,9 @@ async function startServer() {
       const user = room.users.get(socket.id);
       if (user) event.userName = user.name;
       event.role = user?.role || 'unknown';
+      room.interactionSeq += 1;
+      event.serverSeq = room.interactionSeq;
+      event.serverTs = Date.now();
 
       if (user?.role === 'teacher') {
         // Teacher → broadcast to all students (one-way sync)

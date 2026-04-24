@@ -152,6 +152,12 @@ export default function Room() {
     return URL.createObjectURL(blob);
   }, [tempContent?.html, tempContent?.name]);
 
+  useEffect(() => {
+    return () => {
+      if (tempContentUrl) URL.revokeObjectURL(tempContentUrl);
+    };
+  }, [tempContentUrl]);
+
   // ── Zoom Sync ──
   const [zoomLevel, setZoomLevel] = useState(1);
 
@@ -208,6 +214,8 @@ export default function Room() {
 
   // ── Flag to skip our own run_preview echo ──
   const skipOwnPreviewRef = useRef(false);
+  const syncEpochRef = useRef(0);
+  const lastInboundSeqRef = useRef(0);
 
   // ── Refs ──
   const iframeRef = useRef<HTMLIFrameElement>(null);
@@ -321,6 +329,13 @@ export default function Room() {
     });
 
     newSocket.on("interaction", (event: any) => {
+      if (typeof event.serverSeq === 'number') {
+        if (event.serverSeq <= lastInboundSeqRef.current) return;
+        lastInboundSeqRef.current = event.serverSeq;
+      }
+      if (typeof event.syncEpoch === 'number' && event.syncEpoch < syncEpochRef.current) {
+        return;
+      }
       if (event.type === "SYNC_CURSOR") {
         setCursors(prev => ({
           ...prev,
@@ -511,6 +526,7 @@ export default function Room() {
   useEffect(() => {
     const handler = (e: MessageEvent) => {
       if (!socket) return;
+      if (e.source !== iframeRef.current?.contentWindow) return;
       const type = e.data?.type;
       if (!type) return;
 
@@ -528,12 +544,23 @@ export default function Room() {
       if (type.startsWith('SYNC_')) {
         // Check scroll sync gate
         if (type === 'SYNC_SCROLL' && !scrollSyncEnabled) return;
-        socket.emit("interaction", { roomId, event: e.data });
+        socket.emit("interaction", {
+          roomId,
+          event: {
+            ...e.data,
+            syncEpoch: syncEpochRef.current,
+            clientTs: Date.now(),
+          },
+        });
       }
     };
     window.addEventListener("message", handler);
     return () => window.removeEventListener("message", handler);
   }, [socket, roomId, scrollSyncEnabled]);
+
+  useEffect(() => {
+    syncEpochRef.current += 1;
+  }, [iframeUrl, showTempContent, whiteboardMode]);
 
   // NOTE: Periodic auto-sync removed — it was causing full iframe reloads on student
   // side every 10s, making the page blink and scroll jump to top.

@@ -138,6 +138,12 @@ export default function StudentView() {
     return URL.createObjectURL(blob);
   }, [tempContent?.html, tempContent?.name]);
 
+  useEffect(() => {
+    return () => {
+      if (tempContentUrl) URL.revokeObjectURL(tempContentUrl);
+    };
+  }, [tempContentUrl]);
+
   // ── Student Interaction Mode ──
   const [interactionAllowed, setInteractionAllowed] = useState(false);
 
@@ -157,6 +163,8 @@ export default function StudentView() {
   // ── Iframe readiness ──
   const iframeReadyRef = useRef(false);
   const pendingMessagesRef = useRef<any[]>([]);
+  const syncEpochRef = useRef(0);
+  const lastInboundSeqRef = useRef(0);
 
   const iframeRef = useRef<HTMLIFrameElement>(null);
 
@@ -325,6 +333,17 @@ export default function StudentView() {
     });
 
     newSocket.on("interaction", (event: any) => {
+      if (typeof event.serverSeq === 'number') {
+        if (event.serverSeq <= lastInboundSeqRef.current) return;
+        lastInboundSeqRef.current = event.serverSeq;
+      }
+      if (typeof event.syncEpoch === 'number') {
+        if (event.syncEpoch < syncEpochRef.current) return;
+        if (event.syncEpoch > syncEpochRef.current) {
+          syncEpochRef.current = event.syncEpoch;
+          pendingMessagesRef.current = [];
+        }
+      }
       // Track zoom level so we can re-apply on iframe reload
       if (event.type === "SYNC_ZOOM" && typeof event.zoom === 'number') {
         setZoomLevel(event.zoom);
@@ -601,6 +620,7 @@ export default function StudentView() {
   useEffect(() => {
     const handler = (e: MessageEvent) => {
       if (!socket) return;
+      if (e.source !== iframeRef.current?.contentWindow) return;
       const type = e.data?.type;
       if (!type) return;
 
@@ -610,17 +630,35 @@ export default function StudentView() {
       if (!type.startsWith('SYNC_')) return;
       // Always allow cursor (teacher can see where students look)
       if (type === 'SYNC_CURSOR') {
-        socket.emit("interaction", { roomId, event: e.data });
+        socket.emit("interaction", {
+          roomId,
+          event: {
+            ...e.data,
+            syncEpoch: syncEpochRef.current,
+            clientTs: Date.now(),
+          },
+        });
         return;
       }
       // Block all other interactions when not allowed (view-only mode)
       if (!interactionAllowed) return;
       if (type === 'SYNC_SCROLL' && !scrollSyncEnabled) return;
-      socket.emit("interaction", { roomId, event: e.data });
+      socket.emit("interaction", {
+        roomId,
+        event: {
+          ...e.data,
+          syncEpoch: syncEpochRef.current,
+          clientTs: Date.now(),
+        },
+      });
     };
     window.addEventListener("message", handler);
     return () => window.removeEventListener("message", handler);
   }, [socket, roomId, scrollSyncEnabled, interactionAllowed]);
+
+  useEffect(() => {
+    syncEpochRef.current += 1;
+  }, [iframeUrl, showTempContent, whiteboardMode]);
 
   // ── Push interaction mode to iframe ──
   useEffect(() => {
