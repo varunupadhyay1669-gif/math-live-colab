@@ -153,6 +153,10 @@ export default function Room() {
   const [attentionAcks, setAttentionAcks] = useState<Array<{ studentName: string; timestamp: number }>>([]);
   const [attentionCheckActive, setAttentionCheckActive] = useState(false);
 
+  // ── Follow Clicks ──
+  const [followStudentClicks, setFollowStudentClicks] = useState(false);
+  const [studentClickIndicators, setStudentClickIndicators] = useState<Array<{ id: number; x: number; y: number; name: string; color: string }>>([]);
+
   // ── Iframe readiness ──
   const iframeReadyRef = useRef(false);
   const pendingMessagesRef = useRef<any[]>([]);
@@ -295,6 +299,34 @@ export default function Room() {
             name: event.userName || 'Student',
           },
         }));
+      } else if (event.type === "SYNC_CLICK") {
+        // Show click indicator for student clicks
+        if (event.role === 'student') {
+          const id = Date.now() + Math.random();
+          const color = CURSOR_COLORS[event.userId.charCodeAt(0) % CURSOR_COLORS.length];
+          setStudentClickIndicators(prev => [...prev, {
+            id,
+            x: event.clientX,
+            y: event.clientY,
+            name: event.userName || 'Student',
+            color
+          }]);
+          setTimeout(() => {
+            setStudentClickIndicators(prev => prev.filter(i => i.id !== id));
+          }, 2000);
+
+          // Auto-scroll to student click if following is enabled
+          if (followStudentClicks && iframeRef.current) {
+            const iframe = iframeRef.current;
+            iframe.contentWindow?.postMessage({
+              type: 'FOLLOW_CLICK',
+              x: event.clientX,
+              y: event.clientY
+            }, '*');
+          }
+        }
+        const remoteEvent = { ...event, type: event.type.replace("SYNC_", "REMOTE_") };
+        postToIframe(remoteEvent);
       } else {
         const remoteEvent = { ...event, type: event.type.replace("SYNC_", "REMOTE_") };
         postToIframe(remoteEvent);
@@ -1189,6 +1221,8 @@ export default function Room() {
                   socket.emit('whiteboard_mode_toggle', { roomId, active: newMode });
                 }
               }}
+              followStudentClicks={followStudentClicks}
+              onToggleFollowStudentClicks={() => setFollowStudentClicks(v => !v)}
               whiteboardMode={whiteboardMode}
             />
 

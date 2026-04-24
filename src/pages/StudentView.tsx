@@ -117,6 +117,9 @@ export default function StudentView() {
   const [whiteboardScrollY, setWhiteboardScrollY] = useState(0);
   const whiteboardRef = useRef<import('../components/Whiteboard').WhiteboardRef>(null);
 
+  // ── Follow Teacher Clicks ──
+  const [followTeacherClicks, setFollowTeacherClicks] = useState(false);
+
   // ── Student Interaction Mode ──
   const [interactionAllowed, setInteractionAllowed] = useState(false);
 
@@ -306,6 +309,17 @@ export default function StudentView() {
             name: event.userName || 'Teacher',
           },
         }));
+      } else if (event.type === "SYNC_CLICK") {
+        // Auto-scroll to teacher click if following is enabled
+        if (followTeacherClicks && iframeRef.current) {
+          iframeRef.current.contentWindow?.postMessage({
+            type: 'FOLLOW_CLICK',
+            x: event.clientX,
+            y: event.clientY
+          }, '*');
+        }
+        const remoteEvent = { ...event, type: event.type.replace("SYNC_", "REMOTE_") };
+        postToIframe(remoteEvent);
       } else {
         const remoteEvent = { ...event, type: event.type.replace("SYNC_", "REMOTE_") };
         postToIframe(remoteEvent);

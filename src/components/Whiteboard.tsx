@@ -43,7 +43,7 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
     const [strokes, setStrokes] = useState<DrawStroke[]>([]);
     const [currentStroke, setCurrentStroke] = useState<DrawPoint[]>([]);
     const [isDrawing, setIsDrawing] = useState(false);
-    const [tool, setTool] = useState<'pen' | 'eraser'>('pen');
+    const [tool, setTool] = useState<'pen' | 'eraser' | 'stroke-eraser'>('pen');
     const [color, setColor] = useState('#000000');
     const [width, setWidth] = useState(4);
     const [showUpload, setShowUpload] = useState(false);
@@ -277,16 +277,27 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
         setStrokes([]);
       };
 
+      const handleDeleteStroke = (data: { strokeIndex: number }) => {
+        setStrokes(prev => {
+          if (data.strokeIndex < 0 || data.strokeIndex >= prev.length) return prev;
+          const newStrokes = [...prev];
+          newStrokes.splice(data.strokeIndex, 1);
+          return newStrokes;
+        });
+      };
+
       socket.on('whiteboard_image', handleWhiteboardImage);
       socket.on('whiteboard_stroke', handleWhiteboardStroke);
       socket.on('whiteboard_clear', handleWhiteboardClear);
       socket.on('whiteboard_reset', handleWhiteboardReset);
+      socket.on('whiteboard_delete_stroke', handleDeleteStroke);
 
       return () => {
         socket.off('whiteboard_image', handleWhiteboardImage);
         socket.off('whiteboard_stroke', handleWhiteboardStroke);
         socket.off('whiteboard_clear', handleWhiteboardClear);
         socket.off('whiteboard_reset', handleWhiteboardReset);
+        socket.off('whiteboard_delete_stroke', handleDeleteStroke);
       };
     }, [socket, redrawCanvas]);
 
@@ -315,6 +326,90 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
       setCurrentStroke(prev => [...prev, getCanvasCoords(e)]);
     };
 
+    // Hit detection for stroke eraser
+    const findStrokeAtPoint = useCallback((point: DrawPoint): number => {
+      const canvas = canvasRef.current;
+      if (!canvas) return -1;
+
+      // Convert normalized point to canvas coordinates
+      const px = point.x * canvas.width;
+      const py = point.y * canvas.height;
+
+      // Check each stroke in reverse order (top to bottom)
+      for (let i = strokes.length - 1; i >= 0; i--) {
+        const stroke = strokes[i];
+        const hitDistance = stroke.width + 10; // Hit radius
+
+        // Check each line segment in the stroke
+        for (let j = 0; j < stroke.points.length - 1; j++) {
+          const p1 = stroke.points[j];
+          const p2 = stroke.points[j + 1];
+
+          // Convert to canvas coordinates
+          const x1 = p1.x * canvas.width;
+          const y1 = p1.y * canvas.height;
+          const x2 = p2.x * canvas.width;
+          const y2 = p2.y * canvas.height;
+
+          // Calculate distance from point to line segment
+          const dist = pointToLineDistance(px, py, x1, y1, x2, y2);
+          if (dist <= hitDistance) {
+            return i;
+          }
+        }
+      }
+      return -1;
+    }, [strokes]);
+
+    // Helper: distance from point to line segment
+    const pointToLineDistance = (px: number, py: number, x1: number, y1: number, x2: number, y2: number): number => {
+      const A = px - x1;
+      const B = py - y1;
+      const C = x2 - x1;
+      const D = y2 - y1;
+
+      const dot = A * C + B * D;
+      const lenSq = C * C + D * D;
+      let param = -1;
+
+      if (lenSq !== 0) {
+        param = dot / lenSq;
+      }
+
+      let xx, yy;
+
+      if (param < 0) {
+        xx = x1;
+        yy = y1;
+      } else if (param > 1) {
+        xx = x2;
+        yy = y2;
+      } else {
+        xx = x1 + param * C;
+        yy = y1 + param * D;
+      }
+
+      const dx = px - xx;
+      const dy = py - yy;
+
+      return Math.sqrt(dx * dx + dy * dy);
+    };
+
+    // Delete a specific stroke
+    const deleteStroke = useCallback((strokeIndex: number) => {
+      if (strokeIndex < 0 || strokeIndex >= strokes.length) return;
+
+      setStrokes(prev => {
+        const newStrokes = [...prev];
+        newStrokes.splice(strokeIndex, 1);
+        return newStrokes;
+      });
+
+      if (socket) {
+        socket.emit('whiteboard_delete_stroke', { roomId, strokeIndex });
+      }
+    }, [strokes.length, roomId, socket]);
+
     const endDrawing = (e?: React.PointerEvent<HTMLCanvasElement>) => {
       if (e) {
         try {
@@ -324,12 +419,19 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
       if (!isDrawing) return;
       setIsDrawing(false);
 
-      if (currentStroke.length > 1) {
+      if (tool === 'stroke-eraser' && currentStroke.length > 0) {
+        // Erase stroke at the clicked point
+        const clickPoint = currentStroke[0];
+        const strokeIndex = findStrokeAtPoint(clickPoint);
+        if (strokeIndex !== -1) {
+          deleteStroke(strokeIndex);
+        }
+      } else if (currentStroke.length > 1) {
         const stroke: DrawStroke = {
           points: currentStroke,
           color,
           width,
-          tool,
+          tool: tool === 'eraser' ? 'eraser' : 'pen',
         };
         setStrokes(prev => [...prev, stroke]);
         if (socket) {
@@ -426,6 +528,18 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M20 20H7L3 16C2 15 2 13 3 12L13 2L22 11L20 20Z"/>
                 <path d="M17 17L7 7"/>
+              </svg>
+            </button>
+            <button
+              onClick={() => setTool('stroke-eraser')}
+              className={`p-2 rounded-md transition-all ${tool === 'stroke-eraser' ? 'active' : ''}`}
+              style={tool === 'stroke-eraser' ? { background: 'var(--accent-rose)', color: '#fff' } : { color: 'var(--text-secondary)' }}
+              title="Stroke Eraser (Click to delete entire stroke)"
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="12" cy="12" r="10"/>
+                <line x1="15" y1="9" x2="9" y2="15"/>
+                <line x1="9" y1="9" x2="15" y2="15"/>
               </svg>
             </button>
           </div>

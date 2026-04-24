@@ -43,6 +43,27 @@ export const injectedSyncScript = `
       }
     }
 
+    // Show a visual indicator when following clicks from another user
+    function showClickIndicator(x, y) {
+      try {
+        var indicator = document.createElement('div');
+        indicator.style.cssText = 'position:fixed;left:' + x + 'px;top:' + y + 'px;width:20px;height:20px;margin:-10px 0 0 -10px;border-radius:50%;background:rgba(239,68,68,0.6);border:3px solid #EF4444;z-index:999999;pointer-events:none;animation:clickPulse 1s ease-out forwards;';
+        document.body.appendChild(indicator);
+
+        // Add animation keyframes if not already present
+        if (!document.getElementById('clickPulseStyle')) {
+          var style = document.createElement('style');
+          style.id = 'clickPulseStyle';
+          style.textContent = '@keyframes clickPulse{0%{transform:scale(1);opacity:1}50%{transform:scale(2)}100%{transform:scale(3);opacity:0}}';
+          document.head.appendChild(style);
+        }
+
+        setTimeout(function() {
+          if (indicator.parentNode) indicator.parentNode.removeChild(indicator);
+        }, 1000);
+      } catch(ignore) {}
+    }
+
     function isScrollKey(e) {
       var k = e.key;
       return k === 'ArrowUp' || k === 'ArrowDown' || k === 'ArrowLeft' || k === 'ArrowRight' ||
@@ -550,6 +571,17 @@ export const injectedSyncScript = `
           updateLockedWindowPos();
           exitRemote();
         }, 600);
+      } else if (data.type === 'FOLLOW_CLICK') {
+        // Scroll to the clicked position (used when following other user's clicks)
+        try {
+          enterRemote();
+          var targetX = data.x * Math.max(0, document.documentElement.scrollWidth - window.innerWidth);
+          var targetY = data.y * Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
+          window.scrollTo({ left: targetX, top: targetY, behavior: 'smooth' });
+          // Show a visual indicator at the click position
+          showClickIndicator(data.x * window.innerWidth, data.y * window.innerHeight);
+          setTimeout(function() { exitRemote(); }, 600);
+        } catch(ignore) {}
       } else if (data.type === 'SET_ZOOM') {
         // Teacher-initiated zoom: apply + broadcast via SYNC_ZOOM
         var z = Math.max(0.5, Math.min(3, Number(data.zoom) || 1));

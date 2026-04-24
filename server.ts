@@ -632,6 +632,11 @@ async function startServer() {
       io.to(roomId).emit('whiteboard_reset');
     });
 
+    socket.on('whiteboard_delete_stroke', ({ roomId, strokeIndex }: { roomId: string; strokeIndex: number }) => {
+      // Delete specific stroke by index
+      socket.to(roomId).emit('whiteboard_delete_stroke', { strokeIndex });
+    });
+
     socket.on('whiteboard_mode_toggle', ({ roomId, active }: { roomId: string; active: boolean }) => {
       // Broadcast whiteboard mode change to all users in room
       io.to(roomId).emit('whiteboard_mode_changed', { active });

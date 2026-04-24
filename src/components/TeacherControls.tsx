@@ -44,6 +44,9 @@ interface TeacherControlsProps {
   // Whiteboard
   onToggleWhiteboard: () => void;
   whiteboardMode: boolean;
+  // Follow student clicks
+  followStudentClicks: boolean;
+  onToggleFollowStudentClicks: () => void;
 }
 
 const PEN_COLORS = ['#5B5FE6', '#0F1117', '#10B981', '#0EA5E9', '#EF4444', '#F59E0B'];
@@ -63,6 +66,7 @@ export default function TeacherControls({
   zoomLevel, onZoomIn, onZoomOut, onZoomReset,
   onHardReset, leaderboardCount, onToggleLeaderboard,
   onToggleWhiteboard, whiteboardMode,
+  followStudentClicks, onToggleFollowStudentClicks,
 }: TeacherControlsProps) {
   const [showTimerMenu, setShowTimerMenu] = useState(false);
   const [showReactionMenu, setShowReactionMenu] = useState(false);
@@ -221,6 +225,22 @@ export default function TeacherControls({
             <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
             <circle cx="8.5" cy="8.5" r="1.5"/>
             <polyline points="21 15 16 10 5 21"/>
+          </svg>
+        </button>
+
+        {/* ── Follow Student Clicks ── */}
+        <button
+          onClick={onToggleFollowStudentClicks}
+          className={`tb-btn ${followStudentClicks ? 'active-emerald' : ''}`}
+          data-tip={followStudentClicks ? 'Stop following student clicks' : 'Follow student clicks'}
+        >
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+            <circle cx="12" cy="12" r="10"/>
+            <circle cx="12" cy="12" r="3"/>
+            <line x1="12" y1="1" x2="12" y2="4"/>
+            <line x1="12" y1="20" x2="12" y2="23"/>
+            <line x1="1" y1="12" x2="4" y2="12"/>
+            <line x1="20" y1="12" x2="23" y2="12"/>
           </svg>
         </button>
 
