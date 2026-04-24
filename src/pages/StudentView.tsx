@@ -570,11 +570,11 @@ export default function StudentView() {
   }, [roomId, currentHtml, socket, connected]);
 
   useEffect(() => {
-    // If we're connected but have no content after 5 seconds, try HTTP fallback
+    // If we're connected but have no content after 2 seconds, try HTTP fallback
     if (connected && !currentHtml) {
       httpFallbackRef.current = setTimeout(() => {
         fetchContentViaHttp();
-      }, 5000);
+      }, 2000);
     }
     return () => { if (httpFallbackRef.current) clearTimeout(httpFallbackRef.current); };
   }, [connected, currentHtml, fetchContentViaHttp]);

@@ -340,6 +340,11 @@ async function startServer() {
         chat: room.chat.slice(-50), // Last 50 messages
       });
 
+      // Immediately push content to the joining student so they don't stay on "Waiting for teacher"
+      if (role === 'student' && room.lastRunHtml && room.activeFileId) {
+        socket.emit('run_preview', { fileId: room.activeFileId, html: room.lastRunHtml });
+      }
+
       // Broadcast updated user list
       io.to(roomId).emit('user_list', getRoomUserList(room));
     });
