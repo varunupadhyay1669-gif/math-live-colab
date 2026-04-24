@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useRef, useCallback } from "react";
+import React, { useEffect, useState, useRef, useCallback, useMemo } from "react";
 import { useParams, useNavigate, useSearchParams } from "react-router-dom";
 import { io, Socket } from "socket.io-client";
 import { injectedSyncScript } from "../lib/syncScript";
@@ -123,6 +123,20 @@ export default function StudentView() {
   // ── Temporary Explanation Content ──
   const [tempContent, setTempContent] = useState<{ html: string; name: string } | null>(null);
   const [showTempContent, setShowTempContent] = useState(false);
+
+  // Memoize blob URL to prevent iframe from reloading on every render
+  const tempContentUrl = useMemo(() => {
+    if (!tempContent) return null;
+    const scripts = injectedSyncScript + stepLockScript;
+    let content = tempContent.html;
+    if (content.includes("<head>")) {
+      content = content.replace("<head>", "<head>" + scripts);
+    } else {
+      content = scripts + content;
+    }
+    const blob = new Blob([content], { type: 'text/html' });
+    return URL.createObjectURL(blob);
+  }, [tempContent?.html, tempContent?.name]);
 
   // ── Student Interaction Mode ──
   const [interactionAllowed, setInteractionAllowed] = useState(false);
@@ -805,20 +819,10 @@ export default function StudentView() {
 
         {/* Full-Screen Iframe */}
         <div className="flex-1 relative overflow-hidden m-3 rounded-xl" style={{ background: '#ffffff', border: '1px solid var(--border-subtle)' }}>
-          {showTempContent && tempContent ? (
+          {showTempContent && tempContent && tempContentUrl ? (
             // Temporary explanation content overlay
             <iframe
-              src={(() => {
-                const scripts = injectedSyncScript + stepLockScript;
-                let content = tempContent.html;
-                if (content.includes("<head>")) {
-                  content = content.replace("<head>", "<head>" + scripts);
-                } else {
-                  content = scripts + content;
-                }
-                const blob = new Blob([content], { type: 'text/html' });
-                return URL.createObjectURL(blob);
-              })()}
+              src={tempContentUrl}
               className="w-full h-full border-none"
               style={{ background: '#ffffff' }}
               sandbox="allow-scripts allow-same-origin allow-forms allow-modals allow-popups allow-pointer-lock"
