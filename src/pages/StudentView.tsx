@@ -264,6 +264,10 @@ export default function StudentView() {
       setCurrentHtml(prev => prev === html ? prev : html);
     });
 
+    newSocket.on("dom_snapshot", ({ html }: { fileId: string; html: string }) => {
+      setCurrentHtml(prev => prev === html ? prev : html);
+    });
+
     newSocket.on("force_sync_state", (state: any) => {
       if (state.files) setFiles(state.files);
       if (state.activeFileId) setActiveFileId(state.activeFileId);

@@ -39,6 +39,7 @@ interface RoomData {
   interactionSeq: number;
   // Temporary explanation content (persists so late-joining students see it)
   tempContent: { html: string; name: string } | null;
+  liveSnapshotHtml: string | null;
 }
 
 async function startServer() {
@@ -138,6 +139,7 @@ async function startServer() {
       scores: {},
       interactionSeq: 0,
       tempContent: null,
+      liveSnapshotHtml: null,
     };
   }
 
@@ -488,6 +490,16 @@ async function startServer() {
         }
         console.log(`📤 Sent live HTML to ${pending.length} pending student(s) in room ${roomId}`);
       }
+    });
+
+    socket.on('dom_snapshot', ({ roomId, html }: { roomId: string; html: string }) => {
+      const room = rooms.get(roomId);
+      if (!room || !room.activeFileId) return;
+      const user = room.users.get(socket.id);
+      if (user?.role !== 'teacher') return;
+      room.liveSnapshotHtml = html;
+      room.lastRunHtml = html;
+      socket.to(roomId).emit('dom_snapshot', { fileId: room.activeFileId, html });
     });
 
     // ─── FORCE SYNC (Server-authoritative) ───

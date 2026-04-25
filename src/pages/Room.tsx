@@ -216,6 +216,8 @@ export default function Room() {
   const skipOwnPreviewRef = useRef(false);
   const syncEpochRef = useRef(0);
   const lastInboundSeqRef = useRef(0);
+  const snapshotTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const snapshotRequestRef = useRef(false);
 
   // ── Refs ──
   const iframeRef = useRef<HTMLIFrameElement>(null);
@@ -524,6 +526,14 @@ export default function Room() {
 
   // ── Relay iframe messages ──
   useEffect(() => {
+    const requestSnapshot = () => {
+      if (snapshotTimerRef.current) clearTimeout(snapshotTimerRef.current);
+      snapshotTimerRef.current = setTimeout(() => {
+        snapshotRequestRef.current = true;
+        iframeRef.current?.contentWindow?.postMessage({ type: 'REQUEST_HTML' }, "*");
+      }, 350);
+    };
+
     const handler = (e: MessageEvent) => {
       if (!socket) return;
       if (e.source !== iframeRef.current?.contentWindow) return;
@@ -532,7 +542,12 @@ export default function Room() {
 
       // Internal sync events — not interactions
       if (type === 'SYNC_PROVIDE_HTML') {
-        socket.emit("sync_html_update", { roomId, html: e.data.html });
+        if (snapshotRequestRef.current) {
+          snapshotRequestRef.current = false;
+          socket.emit("dom_snapshot", { roomId, html: e.data.html });
+        } else {
+          socket.emit("sync_html_update", { roomId, html: e.data.html });
+        }
         return;
       }
       if (type === 'STEP_INFO') {
@@ -552,10 +567,16 @@ export default function Room() {
             clientTs: Date.now(),
           },
         });
+        if (type !== 'SYNC_CURSOR' && type !== 'SYNC_SCROLL' && type !== 'SYNC_ZOOM') {
+          requestSnapshot();
+        }
       }
     };
     window.addEventListener("message", handler);
-    return () => window.removeEventListener("message", handler);
+    return () => {
+      window.removeEventListener("message", handler);
+      if (snapshotTimerRef.current) clearTimeout(snapshotTimerRef.current);
+    };
   }, [socket, roomId, scrollSyncEnabled]);
 
   useEffect(() => {

@@ -1,5 +1,5 @@
 export const injectedSyncScript = `
-<script>
+<script id="mathslive-sync-script">
   try {
     Object.defineProperty(window, 'fetch', {
       value: window.fetch,
@@ -669,9 +669,14 @@ export const injectedSyncScript = `
             }
           } catch(ignore) {}
         });
+        var htmlClone = document.documentElement.cloneNode(true);
+        try {
+          var syncScripts = htmlClone.querySelectorAll('#mathslive-sync-script');
+          syncScripts.forEach(function(script) { script.parentNode && script.parentNode.removeChild(script); });
+        } catch(ignore) {}
         window.parent.postMessage({
           type: 'SYNC_PROVIDE_HTML',
-          html: '<!DOCTYPE html>\\n<html>' + document.documentElement.innerHTML + '</html>',
+          html: '<!DOCTYPE html>\\n' + htmlClone.outerHTML,
           scrollX: window.scrollX,
           scrollY: window.scrollY
         }, '*');
