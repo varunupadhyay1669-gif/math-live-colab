@@ -1,69 +1,114 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Pixelify+Sans:wght@400..700&family=VT323&family=JetBrains+Mono:wght@400;500;600&display=swap');
 @import "tailwindcss";
 
-/* ===== Design System v2 — Refined & Modern ===== */
+/* ===== Design System v2 — Minecraft Theme ===== */
 :root {
-  --bg-primary: #F7F8FA;
-  --bg-secondary: #FFFFFF;
-  --bg-card: #FFFFFF;
-  --bg-card-hover: #FAFBFC;
-  --bg-elevated: #FFFFFF;
-  --bg-surface: #F0F1F4;
-  --bg-surface-hover: #E8E9EE;
-  --bg-code: #131416;
-  --bg-toolbar: #FFFFFF;
-  --bg-toolbar-btn: transparent;
-  --bg-toolbar-btn-hover: rgba(0, 0, 0, 0.05);
-  --bg-toolbar-btn-active: rgba(91, 95, 230, 0.10);
+  /* Daytime (Light Mode) Palette - Overworld */
+  --bg-primary: #78A7FF; /* Sky blue */
+  --bg-secondary: #E3E3E3; /* Light stone */
+  --bg-card: #C6C6C6; /* Standard MC GUI background */
+  --bg-card-hover: #D1D1D1;
+  --bg-elevated: #C6C6C6;
+  --bg-surface: #A9A9A9; /* Darker stone */
+  --bg-surface-hover: #9E9E9E;
+  --bg-code: #000000;
+  --bg-toolbar: #C6C6C6;
+  --bg-toolbar-btn: #8B8B8B;
+  --bg-toolbar-btn-hover: #9E9E9E;
+  --bg-toolbar-btn-active: #5B8B5B;
 
-  --border-subtle: rgba(0, 0, 0, 0.06);
-  --border-default: rgba(0, 0, 0, 0.10);
-  --border-strong: rgba(0, 0, 0, 0.18);
-  --border-active: #5B5FE6;
-  --border-focus: rgba(91, 95, 230, 0.25);
+  --border-subtle: #8B8B8B;
+  --border-default: #555555;
+  --border-strong: #373737;
+  --border-active: #00AA00; /* MC Green */
+  --border-focus: rgba(0, 170, 0, 0.4);
 
-  --text-primary: #0F1117;
-  --text-secondary: #525866;
-  --text-muted: #8C92A4;
+  --text-primary: #373737;
+  --text-secondary: #555555;
+  --text-muted: #8B8B8B;
   --text-inverse: #FFFFFF;
 
-  --accent-indigo: #5B5FE6;
-  --accent-indigo-hover: #4F53D9;
-  --accent-indigo-light: rgba(91, 95, 230, 0.08);
-  --accent-indigo-glow: rgba(91, 95, 230, 0.15);
-  --accent-violet: #7C5CE6;
-  --accent-violet-light: rgba(124, 92, 230, 0.08);
-  --accent-emerald: #10B981;
-  --accent-emerald-light: rgba(16, 185, 129, 0.08);
-  --accent-rose: #EF4444;
-  --accent-rose-light: rgba(239, 68, 68, 0.07);
-  --accent-amber: #F59E0B;
-  --accent-amber-light: rgba(245, 158, 11, 0.08);
-  --accent-sky: #0EA5E9;
-  --accent-sky-light: rgba(14, 165, 233, 0.08);
+  --accent-indigo: #00AA00; /* Re-mapped to MC Green */
+  --accent-indigo-hover: #008800;
+  --accent-indigo-light: rgba(0, 170, 0, 0.15);
+  --accent-indigo-glow: rgba(0, 170, 0, 0.3);
 
-  --gradient-primary: linear-gradient(135deg, #5B5FE6 0%, #7C5CE6 100%);
-  --gradient-subtle: linear-gradient(135deg, rgba(91,95,230,0.06) 0%, rgba(124,92,230,0.03) 100%);
+  --accent-violet: #AA00AA; /* MC Purple */
+  --accent-violet-light: rgba(170, 0, 170, 0.15);
 
-  --shadow-xs: 0 1px 2px rgba(0,0,0,0.04);
-  --shadow-sm: 0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.03);
-  --shadow-md: 0 4px 12px rgba(0,0,0,0.07), 0 1px 3px rgba(0,0,0,0.04);
-  --shadow-lg: 0 8px 24px rgba(0,0,0,0.08), 0 2px 8px rgba(0,0,0,0.04);
-  --shadow-xl: 0 20px 48px rgba(0,0,0,0.10), 0 4px 12px rgba(0,0,0,0.05);
-  --shadow-card: 0 1px 3px rgba(0,0,0,0.04), 0 0 0 1px rgba(0,0,0,0.04);
-  --shadow-card-hover: 0 8px 24px rgba(0,0,0,0.08), 0 0 0 1px rgba(91,95,230,0.10);
-  --shadow-glow-indigo: 0 4px 16px rgba(91, 95, 230, 0.20);
-  --shadow-glow-violet: 0 4px 16px rgba(124, 92, 230, 0.20);
-  --shadow-inner-subtle: inset 0 1px 2px rgba(0,0,0,0.04);
-  --shadow-toolbar: 0 1px 3px rgba(0,0,0,0.05), 0 0 0 1px rgba(0,0,0,0.04);
+  --accent-emerald: #55FF55; /* MC Light Green */
+  --accent-emerald-light: rgba(85, 255, 85, 0.15);
 
-  --radius-xs: 4px;
-  --radius-sm: 6px;
-  --radius-md: 8px;
-  --radius-lg: 10px;
-  --radius-xl: 12px;
-  --radius-2xl: 16px;
-  --radius-full: 9999px;
+  --accent-rose: #FF5555; /* MC Red */
+  --accent-rose-light: rgba(255, 85, 85, 0.15);
+
+  --accent-amber: #FFAA00; /* MC Gold */
+  --accent-amber-light: rgba(255, 170, 0, 0.15);
+
+  --accent-sky: #55FFFF; /* MC Aqua */
+  --accent-sky-light: rgba(85, 255, 255, 0.15);
+
+  --gradient-primary: linear-gradient(135deg, #00AA00 0%, #55FF55 100%);
+  --gradient-subtle: linear-gradient(135deg, rgba(0,170,0,0.1) 0%, rgba(85,255,85,0.05) 100%);
+
+  /* Blocky Shadows for UI elements */
+  --shadow-xs: inset -2px -2px 0px 0px rgba(0,0,0,0.25), inset 2px 2px 0px 0px rgba(255,255,255,0.4);
+  --shadow-sm: inset -3px -3px 0px 0px rgba(0,0,0,0.25), inset 3px 3px 0px 0px rgba(255,255,255,0.4);
+  --shadow-md: inset -4px -4px 0px 0px rgba(0,0,0,0.25), inset 4px 4px 0px 0px rgba(255,255,255,0.4), 0 4px 0px rgba(0,0,0,0.15);
+  --shadow-lg: inset -4px -4px 0px 0px rgba(0,0,0,0.25), inset 4px 4px 0px 0px rgba(255,255,255,0.4), 0 8px 0px rgba(0,0,0,0.2);
+  --shadow-xl: inset -4px -4px 0px 0px rgba(0,0,0,0.25), inset 4px 4px 0px 0px rgba(255,255,255,0.4), 0 12px 0px rgba(0,0,0,0.25);
+
+  --shadow-card: inset -3px -3px 0px 0px rgba(0,0,0,0.2), inset 3px 3px 0px 0px rgba(255,255,255,0.3);
+  --shadow-card-hover: inset -3px -3px 0px 0px rgba(0,0,0,0.3), inset 3px 3px 0px 0px rgba(255,255,255,0.5);
+
+  --shadow-glow-indigo: 0 0 12px 2px #00AA00;
+  --shadow-glow-violet: 0 0 12px 2px #AA00AA;
+
+  /* Inset shadow for pressed state */
+  --shadow-inner-subtle: inset 3px 3px 0px 0px rgba(0,0,0,0.3), inset -3px -3px 0px 0px rgba(255,255,255,0.1);
+  --shadow-toolbar: inset -2px -2px 0px 0px rgba(0,0,0,0.2), inset 2px 2px 0px 0px rgba(255,255,255,0.3);
+
+  /* Minecraft uses zero border radius */
+  --radius-xs: 0px;
+  --radius-sm: 0px;
+  --radius-md: 0px;
+  --radius-lg: 0px;
+  --radius-xl: 0px;
+  --radius-2xl: 0px;
+  --radius-full: 0px;
+}
+
+/* Nighttime (Dark Mode) Palette - Cave/Night */
+.dark {
+  --bg-primary: #121212; /* Deep night sky / void */
+  --bg-secondary: #2A2A2A; /* Dark stone */
+  --bg-card: #373737;
+  --bg-card-hover: #454545;
+  --bg-elevated: #373737;
+  --bg-surface: #222222;
+  --bg-surface-hover: #2A2A2A;
+  --bg-code: #050505;
+  --bg-toolbar: #373737;
+  --bg-toolbar-btn: #2A2A2A;
+  --bg-toolbar-btn-hover: #454545;
+  --bg-toolbar-btn-active: #008800;
+
+  --border-subtle: #555555;
+  --border-default: #111111;
+  --border-strong: #000000;
+
+  --text-primary: #FFFFFF;
+  --text-secondary: #AAAAAA;
+  --text-muted: #8B8B8B;
+
+  --shadow-xs: inset -2px -2px 0px 0px rgba(0,0,0,0.5), inset 2px 2px 0px 0px rgba(255,255,255,0.15);
+  --shadow-sm: inset -3px -3px 0px 0px rgba(0,0,0,0.5), inset 3px 3px 0px 0px rgba(255,255,255,0.15);
+  --shadow-md: inset -4px -4px 0px 0px rgba(0,0,0,0.5), inset 4px 4px 0px 0px rgba(255,255,255,0.15), 0 4px 0px rgba(0,0,0,0.4);
+  --shadow-lg: inset -4px -4px 0px 0px rgba(0,0,0,0.5), inset 4px 4px 0px 0px rgba(255,255,255,0.15), 0 8px 0px rgba(0,0,0,0.5);
+  --shadow-xl: inset -4px -4px 0px 0px rgba(0,0,0,0.5), inset 4px 4px 0px 0px rgba(255,255,255,0.15), 0 12px 0px rgba(0,0,0,0.6);
+
+  --shadow-card: inset -3px -3px 0px 0px rgba(0,0,0,0.4), inset 3px 3px 0px 0px rgba(255,255,255,0.1);
+  --shadow-card-hover: inset -3px -3px 0px 0px rgba(0,0,0,0.6), inset 3px 3px 0px 0px rgba(255,255,255,0.2);
 }
 
 /* ===== Base ===== */
@@ -71,17 +116,23 @@
 
 html, body, #root {
   height: 100%;
-  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-family: 'VT323', monospace; /* Default body font */
+  font-size: 20px; /* Base size larger for VT323 */
   background: var(--bg-primary);
   color: var(--text-primary);
-  -webkit-font-smoothing: antialiased;
+  -webkit-font-smoothing: none; /* Crucial for pixel fonts */
   -moz-osx-font-smoothing: grayscale;
-  font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
+  image-rendering: pixelated; /* Crisp borders */
+  transition: background-color 0.3s, color 0.3s;
 }
 
 h1, h2, h3, h4, .font-display {
-  font-family: 'Inter', sans-serif;
-  letter-spacing: -0.03em;
+  font-family: 'Pixelify Sans', sans-serif;
+  letter-spacing: 0.05em;
+  text-shadow: 2px 2px 0px rgba(0,0,0,0.25);
+}
+.dark h1, .dark h2, .dark h3, .dark h4, .dark .font-display {
+  text-shadow: 3px 3px 0px rgba(0,0,0,0.8);
 }
 
 /* ===== Scrollbar ===== */

@@ -1,10 +1,11 @@
 import React, { useEffect, useState, useRef, useCallback } from "react";
 import { useParams, useNavigate, useSearchParams } from "react-router-dom";
-import { io, Socket } from "socket.io-client";
 import { injectedSyncScript } from "../lib/syncScript";
 import { stepLockScript } from "../lib/stepLockScript";
 import { sessionRecorder } from "../lib/sessionRecorder";
 import { sounds } from "../lib/sounds";
+import { useTeacherSocket, FileEntry } from "../hooks/useTeacherSocket";
+import { ThemeToggle } from "../components/ThemeToggle";
 
 // ── Components ──
 import TeacherControls from "../components/TeacherControls";
@@ -17,56 +18,11 @@ import CursorOverlay from "../components/CursorOverlay";
 import AnnotationLayer from "../components/AnnotationLayer";
 import StepControls from "../components/StepControls";
 import StepGate from "../components/StepGate";
-import AttentionIndicator from "../components/AttentionIndicator";
 import UserList from "../components/UserList";
 import SimulationLibrary from "../components/SimulationLibrary";
 import ConnectionStatus from "../components/ConnectionStatus";
 import Leaderboard from "../components/Leaderboard";
 import Whiteboard from "../components/Whiteboard";
-
-// ── Types ──
-interface FileEntry {
-  id: string;
-  name: string;
-  html: string;
-  uploadedAt: number;
-}
-
-interface ChatMessage {
-  id: string;
-  userId: string;
-  userName: string;
-  message: string;
-  timestamp: number;
-}
-
-interface Cursor {
-  x: number;
-  y: number;
-  color: string;
-  name: string;
-}
-
-interface UserInfo {
-  id: string;
-  name: string;
-  role: string;
-}
-
-interface StudentAttention {
-  studentId: string;
-  studentName: string;
-  isAttentive: boolean;
-  lastSeen: number;
-}
-
-interface GateData {
-  question: string;
-  options: string[];
-  correctIndex: number;
-}
-
-const CURSOR_COLORS = ["#6366F1", "#10B981", "#F59E0B", "#F43F5E", "#8B5CF6", "#EC4899", "#0EA5E9", "#F97316"];
 
 export default function Room() {
   const { roomId } = useParams<{ roomId: string }>();
@@ -74,35 +30,57 @@ export default function Room() {
   const [searchParams] = useSearchParams();
   const teacherName = searchParams.get('name') || 'Teacher';
 
+  // ── Refs ──
+  const iframeRef = useRef<HTMLIFrameElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const timerRef = useRef<ReturnType<typeof setInterval>>();
+  const iframeReadyRef = useRef(false);
+  const pendingMessagesRef = useRef<any[]>([]);
+
+  const postToIframe = useCallback((msg: any) => {
+    if (iframeReadyRef.current && iframeRef.current?.contentWindow) {
+      iframeRef.current.contentWindow.postMessage(msg, '*');
+    } else {
+      if (pendingMessagesRef.current.length < 500) {
+        pendingMessagesRef.current.push(msg);
+      }
+    }
+  }, []);
+
+  const handleRemoteInteraction = useCallback((event: any) => {
+    postToIframe(event);
+  }, [postToIframe]);
+
+  const handleRequestHtmlSync = useCallback(() => {
+    if (iframeRef.current?.contentWindow) {
+      iframeRef.current.contentWindow.postMessage({ type: 'REQUEST_HTML' }, "*");
+    }
+  }, []);
+
+  // ── Use the custom socket hook ──
+  const {
+    socket, connected, files, setFiles, activeFileId, setActiveFileId,
+    htmlCode, setHtmlCode, previewHtml, setPreviewHtml, users, cursors,
+    isPaused, setIsPaused, chatMessages, handRaised, quizAnswers, setQuizAnswers,
+    reactions, studentFeedback, challengeTimer, setChallengeTimer,
+    showCelebration, celebrationType, scrollSyncEnabled, setScrollSyncEnabled,
+    studentInteractionAllowed, setStudentInteractionAllowed, attention,
+    attentionAcks, setAttentionAcks, leaderboard, currentStep, setCurrentStep,
+    maxStep, setMaxStep, stepLockEnabled, setStepLockEnabled, gates, setGates,
+    zoomLevel, setZoomLevel, notification, showNotif, lastSyncTime, setLastSyncTime,
+    skipOwnPreviewRef, challengeTimerRef
+  } = useTeacherSocket(roomId!, teacherName, handleRemoteInteraction, handleRequestHtmlSync);
+
   // ── View Mode ──
   type ViewMode = 'split' | 'code' | 'preview';
   const [viewMode, setViewMode] = useState<ViewMode>(
     typeof window !== 'undefined' && window.innerWidth < 768 ? 'preview' : 'split'
   );
 
-  // ── Core State ──
-  const [socket, setSocket] = useState<Socket | null>(null);
-  const [connected, setConnected] = useState(false);
-  const [files, setFiles] = useState<FileEntry[]>([]);
-  const [activeFileId, setActiveFileId] = useState<string | null>(null);
-  const [htmlCode, setHtmlCode] = useState("");
-  const [previewHtml, setPreviewHtml] = useState("");
   const [iframeUrl, setIframeUrl] = useState("");
-  const [users, setUsers] = useState<UserInfo[]>([]);
-  const [cursors, setCursors] = useState<Record<string, Cursor>>({});
-
-  // ── Feature State ──
-  const [isPaused, setIsPaused] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
-  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [showQuizModal, setShowQuizModal] = useState(false);
   const [quizQuestion, setQuizQuestion] = useState("");
-  const [quizAnswers, setQuizAnswers] = useState<Array<{ answer: string; studentName: string }>>([]);
-  const [handRaised, setHandRaised] = useState<{ studentName: string } | null>(null);
-  const [reactions, setReactions] = useState<Array<{ id: number; emoji: string }>>([]);
-  const [linkCopied, setLinkCopied] = useState(false);
-  const [notification, setNotification] = useState("");
-  const [sessionTimer, setSessionTimer] = useState(0);
   const [isDragging, setIsDragging] = useState(false);
   const [showPasteModal, setShowPasteModal] = useState(false);
   const [pasteCode, setPasteCode] = useState("");
@@ -112,33 +90,8 @@ export default function Room() {
   const [drawMode, setDrawMode] = useState(false);
   const [laserMode, setLaserMode] = useState(false);
   const [penType, setPenType] = useState<'transient' | 'permanent'>('transient');
-  const [penColor, setPenColor] = useState('#6366F1');
+  const [penColor, setPenColor] = useState('#00AA00'); // MC Green default
   const [penWidth, setPenWidth] = useState(3);
-
-  // ── Challenge Timer ──
-  const [challengeTimer, setChallengeTimer] = useState<{ seconds: number; remaining: number } | null>(null);
-  const challengeTimerRef = useRef<ReturnType<typeof setInterval>>();
-
-  // ── Student Feedback ──
-  const [studentFeedback, setStudentFeedback] = useState<Array<{ id: number; emoji: string; label: string; studentName: string }>>([]);
-  const feedbackIdRef = useRef(0);
-
-  // ── Celebration ──
-  const [showCelebration, setShowCelebration] = useState(false);
-  const [celebrationType, setCelebrationType] = useState<'confetti' | 'fireworks' | 'stars'>('confetti');
-
-  // ── Sync Status ──
-  const [lastSyncTime, setLastSyncTime] = useState<number | null>(null);
-
-  // ── Scroll Sync ──
-  const [scrollSyncEnabled, setScrollSyncEnabled] = useState(true);
-
-  // ── Zoom Sync ──
-  const [zoomLevel, setZoomLevel] = useState(1);
-
-  // ── Gamification ──
-  const [leaderboard, setLeaderboard] = useState<Array<{ studentName: string; xp: number; streak: number }>>([]);
-  const [showLeaderboard, setShowLeaderboard] = useState(false);
 
   // ── Whiteboard ──
   const [whiteboardMode, setWhiteboardMode] = useState(false);
@@ -146,303 +99,19 @@ export default function Room() {
   const [whiteboardScrollY, setWhiteboardScrollY] = useState(0);
   const whiteboardRef = useRef<import('../components/Whiteboard').WhiteboardRef>(null);
 
-  // ── Student Interaction Mode ──
-  const [studentInteractionAllowed, setStudentInteractionAllowed] = useState(false);
-
-  // ── Attention Check ──
-  const [attentionAcks, setAttentionAcks] = useState<Array<{ studentName: string; timestamp: number }>>([]);
-  const [attentionCheckActive, setAttentionCheckActive] = useState(false);
-
-  // ── Iframe readiness ──
-  const iframeReadyRef = useRef(false);
-  const pendingMessagesRef = useRef<any[]>([]);
-
-  // ── Step-Lock ──
-  const [stepLockEnabled, setStepLockEnabled] = useState(false);
-  const [currentStep, setCurrentStep] = useState(1);
-  const [maxStep, setMaxStep] = useState(0);
-  const [gates, setGates] = useState<Record<number, GateData>>({});
   const [showGateModal, setShowGateModal] = useState(false);
-
-  // ── Attention Detection ──
-  const [attention, setAttention] = useState<Record<string, StudentAttention>>({});
-
-  // ── Simulation Library ──
   const [showLibrary, setShowLibrary] = useState(false);
-
-  // ── Recording ──
   const [isRecording, setIsRecording] = useState(false);
-
-  // ── Sound ──
   const [soundMuted, setSoundMuted] = useState(false);
-
-  // ── User Panel ──
   const [showUserPanel, setShowUserPanel] = useState(false);
-
-  // ── Room Password ──
   const [roomPassword, setRoomPassword] = useState<string>('');
   const [showShareMenu, setShowShareMenu] = useState(false);
+  const [linkCopied, setLinkCopied] = useState(false);
+  const [attentionCheckActive, setAttentionCheckActive] = useState(false);
+  const [showLeaderboard, setShowLeaderboard] = useState(false);
+  const [sessionTimer, setSessionTimer] = useState(0);
 
-  // ── Flag to skip our own run_preview echo ──
-  const skipOwnPreviewRef = useRef(false);
 
-  // ── Refs ──
-  const iframeRef = useRef<HTMLIFrameElement>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const timerRef = useRef<ReturnType<typeof setInterval>>();
-  const reactionIdRef = useRef(0);
-
-  // ── Session Timer ──
-  useEffect(() => {
-    timerRef.current = setInterval(() => setSessionTimer(t => t + 1), 1000);
-    return () => clearInterval(timerRef.current);
-  }, []);
-
-  const formatTime = (s: number) => {
-    const h = Math.floor(s / 3600);
-    const m = Math.floor((s % 3600) / 60);
-    const sec = s % 60;
-    if (h > 0) return `${h}:${m.toString().padStart(2, '0')}:${sec.toString().padStart(2, '0')}`;
-    return `${m.toString().padStart(2, '0')}:${sec.toString().padStart(2, '0')}`;
-  };
-
-  // ── Socket Connection ──
-  useEffect(() => {
-    if (!roomId) { navigate("/"); return; }
-    const newSocket = io();
-    setSocket(newSocket);
-
-    newSocket.on("connect", () => {
-      setConnected(true);
-      newSocket.emit("join_room", { roomId, userName: teacherName, role: 'teacher' });
-    });
-    newSocket.on("disconnect", () => setConnected(false));
-
-    newSocket.on("room_state", (state: any) => {
-      setFiles(state.files || []);
-      setActiveFileId(state.activeFileId);
-      setIsPaused(state.isPaused);
-      if (typeof state.scrollSyncEnabled === 'boolean') setScrollSyncEnabled(state.scrollSyncEnabled);
-      if (typeof state.studentInteractionAllowed === 'boolean') setStudentInteractionAllowed(state.studentInteractionAllowed);
-      setUsers(state.users || []);
-      setChatMessages(state.chat || []);
-      if (state.activeFileId && state.files) {
-        const f = state.files.find((f: FileEntry) => f.id === state.activeFileId);
-        if (f) { setHtmlCode(f.html); setPreviewHtml(f.html); }
-      }
-    });
-
-    newSocket.on("user_list", (list: UserInfo[]) => setUsers(list));
-    newSocket.on("user_left", (data: { userId: string; userName: string }) => {
-      setCursors(prev => { const n = { ...prev }; delete n[data.userId]; return n; });
-      setAttention(prev => { const n = { ...prev }; delete n[data.userId]; return n; });
-      showNotif(`${data.userName} left the session`);
-    });
-    newSocket.on("file_uploaded", (file: FileEntry) => {
-      setFiles(prev => [...prev, file]);
-      sounds.tick();
-    });
-    newSocket.on("upload_error", ({ message }: { message: string }) => {
-      showNotif(`⚠️ Upload failed: ${message}`);
-    });
-    newSocket.on("file_updated", ({ fileId, html }: { fileId: string; html: string }) => {
-      setFiles(prev => prev.map(f => f.id === fileId ? { ...f, html } : f));
-    });
-    newSocket.on("file_deleted", ({ fileId, newActiveId }: { fileId: string; newActiveId: string | null }) => {
-      setFiles(prev => prev.filter(f => f.id !== fileId));
-      if (newActiveId) setActiveFileId(newActiveId);
-    });
-    newSocket.on("active_file_changed", (data: { fileId: string; fileName?: string; html?: string }) => {
-      setActiveFileId(data.fileId);
-    });
-    newSocket.on("run_preview", ({ html }: { fileId: string; html: string }) => {
-      // Skip if this is our own echo from run_preview we just emitted
-      if (skipOwnPreviewRef.current) {
-        skipOwnPreviewRef.current = false;
-        return;
-      }
-      // Only rebuild iframe if HTML actually changed
-      setPreviewHtml(prev => prev === html ? prev : html);
-    });
-    newSocket.on("chat_message", (msg: ChatMessage) => {
-      setChatMessages(prev => [...prev, msg]);
-      sounds.message();
-      if (isRecording) sessionRecorder.record('chat_message', msg);
-    });
-    newSocket.on("hand_raised", ({ studentName }: { studentName: string }) => {
-      setHandRaised({ studentName });
-      showNotif(`✋ ${studentName} raised their hand!`);
-      sounds.raiseHand();
-      setTimeout(() => setHandRaised(null), 8000);
-    });
-    newSocket.on("quiz_answer_received", ({ answer, studentName }: { answer: string; studentName: string }) => {
-      setQuizAnswers(prev => [...prev, { answer, studentName }]);
-      showNotif(`📝 ${studentName} answered!`);
-      sounds.success();
-    });
-    newSocket.on("reaction", ({ emoji }: { emoji: string }) => {
-      const id = reactionIdRef.current++;
-      setReactions(prev => [...prev, { id, emoji }]);
-      setTimeout(() => setReactions(prev => prev.filter(r => r.id !== id)), 2500);
-    });
-    newSocket.on("interaction", (event: any) => {
-      if (event.type === "SYNC_CURSOR") {
-        setCursors(prev => ({
-          ...prev,
-          [event.userId]: {
-            x: event.x, y: event.y,
-            color: CURSOR_COLORS[event.userId.charCodeAt(0) % CURSOR_COLORS.length],
-            name: event.userName || 'Student',
-          },
-        }));
-      } else {
-        const remoteEvent = { ...event, type: event.type.replace("SYNC_", "REMOTE_") };
-        postToIframe(remoteEvent);
-      }
-      if (isRecording) sessionRecorder.record('interaction', event);
-    });
-
-    // ── Student Feedback ──
-    newSocket.on("student_feedback", ({ emoji, label, studentName }: { emoji: string; label: string; studentName: string }) => {
-      const id = feedbackIdRef.current++;
-      setStudentFeedback(prev => [...prev, { id, emoji, label, studentName }]);
-      showNotif(`${emoji} ${studentName}: ${label}`);
-      sounds.tick();
-      setTimeout(() => setStudentFeedback(prev => prev.filter(f => f.id !== id)), 5000);
-    });
-
-    // ── Timer ──
-    newSocket.on("timer_started", ({ seconds }: { seconds: number }) => {
-      setChallengeTimer({ seconds, remaining: seconds });
-    });
-    newSocket.on("timer_stopped", () => {
-      setChallengeTimer(null);
-      if (challengeTimerRef.current) clearInterval(challengeTimerRef.current);
-    });
-
-    // ── Celebration ──
-    newSocket.on("celebration", ({ type }: { type?: string }) => {
-      setCelebrationType((type as any) || 'confetti');
-      setShowCelebration(true);
-      sounds.celebration();
-      setTimeout(() => setShowCelebration(false), 4000);
-    });
-
-    // ── Sync ──
-    newSocket.on("request_html_sync", () => {
-      if (iframeRef.current?.contentWindow) {
-        iframeRef.current.contentWindow.postMessage({ type: 'REQUEST_HTML' }, "*");
-      }
-    });
-    newSocket.on("force_sync_state", (state: any) => {
-      if (state.activeFileId && state.lastRunHtml) {
-        setPreviewHtml(state.lastRunHtml);
-        setActiveFileId(state.activeFileId);
-      }
-      if (state.files) setFiles(state.files);
-      setLastSyncTime(Date.now());
-    });
-
-    // ── Attention ──
-    newSocket.on("student_attention", ({ studentId, studentName, isAttentive }: { studentId: string; studentName: string; isAttentive: boolean }) => {
-      setAttention(prev => ({
-        ...prev,
-        [studentId]: { studentId, studentName, isAttentive, lastSeen: Date.now() },
-      }));
-    });
-
-    // ── Scroll Sync ──
-    newSocket.on("scroll_sync_changed", ({ enabled }: { enabled: boolean }) => {
-      setScrollSyncEnabled(enabled);
-    });
-
-    // ── Student Interaction Mode ──
-    newSocket.on("student_interaction_changed", ({ allowed }: { allowed: boolean }) => {
-      setStudentInteractionAllowed(allowed);
-    });
-
-    // ── Attention Check Acks ──
-    newSocket.on("attention_ack", ({ studentName, timestamp }: { studentName: string; timestamp: number }) => {
-      setAttentionAcks(prev => [...prev, { studentName, timestamp }]);
-      showNotif(`${studentName} is here`);
-    });
-
-    // ── Step-Lock events ──
-    newSocket.on("gate_answered", ({ studentName, step, correct }: { studentName: string; step: number; correct: boolean }) => {
-      showNotif(`${correct ? '✅' : '❌'} ${studentName} ${correct ? 'passed' : 'failed'} gate on Step ${step}`);
-      if (correct) sounds.success();
-    });
-
-    // ── Gamification ──
-    newSocket.on("leaderboard_update", (lb: Array<{ studentName: string; xp: number; streak: number }>) => {
-      setLeaderboard(lb);
-    });
-
-    // ── Room Hard Reset (files are PRESERVED — only progress/session state is cleared) ──
-    newSocket.on("room_reset", (payload?: { activeFileId?: string | null; files?: FileEntry[]; lastRunHtml?: string | null }) => {
-      // Clear session progress/state
-      setChatMessages([]);
-      setCursors({});
-      setCurrentStep(1);
-      setMaxStep(0);
-      setGates({});
-      setStepLockEnabled(false);
-      setZoomLevel(1);
-      setLeaderboard([]);
-      setQuizAnswers([]);
-      setHandRaised(null);
-      setStudentFeedback([]);
-      setAttention({});
-      setAttentionAcks([]);
-      // Keep uploaded files — sync from server's authoritative state if provided
-      if (payload?.files) setFiles(payload.files);
-      if (payload?.activeFileId !== undefined) setActiveFileId(payload.activeFileId);
-      // Reload the active file into preview so it starts fresh from the top
-      if (payload?.activeFileId && payload.files) {
-        const active = payload.files.find(f => f.id === payload.activeFileId);
-        if (active) {
-          setHtmlCode(active.html);
-          setPreviewHtml(active.html);
-        }
-      }
-      showNotif("🔄 Session reset — starting from the beginning");
-    });
-
-    return () => { newSocket.disconnect(); };
-  }, [roomId, navigate, teacherName]);
-
-  // ── Helper: safely post message to iframe (queues if not ready) ──
-  const postToIframe = useCallback((msg: any) => {
-    if (iframeReadyRef.current && iframeRef.current?.contentWindow) {
-      iframeRef.current.contentWindow.postMessage(msg, '*');
-    } else {
-      // Cap pending queue to prevent memory leak
-      if (pendingMessagesRef.current.length < 500) {
-        pendingMessagesRef.current.push(msg);
-      }
-    }
-  }, []);
-
-  // ── Iframe onLoad: flush pending messages ──
-  const handleIframeLoad = useCallback(() => {
-    iframeReadyRef.current = true;
-    // Flush any pending messages
-    const pending = pendingMessagesRef.current;
-    pendingMessagesRef.current = [];
-    for (const msg of pending) {
-      iframeRef.current?.contentWindow?.postMessage(msg, '*');
-    }
-    // Re-send current state
-    if (scrollSyncEnabled !== undefined) {
-      iframeRef.current?.contentWindow?.postMessage({ type: 'SET_SCROLL_SYNC', enabled: scrollSyncEnabled }, '*');
-    }
-    if (stepLockEnabled && currentStep) {
-      iframeRef.current?.contentWindow?.postMessage({ type: 'SET_STEP', step: currentStep }, '*');
-    }
-    if (zoomLevel !== 1) {
-      iframeRef.current?.contentWindow?.postMessage({ type: 'SET_ZOOM', zoom: zoomLevel }, '*');
-    }
-  }, [scrollSyncEnabled, stepLockEnabled, currentStep, zoomLevel]);
 
   // ── Relay iframe messages ──
   useEffect(() => {
@@ -451,7 +120,6 @@ export default function Room() {
       const type = e.data?.type;
       if (!type) return;
 
-      // Internal sync events — not interactions
       if (type === 'SYNC_PROVIDE_HTML') {
         socket.emit("sync_html_update", { roomId, html: e.data.html });
         return;
@@ -460,27 +128,18 @@ export default function Room() {
         setMaxStep(e.data.maxStep || 0);
         return;
       }
-
-      // Only relay actual SYNC_ interaction events
       if (type.startsWith('SYNC_')) {
-        // Check scroll sync gate
         if (type === 'SYNC_SCROLL' && !scrollSyncEnabled) return;
         socket.emit("interaction", { roomId, event: e.data });
       }
     };
     window.addEventListener("message", handler);
     return () => window.removeEventListener("message", handler);
-  }, [socket, roomId, scrollSyncEnabled]);
-
-  // NOTE: Periodic auto-sync removed — it was causing full iframe reloads on student
-  // side every 10s, making the page blink and scroll jump to top.
-  // Interactions are already synced in real-time via SYNC_* events.
-  // Full HTML sync only happens on: file switch, file upload, manual Force Sync.
+  }, [socket, roomId, scrollSyncEnabled, setMaxStep]);
 
   // ── Build iframe URL ──
   useEffect(() => {
     if (!previewHtml) { setIframeUrl(""); return; }
-    // Mark iframe as not ready while we rebuild it
     iframeReadyRef.current = false;
     let content = previewHtml;
     const scripts = injectedSyncScript + stepLockScript;
@@ -496,31 +155,6 @@ export default function Room() {
     setIframeUrl(url);
     return () => URL.revokeObjectURL(url);
   }, [previewHtml, stepLockEnabled]);
-
-  // ── Sync code when active file changes ──
-  useEffect(() => {
-    if (activeFileId) {
-      const file = files.find(f => f.id === activeFileId);
-      if (file) { setHtmlCode(file.html); setPreviewHtml(file.html); }
-    }
-  }, [activeFileId]);
-
-  // ── Challenge Timer Countdown ──
-  useEffect(() => {
-    if (!challengeTimer) return;
-    if (challengeTimerRef.current) clearInterval(challengeTimerRef.current);
-    challengeTimerRef.current = setInterval(() => {
-      setChallengeTimer(prev => {
-        if (!prev || prev.remaining <= 1) {
-          clearInterval(challengeTimerRef.current);
-          sounds.timerEnd();
-          return null;
-        }
-        return { ...prev, remaining: prev.remaining - 1 };
-      });
-    }, 1000);
-    return () => { if (challengeTimerRef.current) clearInterval(challengeTimerRef.current); };
-  }, [challengeTimer?.seconds]);
 
   // ── Step-Lock: send step to iframe when changed ──
   useEffect(() => {
@@ -561,21 +195,101 @@ export default function Room() {
     socket.emit("hard_reset", { roomId });
   };
 
-  // ── Attention timestamp updater ──
+  // ── Session Timer ──
   useEffect(() => {
-    const interval = setInterval(() => {
-      setAttention(prev => ({ ...prev })); // Force re-render for time-based status
-    }, 5000);
-    return () => clearInterval(interval);
+    timerRef.current = setInterval(() => setSessionTimer(t => t + 1), 1000);
+    return () => clearInterval(timerRef.current);
   }, []);
 
-  // ── Helpers ──
-  const notifTimeoutRef = useRef<ReturnType<typeof setTimeout>>();
-  const showNotif = (msg: string) => {
-    if (notifTimeoutRef.current) clearTimeout(notifTimeoutRef.current);
-    setNotification(msg);
-    notifTimeoutRef.current = setTimeout(() => setNotification(""), 3000);
+  const formatTime = (s: number) => {
+    const h = Math.floor(s / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    const sec = s % 60;
+    if (h > 0) return `${h}:${m.toString().padStart(2, '0')}:${sec.toString().padStart(2, '0')}`;
+    return `${m.toString().padStart(2, '0')}:${sec.toString().padStart(2, '0')}`;
   };
+
+  // ── Iframe onLoad: flush pending messages ──
+  const handleIframeLoad = useCallback(() => {
+    iframeReadyRef.current = true;
+    // Flush any pending messages
+    const pending = pendingMessagesRef.current;
+    pendingMessagesRef.current = [];
+    for (const msg of pending) {
+      iframeRef.current?.contentWindow?.postMessage(msg, '*');
+    }
+    // Re-send current state
+    if (scrollSyncEnabled !== undefined) {
+      iframeRef.current?.contentWindow?.postMessage({ type: 'SET_SCROLL_SYNC', enabled: scrollSyncEnabled }, '*');
+    }
+    if (stepLockEnabled && currentStep) {
+      iframeRef.current?.contentWindow?.postMessage({ type: 'SET_STEP', step: currentStep }, '*');
+    }
+    if (zoomLevel !== 1) {
+      iframeRef.current?.contentWindow?.postMessage({ type: 'SET_ZOOM', zoom: zoomLevel }, '*');
+    }
+  }, [scrollSyncEnabled, stepLockEnabled, currentStep, zoomLevel]);
+
+  // ── Relay iframe messages ──
+  useEffect(() => {
+    const handler = (e: MessageEvent) => {
+      if (!socket) return;
+      const type = e.data?.type;
+      if (!type) return;
+
+      if (type === 'SYNC_PROVIDE_HTML') {
+        socket.emit("sync_html_update", { roomId, html: e.data.html });
+        return;
+      }
+      if (type === 'STEP_INFO') {
+        setMaxStep(e.data.maxStep || 0);
+        return;
+      }
+      if (type.startsWith('SYNC_')) {
+        if (type === 'SYNC_SCROLL' && !scrollSyncEnabled) return;
+        socket.emit("interaction", { roomId, event: e.data });
+      }
+    };
+    window.addEventListener("message", handler);
+    return () => window.removeEventListener("message", handler);
+  }, [socket, roomId, scrollSyncEnabled, setMaxStep]);
+
+  // ── Build iframe URL ──
+  useEffect(() => {
+    if (!previewHtml) { setIframeUrl(""); return; }
+    iframeReadyRef.current = false;
+    let content = previewHtml;
+    const scripts = injectedSyncScript + stepLockScript;
+    if (content.includes("<head>")) {
+      content = content.replace("<head>", "<head>" + scripts);
+    } else if (content.includes("<html>")) {
+      content = content.replace("<html>", "<html><head>" + scripts + "</head>");
+    } else {
+      content = scripts + content;
+    }
+    const blob = new Blob([content], { type: "text/html" });
+    const url = URL.createObjectURL(blob);
+    setIframeUrl(url);
+    return () => URL.revokeObjectURL(url);
+  }, [previewHtml, stepLockEnabled]);
+
+  // ── Step-Lock: send step to iframe when changed ──
+  useEffect(() => {
+    if (stepLockEnabled) {
+      postToIframe({ type: 'SET_STEP', step: currentStep });
+    }
+  }, [currentStep, stepLockEnabled, postToIframe]);
+
+  // ── Push scroll sync state to iframe ──
+  useEffect(() => {
+    postToIframe({ type: 'SET_SCROLL_SYNC', enabled: scrollSyncEnabled });
+  }, [scrollSyncEnabled, iframeUrl, postToIframe]);
+
+  // ── Zoom: push to iframe when level changes ──
+  useEffect(() => {
+    postToIframe({ type: 'SET_ZOOM', zoom: zoomLevel });
+  }, [zoomLevel, postToIframe]);
+
 
   const uploadFileFromInput = (e: React.ChangeEvent<HTMLInputElement>) => {
     const uploadedFiles = e.target.files;
@@ -870,20 +584,22 @@ export default function Room() {
       )}
 
       {/* ═══ HEADER ═══ */}
-      <header className="app-header">
+      <header className="app-header" style={{ borderBottom: '2px solid var(--border-strong)', height: '56px' }}>
         <div className="header-section">
           <button onClick={() => navigate('/')} className="flex items-center hover:opacity-80 transition-opacity"
             style={{ background: 'none', border: 'none', cursor: 'pointer' }}>
-            <span className="font-display font-extrabold text-[15px]" style={{ color: 'var(--text-primary)', letterSpacing: '-0.03em' }}>
-              Maths<span style={{ color: 'var(--accent-indigo)' }}>Live</span>
+            <span className="font-display font-bold text-[20px]" style={{ color: 'var(--text-primary)' }}>
+              Maths<span style={{ color: 'var(--accent-emerald)' }}>Craft</span>
             </span>
           </button>
 
-          <div className="header-divider hidden sm:block" />
+          <ThemeToggle />
 
-          <span className="hidden sm:inline text-[12px] font-mono font-semibold" style={{ color: 'var(--text-muted)' }}>{roomId}</span>
+          <div className="header-divider hidden sm:block" style={{ height: '24px' }} />
 
-          <div className="header-divider hidden sm:block" />
+          <span className="hidden sm:inline text-[16px] font-bold" style={{ color: 'var(--text-muted)' }}>{roomId}</span>
+
+          <div className="header-divider hidden sm:block" style={{ height: '24px' }} />
 
           {/* View Mode Toggles */}
           <div style={{ display: 'flex', gap: '2px' }}>
@@ -922,9 +638,10 @@ export default function Room() {
 
           {/* Students pill */}
           <div className="relative">
-            <button onClick={() => setShowUserPanel(!showUserPanel)} className="status-pill" style={{ cursor: 'pointer', border: 'none' }}>
+            <button onClick={() => setShowUserPanel(!showUserPanel)} className="status-pill"
+              style={{ cursor: 'pointer', border: '2px solid var(--border-default)', fontSize: '16px', height: '36px' }}>
               <div className={`connection-dot ${studentCount > 0 ? 'online' : 'offline'}`} />
-              <span style={{ fontVariantNumeric: 'tabular-nums' }}>{studentCount}</span>
+              <span>{studentCount} PLAYERS</span>
             </button>
             {showUserPanel && (
               <>
@@ -947,8 +664,8 @@ export default function Room() {
           {/* Invite */}
           <div className="relative">
             <button onClick={() => setShowShareMenu(!showShareMenu)}
-              className={linkCopied ? 'btn-accent' : 'btn'}
-              style={{ height: '32px', padding: '0 12px', fontSize: '12.5px' }}>
+              className={linkCopied ? 'btn-primary' : 'btn-secondary'}
+              style={{ height: '36px', padding: '0 16px', fontSize: '16px', textTransform: 'uppercase' }}>
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71"/>
                 <path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71"/>
@@ -1048,38 +765,39 @@ export default function Room() {
           <div className="flex flex-col overflow-hidden" style={{
             width: viewMode === 'code' ? '100%' : '40%', minWidth: viewMode === 'split' ? '320px' : undefined,
             transition: 'width 0.3s ease',
-            borderRight: '1px solid var(--border-subtle)',
+            borderRight: '2px solid var(--border-strong)',
             background: 'var(--bg-secondary)',
           }}>
             {/* Upload Bar */}
-            <div className="flex items-center gap-3 px-4 py-3 shrink-0" style={{ borderBottom: '1px solid var(--border-subtle)' }}>
+            <div className="flex items-center gap-3 px-4 py-3 shrink-0" style={{ borderBottom: '2px solid var(--border-strong)', background: 'var(--bg-card)' }}>
               <input type="file" accept=".html,.htm" ref={fileInputRef} onChange={uploadFileFromInput} className="hidden" multiple />
-              <button onClick={() => fileInputRef.current?.click()} className="btn-accent text-[12px]">
-                📤 Upload HTML
+              <button onClick={() => fileInputRef.current?.click()} className="btn-primary" style={{ fontSize: '14px', height: '36px' }}>
+                📤 Upload
               </button>
-              <button onClick={() => setShowPasteModal(true)} className="btn text-[12px]">
-                📋 Paste Code
+              <button onClick={() => setShowPasteModal(true)} className="btn-secondary" style={{ fontSize: '14px', height: '36px' }}>
+                📋 Paste
               </button>
             </div>
 
             {/* File Tabs */}
             {files.length > 0 && (
               <div className="flex gap-1.5 px-4 py-2 overflow-x-auto shrink-0 scrollbar-hide"
-                style={{ borderBottom: '1px solid var(--border-subtle)', background: 'var(--bg-surface)' }}>
+                style={{ borderBottom: '2px solid var(--border-strong)', background: 'var(--bg-surface)' }}>
                 {files.map(f => (
                   <button key={f.id} onClick={() => switchFile(f.id)}
-                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12px] shrink-0 transition-all group"
+                    className="flex items-center gap-1.5 px-3 py-1.5 text-[16px] shrink-0 transition-all group"
                     style={{
-                      background: activeFileId === f.id ? 'var(--bg-secondary)' : 'transparent',
-                      color: activeFileId === f.id ? 'var(--accent-indigo)' : 'var(--text-secondary)',
-                      border: activeFileId === f.id ? '1px solid var(--border-default)' : '1px solid transparent',
-                      fontWeight: activeFileId === f.id ? 600 : 400,
+                      background: activeFileId === f.id ? 'var(--bg-secondary)' : 'var(--bg-card)',
+                      color: activeFileId === f.id ? 'var(--text-primary)' : 'var(--text-secondary)',
+                      border: '2px solid',
+                      borderColor: activeFileId === f.id ? 'var(--border-strong)' : 'transparent',
+                      fontWeight: activeFileId === f.id ? 700 : 400,
                       boxShadow: activeFileId === f.id ? 'var(--shadow-sm)' : 'none',
                     }}>
                     <span className="max-w-[120px] truncate">{f.name}</span>
                     <span onClick={(e) => { e.stopPropagation(); deleteFile(f.id); }}
                       className="opacity-0 group-hover:opacity-100 ml-1 cursor-pointer text-base leading-none transition-opacity"
-                      style={{ color: 'var(--text-muted)' }}>×</span>
+                      style={{ color: 'var(--accent-rose)' }}>×</span>
                   </button>
                 ))}
               </div>
@@ -1110,14 +828,13 @@ export default function Room() {
                 <>
                   {/* Editor header */}
                   <div className="flex items-center justify-between px-4 py-2.5 shrink-0"
-                    style={{ borderBottom: '1px solid var(--border-subtle)' }}>
-                    <span className="badge badge-indigo">
-                      {activeFile?.name || 'Editor'}
+                    style={{ borderBottom: '2px solid var(--border-strong)', background: 'var(--bg-card)' }}>
+                    <span className="badge badge-emerald" style={{ fontSize: '14px', textTransform: 'uppercase' }}>
+                      {activeFile?.name || 'Command Block'}
                     </span>
                     <div className="flex items-center gap-3">
-                      <span className="text-[11px] font-mono hidden sm:inline" style={{ color: 'var(--text-muted)' }}>⌘+Enter</span>
-                      <button onClick={runPreview} className="btn-primary text-[12px]" style={{ padding: '6px 14px' }}>
-                        ▶ Run & Sync
+                      <button onClick={runPreview} className="btn-primary" style={{ padding: '6px 16px', fontSize: '14px' }}>
+                        ▶ COMPILE
                       </button>
                     </div>
                   </div>
@@ -1127,8 +844,8 @@ export default function Room() {
                     className="flex-1 w-full p-4 resize-none focus:outline-none code-editor"
                     style={{
                       background: 'var(--bg-code)', color: '#D4D4D8',
-                      caretColor: 'var(--accent-indigo)',
-                      fontFamily: "'JetBrains Mono', monospace", fontSize: '13px', lineHeight: '1.6',
+                      caretColor: 'var(--accent-emerald)',
+                      fontFamily: "'JetBrains Mono', monospace", fontSize: '16px', lineHeight: '1.6',
                     }}
                     spellCheck={false}
                     placeholder="Paste or write your HTML code here..."
@@ -1204,7 +921,7 @@ export default function Room() {
             />
 
             {/* Iframe or Whiteboard */}
-            <div className="flex-1 relative overflow-hidden m-3 rounded-xl preview-frame">
+            <div className="flex-1 relative overflow-hidden m-3 preview-frame" style={{ border: '4px solid var(--border-strong)', borderRadius: '0px' }}>
               {whiteboardMode ? (
                 <Whiteboard
                   ref={whiteboardRef}
@@ -1282,8 +999,12 @@ export default function Room() {
       {/* ═══ NOTIFICATION ═══ */}
       {notification && (
         <div className="fixed top-16 left-1/2 -translate-x-1/2 z-50 animate-slide-down">
-          <div className="px-5 py-2.5 rounded-xl text-sm font-medium"
-            style={{ background: 'var(--bg-card)', color: 'var(--text-primary)', border: '1px solid var(--border-subtle)', boxShadow: 'var(--shadow-lg)' }}>
+          <div className="px-6 py-3 text-lg font-bold"
+            style={{
+              background: 'var(--bg-card)', color: 'var(--text-primary)',
+              border: '3px solid var(--border-strong)', boxShadow: 'var(--shadow-lg)',
+              textTransform: 'uppercase'
+            }}>
             {notification}
           </div>
         </div>
@@ -1292,28 +1013,28 @@ export default function Room() {
       {/* ═══ PASTE CODE MODAL ═══ */}
       {showPasteModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4"
-          style={{ background: 'rgba(0,0,0,0.3)', backdropFilter: 'blur(4px)' }}>
+          style={{ background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)' }}>
           <div className="w-full max-w-2xl animate-bounce-in"
-            style={{ background: 'var(--bg-card)', borderRadius: 'var(--radius-xl)', border: '1px solid var(--border-subtle)', boxShadow: 'var(--shadow-xl)' }}>
+            style={{ background: 'var(--bg-card)', border: '4px solid var(--border-strong)', boxShadow: 'var(--shadow-xl)' }}>
             <div className="flex items-center justify-between p-5 pb-0">
-              <h3 className="font-display text-lg font-bold">📋 Paste HTML Code</h3>
+              <h3 className="font-display text-2xl font-bold uppercase">📋 PASTE CODE</h3>
               <button onClick={() => { setShowPasteModal(false); setPasteCode(''); setPasteFileName(''); }}
-                style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '20px' }}>✕</button>
+                style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '24px' }}>✕</button>
             </div>
             <div className="p-5 space-y-4">
               <input value={pasteFileName} onChange={(e) => setPasteFileName(e.target.value)}
-                placeholder="File name (optional, e.g. fractions-sim)"
-                className="input-field text-sm" />
+                placeholder="FILE NAME (OPTIONAL)"
+                className="input-field text-lg uppercase" />
               <textarea value={pasteCode} onChange={(e) => setPasteCode(e.target.value)}
-                placeholder="Paste your HTML code here..."
+                placeholder="PASTE CODE HERE..."
                 className="input-field code-editor"
                 style={{ minHeight: '250px', resize: 'vertical', lineHeight: '1.6', background: 'var(--bg-code)', color: '#D4D4D8' }} />
               <div className="flex gap-3 justify-end">
                 <button onClick={() => { setShowPasteModal(false); setPasteCode(''); setPasteFileName(''); }}
-                  className="btn-secondary">Cancel</button>
+                  className="btn-secondary" style={{ fontSize: '18px', textTransform: 'uppercase' }}>Cancel</button>
                 <button onClick={handlePasteSubmit} disabled={!pasteCode.trim()}
-                  className="btn-primary disabled:opacity-40">
-                  Add & Run ▶
+                  className="btn-primary disabled:opacity-40" style={{ fontSize: '18px', textTransform: 'uppercase' }}>
+                  COMPILE ▶
                 </button>
               </div>
             </div>

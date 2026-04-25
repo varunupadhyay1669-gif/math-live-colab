@@ -1,10 +1,10 @@
 import React, { useEffect, useState, useRef, useCallback } from "react";
 import { useParams, useNavigate, useSearchParams } from "react-router-dom";
-import { io, Socket } from "socket.io-client";
 import { injectedSyncScript } from "../lib/syncScript";
 import { stepLockScript } from "../lib/stepLockScript";
-import { setupAttentionDetection } from "../lib/attentionDetector";
 import { sounds } from "../lib/sounds";
+import { useStudentSocket } from "../hooks/useStudentSocket";
+import { ThemeToggle } from "../components/ThemeToggle";
 
 // ── Components ──
 import ChatPanel from "../components/ChatPanel";
@@ -19,137 +19,118 @@ import ConnectionStatus from "../components/ConnectionStatus";
 import Leaderboard from "../components/Leaderboard";
 import Whiteboard from "../components/Whiteboard";
 
-// ── Types ──
-interface FileEntry {
-  id: string;
-  name: string;
-  html: string;
-  uploadedAt: number;
-}
-
-interface ChatMessage {
-  id: string;
-  userId: string;
-  userName: string;
-  message: string;
-  timestamp: number;
-}
-
-interface Cursor {
-  x: number;
-  y: number;
-  color: string;
-  name: string;
-}
-
-interface GateData {
-  question: string;
-  options: string[];
-  correctIndex: number;
-}
-
-const CURSOR_COLORS = ["#6366F1", "#10B981", "#F59E0B", "#F43F5E", "#8B5CF6", "#EC4899"];
-
 export default function StudentView() {
   const { roomId } = useParams<{ roomId: string }>();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const studentName = searchParams.get('name') || 'Student';
 
-  // ── Core State ──
-  const [socket, setSocket] = useState<Socket | null>(null);
-  const [connected, setConnected] = useState(false);
   const [iframeUrl, setIframeUrl] = useState("");
-  const [currentHtml, setCurrentHtml] = useState("");
-  const [currentFileName, setCurrentFileName] = useState("");
-  const [isPaused, setIsPaused] = useState(false);
-  const [cursors, setCursors] = useState<Record<string, Cursor>>({});
-
-  // ── Chat ──
   const [chatOpen, setChatOpen] = useState(false);
-  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
-  const [unreadChat, setUnreadChat] = useState(0);
-
-  // ── Reactions ──
-  const [reactions, setReactions] = useState<Array<{ id: number; emoji: string; x: number }>>([]);
-  const reactionIdRef = useRef(0);
-
-  // ── Quiz ──
-  const [quizModal, setQuizModal] = useState<{ question: string } | null>(null);
-  const [quizAnswer, setQuizAnswer] = useState("");
-  const [quizSubmitted, setQuizSubmitted] = useState(false);
-
-  // ── Misc ──
-  const [notification, setNotification] = useState("");
-  const [files, setFiles] = useState<FileEntry[]>([]);
-  const [activeFileId, setActiveFileId] = useState<string | null>(null);
-
-  // ── Engagement ──
-  const [laserPointer, setLaserPointer] = useState<{ x: number; y: number; active: boolean }>({ x: 0, y: 0, active: false });
-  const [challengeTimer, setChallengeTimer] = useState<{ seconds: number; remaining: number } | null>(null);
-  const challengeTimerRef = useRef<ReturnType<typeof setInterval>>();
-  const [showCelebration, setShowCelebration] = useState(false);
-  const [celebrationType, setCelebrationType] = useState<'confetti' | 'fireworks' | 'stars'>('confetti');
-  const [spotlight, setSpotlight] = useState<{ x: number; y: number; active: boolean } | null>(null);
-
-  // ── Step-Lock ──
-  const [currentStep, setCurrentStep] = useState(999);
-  const [gateModal, setGateModal] = useState<{ step: number; gate: GateData } | null>(null);
-
-  // ── Scroll Sync ──
-  const [scrollSyncEnabled, setScrollSyncEnabled] = useState(true);
-
-  // ── Zoom Sync (read-only; controlled by teacher) ──
-  const [zoomLevel, setZoomLevel] = useState(1);
-
-  // ── Gamification ──
-  const [myXp, setMyXp] = useState(0);
-  const [myStreak, setMyStreak] = useState(0);
-  const [myLevel, setMyLevel] = useState(1);
-  const [xpFloater, setXpFloater] = useState<{ id: number; amount: number } | null>(null);
-  const [levelUpBanner, setLevelUpBanner] = useState(false);
-  const [leaderboard, setLeaderboard] = useState<Array<{ studentName: string; xp: number; streak: number }>>([]);
   const [showLeaderboard, setShowLeaderboard] = useState(false);
-
-  // ── Whiteboard ──
-  const [whiteboardMode, setWhiteboardMode] = useState(false);
-  const [whiteboardScrollX, setWhiteboardScrollX] = useState(0);
-  const [whiteboardScrollY, setWhiteboardScrollY] = useState(0);
-  const whiteboardRef = useRef<import('../components/Whiteboard').WhiteboardRef>(null);
-
-  // ── Student Interaction Mode ──
-  const [interactionAllowed, setInteractionAllowed] = useState(false);
-
-  // ── Attention Check ──
-  const [attentionCheckModal, setAttentionCheckModal] = useState(false);
-  const attentionTimeoutRef = useRef<ReturnType<typeof setTimeout>>();
-
-  // ── Teacher Status ──
-  const [teacherDisconnected, setTeacherDisconnected] = useState(false);
-
-  // ── Join Error ──
-  const [joinError, setJoinError] = useState<string | null>(null);
-
-  // ── Sound ──
   const [soundMuted, setSoundMuted] = useState(false);
+  const [quizAnswer, setQuizAnswer] = useState("");
 
-  // ── Iframe readiness ──
   const iframeReadyRef = useRef(false);
   const pendingMessagesRef = useRef<any[]>([]);
-
   const iframeRef = useRef<HTMLIFrameElement>(null);
 
-  const notifTimeoutRef = useRef<ReturnType<typeof setTimeout>>();
-  const showNotification = (msg: string) => {
-    if (notifTimeoutRef.current) clearTimeout(notifTimeoutRef.current);
-    setNotification(msg);
-    notifTimeoutRef.current = setTimeout(() => setNotification(""), 4000);
-  };
+  const postToIframe = useCallback((msg: any) => {
+    if (iframeReadyRef.current && iframeRef.current?.contentWindow) {
+      iframeRef.current.contentWindow.postMessage(msg, '*');
+    } else {
+      if (pendingMessagesRef.current.length < 500) {
+        pendingMessagesRef.current.push(msg);
+      }
+    }
+  }, []);
+
+  const handleRemoteInteraction = useCallback((event: any) => {
+    postToIframe(event);
+  }, [postToIframe]);
+
+  const handleResetView = useCallback(() => {
+    postToIframe({ type: 'RESET_VIEW' });
+  }, [postToIframe]);
+
+  const {
+    socket, connected, currentHtml, setCurrentHtml, currentFileName,
+    isPaused, cursors, chatMessages, unreadChat, setUnreadChat, reactions,
+    quizModal, setQuizModal, quizSubmitted, setQuizSubmitted, notification, showNotification,
+    laserPointer, challengeTimer, showCelebration, celebrationType, spotlight,
+    currentStep, gateModal, setGateModal, scrollSyncEnabled, zoomLevel,
+    interactionAllowed, whiteboardMode, setWhiteboardMode, whiteboardScrollX, whiteboardScrollY,
+    myXp, myStreak, myLevel, xpFloater, levelUpBanner, leaderboard,
+    attentionCheckModal, setAttentionCheckModal, teacherDisconnected, joinError,
+    attentionTimeoutRef
+  } = useStudentSocket(roomId!, studentName, handleRemoteInteraction, handleResetView);
+
+  // ── Iframe onLoad: flush pending messages ──
+  const handleIframeLoad = useCallback(() => {
+    iframeReadyRef.current = true;
+    const pending = pendingMessagesRef.current;
+    pendingMessagesRef.current = [];
+    for (const msg of pending) {
+      iframeRef.current?.contentWindow?.postMessage(msg, '*');
+    }
+    iframeRef.current?.contentWindow?.postMessage({ type: 'SET_SCROLL_SYNC', enabled: scrollSyncEnabled }, '*');
+    if (currentStep < 999) {
+      iframeRef.current?.contentWindow?.postMessage({ type: 'SET_STEP', step: currentStep }, '*');
+    }
+    if (zoomLevel !== 1) {
+      iframeRef.current?.contentWindow?.postMessage({ type: 'REMOTE_ZOOM', zoom: zoomLevel }, '*');
+    }
+  }, [scrollSyncEnabled, currentStep, zoomLevel]);
+
+  // ── Relay iframe messages ──
+  useEffect(() => {
+    const handler = (e: MessageEvent) => {
+      if (!socket) return;
+      const type = e.data?.type;
+      if (!type) return;
+
+      if (type === 'SYNC_PROVIDE_HTML' || type === 'STEP_INFO') return;
+
+      if (!type.startsWith('SYNC_')) return;
+      if (type === 'SYNC_CURSOR') {
+        socket.emit("interaction", { roomId, event: e.data });
+        return;
+      }
+      if (!interactionAllowed) return;
+      if (type === 'SYNC_SCROLL' && !scrollSyncEnabled) return;
+      socket.emit("interaction", { roomId, event: e.data });
+    };
+    window.addEventListener("message", handler);
+    return () => window.removeEventListener("message", handler);
+  }, [socket, roomId, scrollSyncEnabled, interactionAllowed]);
+
+  // ── Push interaction mode to iframe ──
+  useEffect(() => {
+    postToIframe({ type: 'SET_INTERACTION_MODE', allowed: interactionAllowed });
+  }, [interactionAllowed, iframeUrl, postToIframe]);
+
+
+  // ── Push scroll sync state to iframe ──
+  useEffect(() => {
+    postToIframe({ type: 'SET_SCROLL_SYNC', enabled: scrollSyncEnabled });
+  }, [scrollSyncEnabled, iframeUrl, postToIframe]);
+
+  // ── Step sync to iframe ──
+  useEffect(() => {
+    if (currentStep < 999) {
+      postToIframe({ type: 'SET_STEP', step: currentStep });
+    }
+  }, [currentStep, iframeUrl, postToIframe]);
+
+  // ── Re-push zoom when level changes ──
+  useEffect(() => {
+    postToIframe({ type: 'REMOTE_ZOOM', zoom: zoomLevel });
+  }, [zoomLevel, postToIframe]);
+
 
   // ── Build iframe URL ──
   useEffect(() => {
     if (!currentHtml) { setIframeUrl(""); return; }
-    // Mark iframe as not ready while we rebuild it
     iframeReadyRef.current = false;
     let content = currentHtml;
     const scripts = injectedSyncScript + stepLockScript;
@@ -165,321 +146,6 @@ export default function StudentView() {
     setIframeUrl(url);
     return () => URL.revokeObjectURL(url);
   }, [currentHtml]);
-
-  // ── Socket Connection ──
-  useEffect(() => {
-    if (!roomId) { navigate("/"); return; }
-
-    const newSocket = io();
-    setSocket(newSocket);
-
-    let cleanupAttention: (() => void) | null = null;
-
-    newSocket.on("connect", () => {
-      setConnected(true);
-      newSocket.emit("join_room", { roomId, userName: studentName, role: 'student' });
-      // Start attention detection
-      cleanupAttention = setupAttentionDetection(newSocket, roomId, studentName);
-    });
-
-    newSocket.on("disconnect", () => {
-      setConnected(false);
-      showNotification("⚠️ Disconnected. Reconnecting...");
-    });
-
-    newSocket.on("reconnect" as any, () => {
-      setConnected(true);
-      newSocket.emit("join_room", { roomId, userName: studentName, role: 'student' });
-      showNotification("✅ Reconnected!");
-    });
-
-    newSocket.on("room_state", (state: any) => {
-      setFiles(state.files || []);
-      setActiveFileId(state.activeFileId);
-      setIsPaused(state.isPaused);
-      if (typeof state.scrollSyncEnabled === 'boolean') setScrollSyncEnabled(state.scrollSyncEnabled);
-      if (typeof state.studentInteractionAllowed === 'boolean') setInteractionAllowed(state.studentInteractionAllowed);
-      if (typeof state.currentStep === 'number') setCurrentStep(state.currentStep);
-      setChatMessages(state.chat || []);
-      if (state.lastRunHtml) {
-        const f = state.files?.find((f: FileEntry) => f.id === state.activeFileId);
-        setCurrentFileName(f?.name || 'Simulation');
-        setCurrentHtml(state.lastRunHtml);
-      } else if (state.activeFileId && state.files) {
-        const f = state.files.find((f: FileEntry) => f.id === state.activeFileId);
-        if (f) { setCurrentFileName(f.name); setCurrentHtml(f.html); }
-      }
-    });
-
-    newSocket.on("file_uploaded", (file: FileEntry) => {
-      setFiles(prev => [...prev, file]);
-      showNotification(`📄 Teacher uploaded: ${file.name}`);
-      sounds.join();
-    });
-
-    newSocket.on("active_file_changed", (data: { fileId: string; fileName?: string; html?: string; currentStep?: number }) => {
-      setActiveFileId(data.fileId);
-      if (typeof data.currentStep === 'number') {
-        setCurrentStep(data.currentStep);
-      }
-      if (data.html) {
-        setCurrentFileName(data.fileName || 'Simulation');
-        // File switch is a genuine reload — update HTML
-        setCurrentHtml(data.html);
-        showNotification(`Switched to: ${data.fileName || 'new file'}`);
-      }
-    });
-
-    newSocket.on("run_preview", ({ html }: { fileId: string; html: string }) => {
-      // Only update if HTML actually changed — avoids full iframe reload (blink + scroll reset)
-      setCurrentHtml(prev => prev === html ? prev : html);
-    });
-
-    newSocket.on("force_sync_state", (state: any) => {
-      if (state.files) setFiles(state.files);
-      if (state.activeFileId) setActiveFileId(state.activeFileId);
-      if (state.lastRunHtml) {
-        // Only rebuild iframe if HTML actually changed
-        setCurrentHtml(prev => prev === state.lastRunHtml ? prev : state.lastRunHtml);
-        const f = state.files?.find((f: FileEntry) => f.id === state.activeFileId);
-        setCurrentFileName(f?.name || 'Simulation');
-      }
-      if (typeof state.isPaused === 'boolean') setIsPaused(state.isPaused);
-    });
-
-    newSocket.on("file_deleted", ({ fileId, newActiveId }: { fileId: string; newActiveId: string | null }) => {
-      setFiles(prev => prev.filter(f => f.id !== fileId));
-      if (newActiveId) setActiveFileId(newActiveId);
-    });
-
-    newSocket.on("session_paused", () => {
-      setIsPaused(true);
-      showNotification("⏸ Teacher paused the session");
-    });
-    newSocket.on("session_resumed", () => {
-      setIsPaused(false);
-      showNotification("▶ Session resumed!");
-    });
-
-    newSocket.on("chat_message", (msg: ChatMessage) => {
-      setChatMessages(prev => [...prev, msg]);
-      if (!chatOpen) setUnreadChat(c => c + 1);
-      sounds.message();
-    });
-
-    newSocket.on("reaction", ({ emoji }: { emoji: string }) => {
-      const id = reactionIdRef.current++;
-      const x = 15 + Math.random() * 70;
-      setReactions(prev => [...prev, { id, emoji, x }]);
-      setTimeout(() => setReactions(prev => prev.filter(r => r.id !== id)), 3000);
-    });
-
-    newSocket.on("quiz", ({ question }: { question: string }) => {
-      setQuizModal({ question });
-      setQuizAnswer("");
-      setQuizSubmitted(false);
-      showNotification("🎯 You have a question from your teacher!");
-      sounds.raiseHand();
-    });
-
-    newSocket.on("spotlight", (data: { x: number; y: number; active: boolean }) => {
-      setSpotlight(data.active ? data : null);
-    });
-
-    newSocket.on("user_left", (data: { userName: string }) => {
-      if (data.userName && data.userName !== studentName) {
-        showNotification(`${data.userName} left`);
-      }
-    });
-
-    newSocket.on("interaction", (event: any) => {
-      // Track zoom level so we can re-apply on iframe reload
-      if (event.type === "SYNC_ZOOM" && typeof event.zoom === 'number') {
-        setZoomLevel(event.zoom);
-      }
-      if (event.type === "SYNC_CURSOR") {
-        setCursors(prev => ({
-          ...prev,
-          [event.userId]: {
-            x: event.x, y: event.y,
-            color: CURSOR_COLORS[event.userId.charCodeAt(0) % CURSOR_COLORS.length],
-            name: event.userName || 'Teacher',
-          },
-        }));
-      } else {
-        const remoteEvent = { ...event, type: event.type.replace("SYNC_", "REMOTE_") };
-        postToIframe(remoteEvent);
-      }
-    });
-
-    // ── Laser Pointer ──
-    newSocket.on("laser_pointer", (data: { x: number; y: number; active: boolean }) => {
-      setLaserPointer(data);
-    });
-
-    // ── Challenge Timer ──
-    newSocket.on("timer_started", ({ seconds }: { seconds: number }) => {
-      setChallengeTimer({ seconds, remaining: seconds });
-    });
-    newSocket.on("timer_stopped", () => {
-      setChallengeTimer(null);
-      if (challengeTimerRef.current) clearInterval(challengeTimerRef.current);
-    });
-
-    // ── Celebration ──
-    newSocket.on("celebration", ({ type }: { type?: string }) => {
-      setCelebrationType((type as any) || 'confetti');
-      setShowCelebration(true);
-      sounds.celebration();
-      setTimeout(() => setShowCelebration(false), 4000);
-    });
-
-    // ── Step-Lock ──
-    newSocket.on("step_changed", ({ step }: { step: number }) => {
-      setCurrentStep(step);
-      postToIframe({ type: 'SET_STEP', step });
-    });
-
-    newSocket.on("gate_added", ({ step }: { step: number }) => {
-      showNotification(`🚧 Checkpoint added at Step ${step}`);
-    });
-
-    // ── Scroll Sync ──
-    newSocket.on("scroll_sync_changed", ({ enabled }: { enabled: boolean }) => {
-      setScrollSyncEnabled(enabled);
-      showNotification(enabled ? '🔗 Scroll sync enabled' : '🔓 Free scroll — you can scroll independently');
-    });
-
-    // ── Student Interaction Mode ──
-    newSocket.on("student_interaction_changed", ({ allowed }: { allowed: boolean }) => {
-      setInteractionAllowed(allowed);
-      showNotification(allowed ? '🖐️ You can now interact with the simulation' : '👁️ View-only mode — teacher is presenting');
-    });
-
-    // ── Whiteboard Mode ──
-    newSocket.on("whiteboard_mode_changed", ({ active }: { active: boolean }) => {
-      setWhiteboardMode(active);
-    });
-
-    // ── Whiteboard Scroll Sync ──
-    newSocket.on("whiteboard_scroll", ({ scrollX, scrollY }: { scrollX: number; scrollY: number }) => {
-      setWhiteboardScrollX(scrollX);
-      setWhiteboardScrollY(scrollY);
-    });
-
-    // ── Zoom Sync ──
-    newSocket.on("zoom_changed", ({ zoom }: { zoom: number }) => {
-      setZoomLevel(zoom);
-    });
-
-    // ── Reset View ──
-    newSocket.on("reset_view", () => {
-      postToIframe({ type: 'RESET_VIEW' });
-    });
-
-    // ── Join Error ──
-    newSocket.on("join_error", ({ message }: { message: string }) => {
-      setJoinError(message);
-    });
-
-    // ── Teacher Disconnected ──
-    newSocket.on("teacher_disconnected", () => {
-      setTeacherDisconnected(true);
-      showNotification("⚠️ Teacher disconnected — waiting for reconnection...");
-    });
-
-    // Clear teacher disconnected when a new user list arrives with a teacher
-    newSocket.on("user_list", (list: Array<{ role: string }>) => {
-      const hasTeacher = list.some(u => u.role === 'teacher');
-      if (hasTeacher && teacherDisconnected) {
-        setTeacherDisconnected(false);
-        showNotification("✅ Teacher reconnected!");
-      }
-    });
-
-    // ── Attention Check ──
-    newSocket.on("attention_check", () => {
-      setAttentionCheckModal(true);
-      if (sounds && !soundMuted) sounds.raiseHand();
-      // Auto-dismiss after 30s if student doesn't respond
-      if (attentionTimeoutRef.current) clearTimeout(attentionTimeoutRef.current);
-      attentionTimeoutRef.current = setTimeout(() => setAttentionCheckModal(false), 30000);
-    });
-
-    // ── Kick ──
-    newSocket.on("kicked", () => {
-      showNotification("You have been removed from the session");
-      setTimeout(() => navigate("/"), 2000);
-    });
-
-    // ── Gamification ──
-    newSocket.on("gate_result", ({ correct, xpGained, xp, streak, level, levelUp }: {
-      correct: boolean; xpGained?: number; xp?: number; streak?: number; level?: number; levelUp?: boolean;
-    }) => {
-      if (correct && xpGained && xpGained > 0) {
-        setMyXp(xp || 0);
-        setMyStreak(streak || 0);
-        setMyLevel(level || 1);
-        setXpFloater({ id: Date.now(), amount: xpGained });
-        setTimeout(() => setXpFloater(null), 1800);
-        sounds.success();
-        if (levelUp) {
-          setLevelUpBanner(true);
-          sounds.celebration();
-          setTimeout(() => setLevelUpBanner(false), 3500);
-        }
-      } else if (!correct) {
-        setMyStreak(0);
-      }
-    });
-
-    newSocket.on("leaderboard_update", (lb: Array<{ studentName: string; xp: number; streak: number }>) => {
-      setLeaderboard(lb);
-      // Keep student's own stats in sync from authoritative server data
-      const mine = lb.find(e => e.studentName === studentName);
-      if (mine) {
-        setMyXp(mine.xp);
-        setMyStreak(mine.streak);
-        setMyLevel(Math.floor(mine.xp / 100) + 1);
-      }
-    });
-
-    // ── Hard Reset (content preserved — only session progress is cleared) ──
-    newSocket.on("room_reset", (payload?: { activeFileId?: string | null; files?: FileEntry[]; lastRunHtml?: string | null }) => {
-      // Clear session progress/state
-      setChatMessages([]);
-      setCursors({});
-      setCurrentStep(999);
-      setZoomLevel(1);
-      setMyXp(0);
-      setMyStreak(0);
-      setMyLevel(1);
-      setLeaderboard([]);
-      setQuizModal(null);
-      setGateModal(null);
-      // Keep uploaded files list in sync with authoritative server state
-      if (payload?.files) setFiles(payload.files);
-      if (payload?.activeFileId !== undefined) setActiveFileId(payload.activeFileId);
-      // Reload the active file into preview so it restarts fresh from the top —
-      // but DO NOT blank out the iframe (content stays visible)
-      if (payload?.activeFileId && payload.files) {
-        const active = payload.files.find(f => f.id === payload.activeFileId);
-        if (active) {
-          setCurrentHtml(active.html);
-          setCurrentFileName(active.name);
-        }
-      } else if (payload?.lastRunHtml) {
-        setCurrentHtml(payload.lastRunHtml);
-      }
-      showNotification("🔄 Teacher restarted the session");
-    });
-
-    return () => {
-      cleanupAttention?.();
-      if (attentionTimeoutRef.current) clearTimeout(attentionTimeoutRef.current);
-      newSocket.disconnect();
-    };
-  }, [roomId, navigate, studentName]);
 
   // ── HTTP Fallback: fetch content if Socket.io delivery fails ──
   // This handles cases where the student is far away (e.g., different country)
@@ -517,42 +183,6 @@ export default function StudentView() {
     return () => { if (httpFallbackRef.current) clearTimeout(httpFallbackRef.current); };
   }, [connected, currentHtml, fetchContentViaHttp]);
 
-  // ── Helper: safely post message to iframe (queues if not ready) ──
-  const postToIframe = useCallback((msg: any) => {
-    if (iframeReadyRef.current && iframeRef.current?.contentWindow) {
-      iframeRef.current.contentWindow.postMessage(msg, '*');
-    } else {
-      // Cap pending queue to prevent memory leak
-      if (pendingMessagesRef.current.length < 500) {
-        pendingMessagesRef.current.push(msg);
-      }
-    }
-  }, []);
-
-  // ── Iframe onLoad: flush pending messages ──
-  const handleIframeLoad = useCallback(() => {
-    iframeReadyRef.current = true;
-    // Flush pending messages
-    const pending = pendingMessagesRef.current;
-    pendingMessagesRef.current = [];
-    for (const msg of pending) {
-      iframeRef.current?.contentWindow?.postMessage(msg, '*');
-    }
-    // Re-send current state
-    iframeRef.current?.contentWindow?.postMessage({ type: 'SET_SCROLL_SYNC', enabled: scrollSyncEnabled }, '*');
-    if (currentStep < 999) {
-      iframeRef.current?.contentWindow?.postMessage({ type: 'SET_STEP', step: currentStep }, '*');
-    }
-    if (zoomLevel !== 1) {
-      // Use REMOTE_ZOOM on student side so it applies silently without echoing back
-      iframeRef.current?.contentWindow?.postMessage({ type: 'REMOTE_ZOOM', zoom: zoomLevel }, '*');
-    }
-  }, [scrollSyncEnabled, currentStep, zoomLevel]);
-
-  // Re-push zoom when level changes
-  useEffect(() => {
-    postToIframe({ type: 'REMOTE_ZOOM', zoom: zoomLevel });
-  }, [zoomLevel, postToIframe]);
 
   // ── Relay iframe messages ──
   useEffect(() => {
@@ -584,22 +214,6 @@ export default function StudentView() {
     postToIframe({ type: 'SET_INTERACTION_MODE', allowed: interactionAllowed });
   }, [interactionAllowed, iframeUrl, postToIframe]);
 
-  // ── Challenge Timer Countdown ──
-  useEffect(() => {
-    if (!challengeTimer) return;
-    if (challengeTimerRef.current) clearInterval(challengeTimerRef.current);
-    challengeTimerRef.current = setInterval(() => {
-      setChallengeTimer(prev => {
-        if (!prev || prev.remaining <= 1) {
-          clearInterval(challengeTimerRef.current);
-          sounds.timerEnd();
-          return null;
-        }
-        return { ...prev, remaining: prev.remaining - 1 };
-      });
-    }, 1000);
-    return () => { if (challengeTimerRef.current) clearInterval(challengeTimerRef.current); };
-  }, [challengeTimer?.seconds]);
 
   // ── Push scroll sync state to iframe ──
   useEffect(() => {
@@ -630,35 +244,28 @@ export default function StudentView() {
     <div className="h-screen w-screen flex flex-col overflow-hidden" style={{ background: 'var(--bg-primary)' }}>
 
       {/* ══════ HEADER ══════ */}
-      <header className="app-header">
+      <header className="app-header" style={{ borderBottom: '2px solid var(--border-strong)', height: '56px' }}>
         <div className="header-section">
-          <span className="font-display font-extrabold text-[15px]" style={{ color: 'var(--text-primary)', letterSpacing: '-0.03em' }}>
-            Maths<span style={{ color: 'var(--accent-indigo)' }}>Live</span>
+          <span className="font-display font-bold text-[20px]" style={{ color: 'var(--text-primary)' }}>
+            Maths<span style={{ color: 'var(--accent-emerald)' }}>Craft</span>
           </span>
 
-          <div className="header-divider" />
+          <div className="header-divider" style={{ height: '24px' }} />
 
-          <span className="text-[13px] font-semibold" style={{ color: 'var(--text-secondary)' }}>
-            {currentFileName || 'Session'}
+          <span className="text-[16px] font-bold" style={{ color: 'var(--text-secondary)' }}>
+            {currentFileName || 'Server'}
           </span>
           <ConnectionStatus socket={socket} connected={connected} />
+
+          <ThemeToggle />
 
           {/* ── Whiteboard Button ── */}
           <button
             onClick={() => setWhiteboardMode(true)}
-            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all hover:scale-105"
-            style={{
-              background: 'linear-gradient(135deg, rgba(99,102,241,0.12), rgba(139,92,246,0.12))',
-              border: '1px solid rgba(99,102,241,0.25)',
-              color: '#6366F1',
-            }}
+            className="btn-secondary"
+            style={{ padding: '4px 12px', height: '32px', fontSize: '14px', marginLeft: '8px' }}
             title="Open collaborative whiteboard"
           >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
-              <circle cx="8.5" cy="8.5" r="1.5"/>
-              <polyline points="21 15 16 10 5 21"/>
-            </svg>
             Whiteboard
           </button>
         </div>
@@ -666,33 +273,33 @@ export default function StudentView() {
         <div className="header-section">
           {/* ── XP Badge ── */}
           <button onClick={() => setShowLeaderboard(true)}
-            className="flex items-center gap-2 px-2.5 py-1 rounded-full transition-all"
+            className="flex items-center gap-2 px-3 py-1 transition-all"
             data-tip="View leaderboard"
             style={{
-              background: 'linear-gradient(135deg, rgba(99,102,241,0.12), rgba(139,92,246,0.12))',
-              border: '1px solid rgba(99,102,241,0.25)',
+              background: 'var(--bg-card)',
+              border: '2px solid var(--border-strong)',
+              boxShadow: 'var(--shadow-sm)',
               cursor: 'pointer',
               position: 'relative',
+              height: '36px'
             }}
-            onMouseEnter={e => (e.currentTarget.style.transform = 'translateY(-1px)')}
-            onMouseLeave={e => (e.currentTarget.style.transform = 'translateY(0)')}
           >
-            <span style={{ fontSize: 11, fontWeight: 800, color: '#6366F1', letterSpacing: 0.5 }}>
+            <span style={{ fontSize: 14, fontWeight: 700, color: 'var(--accent-emerald)', letterSpacing: 0.5 }}>
               LVL {myLevel}
             </span>
-            <div style={{ width: 40, height: 4, borderRadius: 2, background: 'rgba(99,102,241,0.15)', overflow: 'hidden' }}>
+            <div style={{ width: 40, height: 8, background: 'var(--bg-code)', border: '1px solid var(--border-default)', overflow: 'hidden' }}>
               <div style={{
                 width: `${myXp % 100}%`,
                 height: '100%',
-                background: 'linear-gradient(90deg, #6366F1, #8B5CF6)',
-                transition: 'width 0.5s cubic-bezier(.34,1.56,.64,1)',
+                background: 'var(--accent-emerald)',
+                transition: 'width 0.5s',
               }} />
             </div>
-            <span style={{ fontSize: 11, fontWeight: 800, color: '#6366F1', fontVariantNumeric: 'tabular-nums' }}>
+            <span style={{ fontSize: 14, fontWeight: 700, color: 'var(--text-primary)' }}>
               {myXp} XP
             </span>
             {myStreak >= 2 && (
-              <span style={{ fontSize: 11, fontWeight: 700, color: '#F59E0B', marginLeft: 2 }}>
+              <span style={{ fontSize: 14, fontWeight: 700, color: 'var(--accent-amber)', marginLeft: 2 }}>
                 🔥{myStreak}
               </span>
             )}
@@ -702,13 +309,13 @@ export default function StudentView() {
                 key={xpFloater.id}
                 style={{
                   position: 'absolute',
-                  top: -10, right: 8,
-                  fontSize: 13,
-                  fontWeight: 800,
-                  color: '#10B981',
+                  top: -20, right: 8,
+                  fontSize: 16,
+                  fontWeight: 700,
+                  color: 'var(--accent-emerald)',
                   pointerEvents: 'none',
-                  animation: 'xpFloat 1.8s cubic-bezier(.34,1.56,.64,1) forwards',
-                  textShadow: '0 1px 2px rgba(255,255,255,0.9)',
+                  animation: 'xpFloat 1.8s forwards',
+                  textShadow: '2px 2px 0 rgba(0,0,0,0.5)',
                 }}
               >
                 +{xpFloater.amount}
@@ -716,18 +323,18 @@ export default function StudentView() {
             )}
           </button>
 
-          <div className="header-divider" />
+          <div className="header-divider" style={{ height: '24px' }} />
 
           {/* View-only / Interactive indicator */}
           <span className="status-pill" style={{
-            background: interactionAllowed ? 'var(--accent-emerald-light)' : 'var(--accent-indigo-light)',
-            color: interactionAllowed ? 'var(--accent-emerald)' : 'var(--accent-indigo)',
-            fontSize: '11px', fontWeight: 700, letterSpacing: '0.03em', padding: '3px 10px',
+            background: interactionAllowed ? 'var(--accent-emerald-light)' : 'var(--accent-amber-light)',
+            color: interactionAllowed ? 'var(--accent-emerald)' : 'var(--accent-amber)',
+            fontSize: '14px', fontWeight: 700, border: '2px solid', height: '32px'
           }}>
-            {interactionAllowed ? 'INTERACTIVE' : 'VIEW ONLY'}
+            {interactionAllowed ? 'INTERACTIVE' : 'SPECTATOR'}
           </span>
 
-          <div className="header-divider" />
+          <div className="header-divider" style={{ height: '24px' }} />
 
           {/* Icon buttons */}
           <button onClick={() => {
@@ -795,7 +402,7 @@ export default function StudentView() {
       <div className="flex-1 flex overflow-hidden relative">
 
         {/* Full-Screen Iframe */}
-        <div className="flex-1 relative overflow-hidden m-3 rounded-xl" style={{ background: '#ffffff', border: '1px solid var(--border-subtle)' }}>
+        <div className="flex-1 relative overflow-hidden m-3" style={{ border: '4px solid var(--border-strong)' }}>
           {whiteboardMode ? (
             <Whiteboard
               ref={whiteboardRef}
@@ -830,29 +437,20 @@ export default function StudentView() {
               )}
             </>
           ) : (
-            <div className="flex items-center justify-center h-full" style={{ background: 'var(--bg-primary)' }}>
-              <div className="text-center animate-slide-up p-12 rounded-2xl"
-                style={{ background: 'var(--bg-card)', border: '1px solid var(--border-subtle)', boxShadow: 'var(--shadow-lg)' }}>
-                <div className="text-5xl mb-5 animate-gentle-bounce">⏳</div>
-                <h2 className="font-display text-2xl font-bold mb-3" style={{ color: 'var(--text-primary)' }}>Waiting for teacher...</h2>
-                <p className="text-sm" style={{ color: 'var(--text-muted)', lineHeight: '1.6' }}>
-                  Your teacher will load a simulation shortly.
+            <div className="flex items-center justify-center h-full" style={{ background: 'var(--bg-surface)' }}>
+              <div className="text-center animate-slide-up p-8"
+                style={{ background: 'var(--bg-card)', border: '4px solid var(--border-strong)', boxShadow: 'var(--shadow-lg)' }}>
+                <div className="text-6xl mb-4 animate-gentle-bounce">⏳</div>
+                <h2 className="font-display text-3xl font-bold mb-2 uppercase" style={{ color: 'var(--text-primary)' }}>Waiting for Server...</h2>
+                <p className="text-lg" style={{ color: 'var(--text-secondary)' }}>
+                  Your teacher will load the world shortly.
                 </p>
-                <div className="flex items-center justify-center gap-2 mt-6">
+                <div className="flex items-center justify-center gap-3 mt-6">
                   {[0, 1, 2].map(i => (
-                    <div key={i} className="w-2 h-2 rounded-full"
-                      style={{ background: 'var(--accent-indigo)', animation: `dot-pulse 1.5s ease-in-out infinite`, animationDelay: `${i * 0.3}s` }} />
+                    <div key={i} className="w-4 h-4 bg-[var(--text-primary)]"
+                      style={{ animation: `dot-pulse 1.5s infinite`, animationDelay: `${i * 0.3}s` }} />
                   ))}
                 </div>
-                {connected && (
-                  <button onClick={fetchContentViaHttp}
-                    className="btn mt-6" style={{ fontSize: '13px' }}>
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                      <polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/>
-                    </svg>
-                    Retry Loading
-                  </button>
-                )}
               </div>
             </div>
           )}
@@ -924,9 +522,13 @@ export default function StudentView() {
 
       {/* ══════ NOTIFICATION TOAST ══════ */}
       {notification && (
-        <div className="fixed top-14 left-1/2 -translate-x-1/2 z-50 animate-slide-down">
-          <div className="px-5 py-2.5 rounded-xl text-sm font-medium"
-            style={{ background: 'var(--bg-card)', color: 'var(--text-primary)', border: '1px solid var(--border-subtle)', boxShadow: 'var(--shadow-lg)', maxWidth: '90vw' }}>
+        <div className="fixed top-16 left-1/2 -translate-x-1/2 z-50 animate-slide-down">
+          <div className="px-6 py-3 text-lg font-bold"
+            style={{
+              background: 'var(--bg-card)', color: 'var(--text-primary)',
+              border: '3px solid var(--border-strong)', boxShadow: 'var(--shadow-lg)',
+              textTransform: 'uppercase'
+            }}>
             {notification}
           </div>
         </div>
@@ -935,16 +537,15 @@ export default function StudentView() {
       {/* ══════ QUIZ MODAL ══════ */}
       {quizModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4"
-          style={{ background: 'rgba(0,0,0,0.3)', backdropFilter: 'blur(4px)' }}>
+          style={{ background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)' }}>
           <div className="w-full max-w-md animate-bounce-in"
-            style={{ background: 'var(--bg-card)', borderRadius: 'var(--radius-xl)', border: '1px solid var(--border-subtle)', boxShadow: 'var(--shadow-xl)' }}>
+            style={{ background: 'var(--bg-card)', border: '4px solid var(--border-strong)', boxShadow: 'var(--shadow-xl)' }}>
             <div className="p-6">
               <div className="text-center mb-5">
-                <div className="text-4xl mb-3 animate-reaction-pop">🎯</div>
-                <h3 className="font-display text-lg font-bold" style={{ color: 'var(--text-primary)' }}>Pop Quiz!</h3>
+                <h3 className="font-display text-3xl font-bold uppercase" style={{ color: 'var(--text-primary)' }}>Pop Quiz!</h3>
               </div>
-              <div className="p-4 rounded-xl mb-4" style={{ background: 'var(--bg-surface)', border: '1px solid var(--border-subtle)' }}>
-                <p className="text-base font-medium text-center" style={{ color: 'var(--text-primary)', lineHeight: 1.6 }}>
+              <div className="p-4 mb-4" style={{ background: 'var(--bg-surface)', border: '2px solid var(--border-default)' }}>
+                <p className="text-xl font-bold text-center" style={{ color: 'var(--text-primary)' }}>
                   {quizModal.question}
                 </p>
               </div>
@@ -954,23 +555,23 @@ export default function StudentView() {
                     value={quizAnswer}
                     onChange={(e) => setQuizAnswer(e.target.value)}
                     placeholder="Type your answer here..."
-                    className="input-field mb-4"
+                    className="input-field mb-4 text-lg"
                     autoFocus
-                    style={{ minHeight: '80px', resize: 'vertical' }}
+                    style={{ minHeight: '100px', resize: 'vertical' }}
                   />
                   <div className="flex gap-3">
-                    <button onClick={() => setQuizModal(null)} className="btn-secondary flex-1">Skip</button>
+                    <button onClick={() => setQuizModal(null)} className="btn-secondary flex-1 text-lg uppercase">Skip</button>
                     <button onClick={submitQuizAnswer} disabled={!quizAnswer.trim()}
-                      className="btn-primary flex-1 disabled:opacity-40">
-                      Submit Answer
+                      className="btn-primary flex-1 disabled:opacity-40 text-lg uppercase">
+                      Submit
                     </button>
                   </div>
                 </>
               ) : (
                 <div className="text-center py-4">
                   <div className="text-4xl mb-2 animate-bounce-in">✅</div>
-                  <p className="text-sm font-medium" style={{ color: 'var(--accent-emerald)' }}>Answer submitted!</p>
-                  <button onClick={() => setQuizModal(null)} className="btn-secondary mt-4">Close</button>
+                  <p className="text-xl font-bold uppercase" style={{ color: 'var(--accent-emerald)' }}>Answer submitted!</p>
+                  <button onClick={() => setQuizModal(null)} className="btn-secondary mt-4 text-lg uppercase">Close</button>
                 </div>
               )}
             </div>
@@ -992,19 +593,15 @@ export default function StudentView() {
       {/* ══════ ATTENTION CHECK MODAL ══════ */}
       {attentionCheckModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4"
-          style={{ background: 'rgba(0,0,0,0.4)', backdropFilter: 'blur(6px)' }}>
+          style={{ background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(6px)' }}>
           <div className="w-full max-w-sm animate-bounce-in text-center"
-            style={{ background: 'var(--bg-card)', borderRadius: '12px', border: '2px solid #5B5FE6', boxShadow: '0 8px 32px rgba(91,95,230,0.25)', padding: '32px 24px' }}>
-            <div className="text-5xl mb-4" style={{ animation: 'gentle-bounce 1s ease-in-out infinite' }}>
-              <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#5B5FE6" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ margin: '0 auto' }}>
-                <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 010 14.14M15.54 8.46a5 5 0 010 7.07"/>
-              </svg>
-            </div>
-            <h3 className="font-display text-xl font-bold mb-2" style={{ color: 'var(--text-primary)' }}>
-              Attention Check
+            style={{ background: 'var(--bg-card)', border: '4px solid var(--accent-emerald)', boxShadow: '0 8px 32px rgba(0,170,0,0.25)', padding: '32px 24px' }}>
+            <div className="text-6xl mb-4">👀</div>
+            <h3 className="font-display text-3xl font-bold mb-2 uppercase" style={{ color: 'var(--text-primary)' }}>
+              Are you there?
             </h3>
-            <p className="text-sm mb-6" style={{ color: 'var(--text-secondary)' }}>
-              Your teacher wants to confirm you're here.
+            <p className="text-lg mb-6" style={{ color: 'var(--text-secondary)' }}>
+              Your teacher wants to confirm you're active.
             </p>
             <button
               onClick={() => {
@@ -1012,8 +609,8 @@ export default function StudentView() {
                 if (attentionTimeoutRef.current) clearTimeout(attentionTimeoutRef.current);
                 if (socket) socket.emit('attention_ack', { roomId, studentName });
               }}
-              className="btn-primary w-full justify-center"
-              style={{ height: '44px', fontSize: '15px', borderRadius: '8px' }}>
+              className="btn-primary w-full justify-center text-xl uppercase"
+              style={{ height: '48px' }}>
               I'm Here!
             </button>
           </div>
