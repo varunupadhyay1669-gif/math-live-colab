@@ -37,6 +37,8 @@ interface RoomData {
   scores: Record<string, { xp: number; streak: number; bestStreak: number; correct: number; total: number }>;
   // Monotonic interaction sequence for ordering guarantees
   interactionSeq: number;
+  // Temporary explanation content (persists so late-joining students see it)
+  tempContent: { html: string; name: string } | null;
 }
 
 async function startServer() {
@@ -135,6 +137,7 @@ async function startServer() {
       pendingSyncStudents: [],
       scores: {},
       interactionSeq: 0,
+      tempContent: null,
     };
   }
 
@@ -343,6 +346,11 @@ async function startServer() {
       // Immediately push content to the joining student so they don't stay on "Waiting for teacher"
       if (role === 'student' && room.lastRunHtml && room.activeFileId) {
         socket.emit('run_preview', { fileId: room.activeFileId, html: room.lastRunHtml });
+      }
+
+      // If temp explanation content is active, send it to the joining student
+      if (role === 'student' && room.tempContent) {
+        socket.emit('temp_content', { html: room.tempContent.html, name: room.tempContent.name });
       }
 
       // Broadcast updated user list
@@ -657,11 +665,15 @@ async function startServer() {
 
     // ─── TEMPORARY EXPLANATION CONTENT ───
     socket.on('show_temp_content', ({ roomId, html, name }: { roomId: string; html: string; name: string }) => {
+      const room = rooms.get(roomId);
+      if (room) room.tempContent = { html, name };
       // Broadcast temporary explanation content to all users in room
       io.to(roomId).emit('temp_content', { html, name });
     });
 
     socket.on('clear_temp_content', ({ roomId }: { roomId: string }) => {
+      const room = rooms.get(roomId);
+      if (room) room.tempContent = null;
       // Clear temporary content and return to main content
       io.to(roomId).emit('clear_temp_content');
     });

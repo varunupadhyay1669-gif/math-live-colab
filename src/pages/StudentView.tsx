@@ -658,6 +658,8 @@ export default function StudentView() {
 
   useEffect(() => {
     syncEpochRef.current += 1;
+    // Reset iframe readiness when content source changes — the new iframe needs to fire onLoad
+    iframeReadyRef.current = false;
   }, [iframeUrl, showTempContent, whiteboardMode]);
 
   // ── Push interaction mode to iframe ──
