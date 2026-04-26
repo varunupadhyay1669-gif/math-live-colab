@@ -53,6 +53,7 @@ export default function ChatPanel({
           style={{ borderBottom: '1px solid var(--border-subtle)' }}>
           <span className="badge badge-indigo text-[10px]">💬 CHAT</span>
           <button onClick={onToggle}
+            aria-label="Close chat"
             style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '14px' }}>✕</button>
         </div>
         <div className="flex-1 overflow-y-auto p-3 space-y-2.5">
@@ -85,9 +86,10 @@ export default function ChatPanel({
         <form onSubmit={sendChat} className="p-3 shrink-0" style={{ borderTop: '1px solid var(--border-subtle)' }}>
           <div className="flex gap-2">
             <input value={chatInput} onChange={(e) => setChatInput(e.target.value)}
+              aria-label="Chat message"
               placeholder="Type a message..."
               className="input-field text-sm" style={{ padding: '8px 12px' }} />
-            <button type="submit" className="btn-primary" style={{ padding: '8px 12px', fontSize: '14px' }}>↑</button>
+            <button type="submit" aria-label="Send message" className="btn-primary" style={{ padding: '8px 12px', fontSize: '14px' }}>↑</button>
           </div>
         </form>
       </div>
@@ -108,6 +110,7 @@ export default function ChatPanel({
             style={{ borderBottom: '1px solid var(--border-subtle)' }}>
             <span className="badge badge-indigo text-[10px]">💬 CHAT</span>
             <button onClick={onToggle}
+              aria-label="Close chat"
               style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '16px' }}>✕</button>
           </div>
           <div className="flex-1 overflow-y-auto p-3 space-y-2">
@@ -133,15 +136,18 @@ export default function ChatPanel({
           </div>
           <form onSubmit={sendChat} className="p-2.5 shrink-0" style={{ borderTop: '1px solid var(--border-subtle)' }}>
             <div className="flex gap-2">
-              <input value={chatInput} onChange={(e) => setChatInput(e.target.value)} placeholder="Message..."
+              <input value={chatInput} onChange={(e) => setChatInput(e.target.value)}
+                aria-label="Chat message"
+                placeholder="Message..."
                 className="input-field text-[13px]" style={{ padding: '7px 10px' }} />
-              <button type="submit" className="btn-primary" style={{ padding: '7px 12px', fontSize: '14px' }}>↑</button>
+              <button type="submit" aria-label="Send message" className="btn-primary" style={{ padding: '7px 12px', fontSize: '14px' }}>↑</button>
             </div>
           </form>
         </div>
       ) : (
         <div className="flex flex-col items-center py-3 gap-1.5">
           <button onClick={onToggle}
+            aria-label="Open chat"
             className="w-[40px] h-[40px] rounded-xl flex items-center justify-center text-[17px] transition-all hover:scale-110 relative"
             style={{ background: 'var(--bg-surface)', border: '1px solid var(--border-subtle)', cursor: 'pointer' }}
             title="Chat">
