@@ -165,6 +165,7 @@ export default function StudentView() {
   const pendingMessagesRef = useRef<any[]>([]);
   const syncEpochRef = useRef(0);
   const lastInboundSeqRef = useRef(0);
+  const lastRevisionRef = useRef(0);
 
   const iframeRef = useRef<HTMLIFrameElement>(null);
 
@@ -230,6 +231,7 @@ export default function StudentView() {
       if (typeof state.studentInteractionAllowed === 'boolean') setInteractionAllowed(state.studentInteractionAllowed);
       if (typeof state.currentStep === 'number') setCurrentStep(state.currentStep);
       setChatMessages(state.chat || []);
+      if (typeof state.revision === 'number') lastRevisionRef.current = state.revision;
       if (state.lastRunHtml) {
         const f = state.files?.find((f: FileEntry) => f.id === state.activeFileId);
         setCurrentFileName(f?.name || 'Simulation');
@@ -246,7 +248,11 @@ export default function StudentView() {
       sounds.join();
     });
 
-    newSocket.on("active_file_changed", (data: { fileId: string; fileName?: string; html?: string; currentStep?: number }) => {
+    newSocket.on("active_file_changed", (data: { fileId: string; fileName?: string; html?: string; currentStep?: number; revision?: number }) => {
+      if (typeof data.revision === 'number') {
+        if (data.revision < lastRevisionRef.current) return;
+        lastRevisionRef.current = data.revision;
+      }
       setActiveFileId(data.fileId);
       if (typeof data.currentStep === 'number') {
         setCurrentStep(data.currentStep);
@@ -259,16 +265,28 @@ export default function StudentView() {
       }
     });
 
-    newSocket.on("run_preview", ({ html }: { fileId: string; html: string }) => {
+    newSocket.on("run_preview", ({ html, revision }: { fileId: string; html: string; revision?: number }) => {
+      if (typeof revision === 'number') {
+        if (revision < lastRevisionRef.current) return;
+        lastRevisionRef.current = revision;
+      }
       // Only update if HTML actually changed — avoids full iframe reload (blink + scroll reset)
       setCurrentHtml(prev => prev === html ? prev : html);
     });
 
-    newSocket.on("dom_snapshot", ({ html }: { fileId: string; html: string }) => {
+    newSocket.on("dom_snapshot", ({ html, revision }: { fileId: string; html: string; revision?: number }) => {
+      if (typeof revision === 'number') {
+        if (revision < lastRevisionRef.current) return;
+        lastRevisionRef.current = revision;
+      }
       setCurrentHtml(prev => prev === html ? prev : html);
     });
 
     newSocket.on("force_sync_state", (state: any) => {
+      if (typeof state.revision === 'number') {
+        if (state.revision < lastRevisionRef.current) return;
+        lastRevisionRef.current = state.revision;
+      }
       if (state.files) setFiles(state.files);
       if (state.activeFileId) setActiveFileId(state.activeFileId);
       if (state.lastRunHtml) {
@@ -562,7 +580,8 @@ export default function StudentView() {
       const res = await fetch(`/api/room/${roomId}/content`);
       if (res.status === 200) {
         const data = await res.json();
-        if (data.html && !currentHtml) {
+        if (data.html && (typeof data.revision !== 'number' || data.revision >= lastRevisionRef.current) && !currentHtml) {
+          if (typeof data.revision === 'number') lastRevisionRef.current = data.revision;
           setCurrentFileName(data.fileName || 'Simulation');
           setCurrentHtml(data.html);
           showNotification("✅ Content loaded");

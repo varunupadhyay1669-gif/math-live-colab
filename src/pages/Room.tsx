@@ -217,7 +217,8 @@ export default function Room() {
   const syncEpochRef = useRef(0);
   const lastInboundSeqRef = useRef(0);
   const snapshotTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const snapshotRequestRef = useRef(false);
+  const snapshotRequestRef = useRef<string | null>(null);
+  const lastRevisionRef = useRef(0);
 
   // ── Refs ──
   const iframeRef = useRef<HTMLIFrameElement>(null);
@@ -259,9 +260,13 @@ export default function Room() {
       if (typeof state.studentInteractionAllowed === 'boolean') setStudentInteractionAllowed(state.studentInteractionAllowed);
       setUsers(state.users || []);
       setChatMessages(state.chat || []);
+      if (typeof state.revision === 'number') lastRevisionRef.current = state.revision;
       if (state.activeFileId && state.files) {
         const f = state.files.find((f: FileEntry) => f.id === state.activeFileId);
-        if (f) { setHtmlCode(f.html); setPreviewHtml(f.html); }
+        if (state.lastRunHtml) {
+          setHtmlCode(state.lastRunHtml);
+          setPreviewHtml(state.lastRunHtml);
+        } else if (f) { setHtmlCode(f.html); setPreviewHtml(f.html); }
       }
     });
 
@@ -288,7 +293,11 @@ export default function Room() {
     newSocket.on("active_file_changed", (data: { fileId: string; fileName?: string; html?: string }) => {
       setActiveFileId(data.fileId);
     });
-    newSocket.on("run_preview", ({ html }: { fileId: string; html: string }) => {
+    newSocket.on("run_preview", ({ html, revision }: { fileId: string; html: string; revision?: number }) => {
+      if (typeof revision === 'number') {
+        if (revision < lastRevisionRef.current) return;
+        lastRevisionRef.current = revision;
+      }
       // Skip if this is our own echo from run_preview we just emitted
       if (skipOwnPreviewRef.current) {
         skipOwnPreviewRef.current = false;
@@ -409,12 +418,14 @@ export default function Room() {
     });
 
     // ── Sync ──
-    newSocket.on("request_html_sync", () => {
-      if (iframeRef.current?.contentWindow) {
-        iframeRef.current.contentWindow.postMessage({ type: 'REQUEST_HTML' }, "*");
-      }
+    newSocket.on("request_html_sync", ({ requestId }: { requestId?: string } = {}) => {
+      postToIframe({ type: 'REQUEST_HTML', requestId: requestId || `teacher-${Date.now()}` });
     });
     newSocket.on("force_sync_state", (state: any) => {
+      if (typeof state.revision === 'number') {
+        if (state.revision < lastRevisionRef.current) return;
+        lastRevisionRef.current = state.revision;
+      }
       if (state.activeFileId && state.lastRunHtml) {
         setPreviewHtml(state.lastRunHtml);
         setActiveFileId(state.activeFileId);
@@ -529,8 +540,9 @@ export default function Room() {
     const requestSnapshot = () => {
       if (snapshotTimerRef.current) clearTimeout(snapshotTimerRef.current);
       snapshotTimerRef.current = setTimeout(() => {
-        snapshotRequestRef.current = true;
-        iframeRef.current?.contentWindow?.postMessage({ type: 'REQUEST_HTML' }, "*");
+        const requestId = `snap-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        snapshotRequestRef.current = requestId;
+        postToIframe({ type: 'REQUEST_HTML', requestId });
       }, 350);
     };
 
@@ -542,11 +554,12 @@ export default function Room() {
 
       // Internal sync events — not interactions
       if (type === 'SYNC_PROVIDE_HTML') {
-        if (snapshotRequestRef.current) {
-          snapshotRequestRef.current = false;
-          socket.emit("dom_snapshot", { roomId, html: e.data.html });
+        if (snapshotRequestRef.current && e.data.requestId === snapshotRequestRef.current) {
+          const requestId = snapshotRequestRef.current;
+          snapshotRequestRef.current = null;
+          socket.emit("dom_snapshot", { roomId, html: e.data.html, requestId });
         } else {
-          socket.emit("sync_html_update", { roomId, html: e.data.html });
+          socket.emit("sync_html_update", { roomId, html: e.data.html, requestId: e.data.requestId });
         }
         return;
       }
@@ -833,14 +846,10 @@ export default function Room() {
 
   const handleForceSync = () => {
     if (!socket) return;
-    // Capture teacher's current live DOM and save it server-side for new students,
-    // then emit force_sync so students get the latest state.
-    // The REQUEST_HTML → SYNC_PROVIDE_HTML → sync_html_update flow stores it.
-    postToIframe({ type: 'REQUEST_HTML' });
-    setTimeout(() => {
-      socket.emit("force_sync", { roomId });
-      setLastSyncTime(Date.now());
-    }, 300);
+    const requestId = `force-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    snapshotRequestRef.current = requestId;
+    postToIframe({ type: 'REQUEST_HTML', requestId });
+    setLastSyncTime(Date.now());
   };
 
   const toggleScrollSync = () => {

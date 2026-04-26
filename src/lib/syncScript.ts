@@ -676,6 +676,7 @@ export const injectedSyncScript = `
         } catch(ignore) {}
         window.parent.postMessage({
           type: 'SYNC_PROVIDE_HTML',
+          requestId: data.requestId,
           html: '<!DOCTYPE html>\\n' + htmlClone.outerHTML,
           scrollX: window.scrollX,
           scrollY: window.scrollY
