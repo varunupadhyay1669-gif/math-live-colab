@@ -61,6 +61,7 @@ export default function Leaderboard({ entries, open, onClose, currentStudentName
           </div>
           <button
             onClick={onClose}
+            aria-label="Close leaderboard"
             className="w-9 h-9 rounded-full flex items-center justify-center transition-all"
             style={{ background: 'rgba(255,255,255,0.2)', color: '#fff' }}
             onMouseEnter={(e) => (e.currentTarget.style.background = 'rgba(255,255,255,0.32)')}
