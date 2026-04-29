@@ -360,7 +360,8 @@ export default function StudentView() {
         lastInboundSeqRef.current = event.serverSeq;
       }
       if (typeof event.syncEpoch === 'number') {
-        if (event.syncEpoch < syncEpochRef.current) return;
+        const teacherScroll = event.type === "SYNC_SCROLL" && event.role === "teacher";
+        if (!teacherScroll && event.syncEpoch < syncEpochRef.current) return;
         if (event.syncEpoch > syncEpochRef.current) {
           syncEpochRef.current = event.syncEpoch;
           pendingMessagesRef.current = [];
