@@ -94,7 +94,7 @@ export default function SimulationLibrary({ isOpen, onClose, onLoad, currentHtml
             <h2 className="font-display text-lg font-bold" style={{ color: 'var(--text-primary)' }}>📚 Simulation Library</h2>
             <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>{items.length} saved simulations</p>
           </div>
-          <button onClick={onClose}
+          <button onClick={onClose} aria-label="Close"
             style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '20px' }}>✕</button>
         </div>
 
