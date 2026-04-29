@@ -524,6 +524,7 @@ export default function Room() {
       iframeRef.current?.contentWindow?.postMessage(msg, '*');
     }
     // Re-send current state
+    iframeRef.current?.contentWindow?.postMessage({ type: 'SET_PRESENTER_MODE', enabled: true }, '*');
     if (scrollSyncEnabled !== undefined) {
       iframeRef.current?.contentWindow?.postMessage({ type: 'SET_SCROLL_SYNC', enabled: scrollSyncEnabled }, '*');
     }
@@ -657,6 +658,7 @@ export default function Room() {
 
   // ── Push scroll sync state to iframe ──
   useEffect(() => {
+    postToIframe({ type: 'SET_PRESENTER_MODE', enabled: true });
     postToIframe({ type: 'SET_SCROLL_SYNC', enabled: scrollSyncEnabled });
   }, [scrollSyncEnabled, iframeUrl, postToIframe]);
 

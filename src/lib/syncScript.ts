@@ -16,6 +16,7 @@ export const injectedSyncScript = `
     function exitRemote() { remoteDepth = Math.max(0, remoteDepth - 1); }
 
     var interactionBlocked = false;
+    var presenterMode = false;
     var lockedWindowX = 0;
     var lockedWindowY = 0;
 
@@ -327,7 +328,7 @@ export const injectedSyncScript = `
     }
 
     function sendDocScroll() {
-      if (isRemote() || !scrollSyncEnabled || interactionBlocked) return;
+      if (isRemote() || !scrollSyncEnabled || (interactionBlocked && !presenterMode)) return;
       var now = Date.now();
       if (now - lastScroll < 30) return;
       lastScroll = now;
@@ -349,7 +350,7 @@ export const injectedSyncScript = `
     }
 
     function sendElementScroll(e) {
-      if (isRemote() || !scrollSyncEnabled || interactionBlocked) return;
+      if (isRemote() || !scrollSyncEnabled || (interactionBlocked && !presenterMode)) return;
       var now = Date.now();
       if (now - lastScroll < 30) return;
       lastScroll = now;
@@ -375,7 +376,7 @@ export const injectedSyncScript = `
 
     // Send scroll sync updates (only when not blocked or during remote updates)
     window.addEventListener('scroll', function() {
-      if (interactionBlocked && !isRemote()) {
+      if (interactionBlocked && !presenterMode && !isRemote()) {
         // In view-only mode, revert any student scroll attempts immediately
         enforceScrollLock();
         return;
@@ -599,6 +600,9 @@ export const injectedSyncScript = `
         interactionBlocked = !data.allowed;
         // Capture the current position as lock-point when entering view-only mode.
         if (interactionBlocked) updateLockedWindowPos();
+      } else if (data.type === 'SET_PRESENTER_MODE') {
+        presenterMode = !!data.enabled;
+        if (presenterMode) interactionBlocked = false;
       } else if (data.type === 'RESET_VIEW') {
         enterRemote();
         try { window.scrollTo({ top: 0, left: 0, behavior: 'smooth' }); } catch(ignore) {}
