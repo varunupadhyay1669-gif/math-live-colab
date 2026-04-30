@@ -1,0 +1,3 @@
+## 2023-10-27 - Icon-only buttons accessibility pattern
+**Learning:** This app heavily uses a custom `data-tip` attribute for tooltips on icon-only buttons (like fullscreen, sound mute, chat, and various teacher controls). While `data-tip` provides visual context on hover, it does not provide an accessible name for screen readers. Since many buttons in this application (like in `TeacherControls.tsx`, `StudentView.tsx`, and `Room.tsx`) are icon-only, this creates a major accessibility issue.
+**Action:** When adding new icon-only buttons with `data-tip`, ALWAYS ensure an equivalent `aria-label` is also provided. A script or systematic check is needed to pair `data-tip` with `aria-label` across the codebase.
