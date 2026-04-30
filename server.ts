@@ -683,27 +683,56 @@ async function startServer() {
 
     // ─── WHITEBOARD ───
     socket.on('whiteboard_draw', ({ roomId, stroke }: any) => {
-      // Broadcast stroke to all other users in room
+      const room = rooms.get(roomId);
+      if (!isMember(room, socket.id)) return;
       socket.to(roomId).emit('whiteboard_stroke', { stroke, senderId: socket.id });
     });
 
     socket.on('whiteboard_set_image', ({ roomId, imageUrl }: { roomId: string; imageUrl: string }) => {
-      // Broadcast image to all users including sender
+      const room = rooms.get(roomId);
+      if (!requireTeacher(room, socket.id)) return;
       io.to(roomId).emit('whiteboard_image', { imageUrl });
     });
 
+    socket.on('whiteboard_add_image', ({ roomId, object }: any) => {
+      const room = rooms.get(roomId);
+      if (!requireTeacher(room, socket.id)) return;
+      io.to(roomId).emit('whiteboard_add_image', { object });
+    });
+
+    socket.on('whiteboard_update_object', ({ roomId, object }: any) => {
+      const room = rooms.get(roomId);
+      if (!requireTeacher(room, socket.id)) return;
+      socket.to(roomId).emit('whiteboard_update_object', { object });
+    });
+
+    socket.on('whiteboard_remove_object', ({ roomId, objectId }: { roomId: string; objectId: string }) => {
+      const room = rooms.get(roomId);
+      if (!requireTeacher(room, socket.id)) return;
+      io.to(roomId).emit('whiteboard_remove_object', { objectId });
+    });
+
+    socket.on('whiteboard_set_view', ({ roomId, view }: any) => {
+      const room = rooms.get(roomId);
+      if (!requireTeacher(room, socket.id)) return;
+      socket.to(roomId).emit('whiteboard_set_view', { view });
+    });
+
     socket.on('whiteboard_clear', ({ roomId }: { roomId: string }) => {
-      // Clear image and all strokes
+      const room = rooms.get(roomId);
+      if (!requireTeacher(room, socket.id)) return;
       io.to(roomId).emit('whiteboard_clear');
     });
 
     socket.on('whiteboard_reset', ({ roomId }: { roomId: string }) => {
-      // Clear only strokes, keep image
+      const room = rooms.get(roomId);
+      if (!requireTeacher(room, socket.id)) return;
       io.to(roomId).emit('whiteboard_reset');
     });
 
     socket.on('whiteboard_delete_stroke', ({ roomId, strokeIndex }: { roomId: string; strokeIndex: number }) => {
-      // Delete specific stroke by index
+      const room = rooms.get(roomId);
+      if (!requireTeacher(room, socket.id)) return;
       socket.to(roomId).emit('whiteboard_delete_stroke', { strokeIndex });
     });
 
@@ -715,7 +744,8 @@ async function startServer() {
     });
 
     socket.on('whiteboard_scroll', ({ roomId, scrollX, scrollY }: { roomId: string; scrollX: number; scrollY: number }) => {
-      // Broadcast scroll position to all other users in room
+      const room = rooms.get(roomId);
+      if (!requireTeacher(room, socket.id)) return;
       socket.to(roomId).emit('whiteboard_scroll', { scrollX, scrollY });
     });
 
