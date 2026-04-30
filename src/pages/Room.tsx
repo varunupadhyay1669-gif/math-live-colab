@@ -587,7 +587,25 @@ export default function Room() {
     if (zoomLevel !== 1) {
       mirrorIframeRef.current?.contentWindow?.postMessage({ type: 'REMOTE_ZOOM', zoom: zoomLevel }, '*');
     }
+    // Catch up to teacher's current scroll position immediately
+    setTimeout(() => {
+      iframeRef.current?.contentWindow?.postMessage({ type: 'EMIT_CURRENT_SCROLL' }, '*');
+    }, 250);
   }, [stepLockEnabled, currentStep, zoomLevel]);
+
+  // ── Dual View: keep mirror aligned with teacher scroll ──
+  useEffect(() => {
+    if (!dualView) return;
+    // Initial pulse shortly after toggle (server too, so any other students align)
+    const initial = setTimeout(() => {
+      iframeRef.current?.contentWindow?.postMessage({ type: 'EMIT_CURRENT_SCROLL' }, '*');
+    }, 200);
+    // Periodic convergence pulse — mirror only, no server traffic
+    const interval = setInterval(() => {
+      iframeRef.current?.contentWindow?.postMessage({ type: 'EMIT_CURRENT_SCROLL', mirrorOnly: true }, '*');
+    }, 1500);
+    return () => { clearTimeout(initial); clearInterval(interval); };
+  }, [dualView]);
 
   // ── Relay iframe messages ──
   useEffect(() => {
@@ -626,21 +644,24 @@ export default function Room() {
       if (type.startsWith('SYNC_')) {
         // Check scroll sync gate
         if (type === 'SYNC_SCROLL' && !scrollSyncEnabled) return;
-        socket.emit("interaction", {
-          roomId,
-          event: {
-            ...e.data,
-            syncEpoch: syncEpochRef.current,
-            clientTs: Date.now(),
-          },
-        });
+        const mirrorOnly = !!e.data.mirrorOnly;
+        if (!mirrorOnly) {
+          socket.emit("interaction", {
+            roomId,
+            event: {
+              ...e.data,
+              syncEpoch: syncEpochRef.current,
+              clientTs: Date.now(),
+            },
+          });
+        }
         // Forward teacher-originated event to the student-mirror iframe so it
         // visually reflects exactly what students see in real-time.
         if (dualView && type !== 'SYNC_CURSOR') {
           const remoteEvent = { ...e.data, type: type.replace('SYNC_', 'REMOTE_') };
           postToMirror(remoteEvent);
         }
-        if (type !== 'SYNC_CURSOR' && type !== 'SYNC_SCROLL' && type !== 'SYNC_ZOOM') {
+        if (!mirrorOnly && type !== 'SYNC_CURSOR' && type !== 'SYNC_SCROLL' && type !== 'SYNC_ZOOM') {
           requestSnapshot();
         }
       }

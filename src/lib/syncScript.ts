@@ -603,6 +603,26 @@ export const injectedSyncScript = `
       } else if (data.type === 'SET_PRESENTER_MODE') {
         presenterMode = !!data.enabled;
         if (presenterMode) interactionBlocked = false;
+      } else if (data.type === 'EMIT_CURRENT_SCROLL') {
+        // Bypass throttle/presenter guards and emit the current document scroll
+        // so a freshly opened mirror/student can catch up immediately.
+        try {
+          var maxW = Math.max(0, document.documentElement.scrollWidth - window.innerWidth);
+          var maxH = Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
+          var msg = {
+            type: 'SYNC_SCROLL',
+            scrollX: maxW > 0 ? window.scrollX / maxW : 0,
+            scrollY: maxH > 0 ? window.scrollY / maxH : 0,
+            absScrollX: window.scrollX,
+            absScrollY: window.scrollY,
+            maxScrollX: maxW,
+            maxScrollY: maxH,
+            mirrorOnly: !!data.mirrorOnly
+          };
+          var a = _findAnchor(null);
+          if (a) { msg.anchor = a.anchor; msg.anchorOffsetPx = a.anchorOffsetPx; }
+          window.parent.postMessage(msg, '*');
+        } catch(ignore) {}
       } else if (data.type === 'RESET_VIEW') {
         enterRemote();
         try { window.scrollTo({ top: 0, left: 0, behavior: 'smooth' }); } catch(ignore) {}
