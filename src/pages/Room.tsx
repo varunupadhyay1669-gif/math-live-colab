@@ -186,6 +186,14 @@ export default function Room() {
   const iframeReadyRef = useRef(false);
   const pendingMessagesRef = useRef<any[]>([]);
 
+  // ── Dual View (split: teacher | student mirror) ──
+  const [dualView, setDualView] = useState(false);
+  const dualViewRef = useRef(false);
+  useEffect(() => { dualViewRef.current = dualView; }, [dualView]);
+  const mirrorIframeRef = useRef<HTMLIFrameElement>(null);
+  const mirrorReadyRef = useRef(false);
+  const pendingMirrorMessagesRef = useRef<any[]>([]);
+
   // ── Step-Lock ──
   const [stepLockEnabled, setStepLockEnabled] = useState(false);
   const [currentStep, setCurrentStep] = useState(1);
@@ -384,9 +392,23 @@ export default function Room() {
         }
         const remoteEvent = { ...event, type: event.type.replace("SYNC_", "REMOTE_") };
         postToIframe(remoteEvent);
+        if (dualViewRef.current && mirrorIframeRef.current?.contentWindow) {
+          if (mirrorReadyRef.current) {
+            mirrorIframeRef.current.contentWindow.postMessage(remoteEvent, '*');
+          } else if (pendingMirrorMessagesRef.current.length < 500) {
+            pendingMirrorMessagesRef.current.push(remoteEvent);
+          }
+        }
       } else {
         const remoteEvent = { ...event, type: event.type.replace("SYNC_", "REMOTE_") };
         postToIframe(remoteEvent);
+        if (dualViewRef.current && mirrorIframeRef.current?.contentWindow) {
+          if (mirrorReadyRef.current) {
+            mirrorIframeRef.current.contentWindow.postMessage(remoteEvent, '*');
+          } else if (pendingMirrorMessagesRef.current.length < 500) {
+            pendingMirrorMessagesRef.current.push(remoteEvent);
+          }
+        }
       }
       if (isRecording) sessionRecorder.record('interaction', event);
     });
@@ -502,6 +524,17 @@ export default function Room() {
     return () => { newSocket.disconnect(); };
   }, [roomId, navigate, teacherName]);
 
+  // ── Helper: safely post message to mirror iframe (queues if not ready) ──
+  const postToMirror = useCallback((msg: any) => {
+    if (mirrorReadyRef.current && mirrorIframeRef.current?.contentWindow) {
+      mirrorIframeRef.current.contentWindow.postMessage(msg, '*');
+    } else {
+      if (pendingMirrorMessagesRef.current.length < 500) {
+        pendingMirrorMessagesRef.current.push(msg);
+      }
+    }
+  }, []);
+
   // ── Helper: safely post message to iframe (queues if not ready) ──
   const postToIframe = useCallback((msg: any) => {
     if (iframeReadyRef.current && iframeRef.current?.contentWindow) {
@@ -535,6 +568,26 @@ export default function Room() {
       iframeRef.current?.contentWindow?.postMessage({ type: 'SET_ZOOM', zoom: zoomLevel }, '*');
     }
   }, [scrollSyncEnabled, stepLockEnabled, currentStep, zoomLevel]);
+
+  // ── Mirror iframe onLoad: behave like a passive student view ──
+  const handleMirrorLoad = useCallback(() => {
+    mirrorReadyRef.current = true;
+    const pending = pendingMirrorMessagesRef.current;
+    pendingMirrorMessagesRef.current = [];
+    for (const msg of pending) {
+      mirrorIframeRef.current?.contentWindow?.postMessage(msg, '*');
+    }
+    // Mirror is view-only and receives remote events only
+    mirrorIframeRef.current?.contentWindow?.postMessage({ type: 'SET_PRESENTER_MODE', enabled: false }, '*');
+    mirrorIframeRef.current?.contentWindow?.postMessage({ type: 'SET_INTERACTION_MODE', allowed: false }, '*');
+    mirrorIframeRef.current?.contentWindow?.postMessage({ type: 'SET_SCROLL_SYNC', enabled: true }, '*');
+    if (stepLockEnabled && currentStep) {
+      mirrorIframeRef.current?.contentWindow?.postMessage({ type: 'SET_STEP', step: currentStep }, '*');
+    }
+    if (zoomLevel !== 1) {
+      mirrorIframeRef.current?.contentWindow?.postMessage({ type: 'REMOTE_ZOOM', zoom: zoomLevel }, '*');
+    }
+  }, [stepLockEnabled, currentStep, zoomLevel]);
 
   // ── Relay iframe messages ──
   useEffect(() => {
@@ -581,6 +634,12 @@ export default function Room() {
             clientTs: Date.now(),
           },
         });
+        // Forward teacher-originated event to the student-mirror iframe so it
+        // visually reflects exactly what students see in real-time.
+        if (dualView && type !== 'SYNC_CURSOR') {
+          const remoteEvent = { ...e.data, type: type.replace('SYNC_', 'REMOTE_') };
+          postToMirror(remoteEvent);
+        }
         if (type !== 'SYNC_CURSOR' && type !== 'SYNC_SCROLL' && type !== 'SYNC_ZOOM') {
           requestSnapshot();
         }
@@ -591,13 +650,15 @@ export default function Room() {
       window.removeEventListener("message", handler);
       if (snapshotTimerRef.current) clearTimeout(snapshotTimerRef.current);
     };
-  }, [socket, roomId, scrollSyncEnabled]);
+  }, [socket, roomId, scrollSyncEnabled, dualView, postToMirror]);
 
   useEffect(() => {
     syncEpochRef.current += 1;
     // Reset iframe readiness when content source changes — the new iframe needs to fire onLoad
     iframeReadyRef.current = false;
-  }, [iframeUrl, showTempContent, whiteboardMode]);
+    mirrorReadyRef.current = false;
+    pendingMirrorMessagesRef.current = [];
+  }, [iframeUrl, showTempContent, whiteboardMode, dualView]);
 
   // NOTE: Periodic auto-sync removed — it was causing full iframe reloads on student
   // side every 10s, making the page blink and scroll jump to top.
@@ -1413,6 +1474,21 @@ export default function Room() {
 
             {/* Iframe or Whiteboard */}
             <div className="flex-1 relative overflow-hidden m-3 rounded-xl preview-frame">
+              {/* Dual View toggle — appears once content is loaded */}
+              {iframeUrl && !showTempContent && !whiteboardMode && (
+                <button
+                  onClick={() => setDualView(v => !v)}
+                  className="absolute top-2 right-2 z-20 px-3 py-1.5 rounded-lg text-xs font-semibold shadow-md"
+                  style={{
+                    background: dualView ? '#10B981' : 'rgba(255,255,255,0.95)',
+                    color: dualView ? '#fff' : '#111827',
+                    border: '1px solid rgba(0,0,0,0.08)',
+                  }}
+                  title="Show a live mirror of what students see"
+                >
+                  {dualView ? '✕ Exit Dual View' : '👥 Dual View'}
+                </button>
+              )}
               {showTempContent && tempContent && tempContentUrl ? (
                 // Temporary explanation content overlay — uses same ref so scroll sync works
                 <iframe
@@ -1436,10 +1512,34 @@ export default function Room() {
                   isActive={true}
                 />
               ) : iframeUrl ? (
-                <iframe ref={iframeRef} src={iframeUrl} className="w-full h-full border-none"
-                  style={{ background: '#ffffff' }}
-                  onLoad={handleIframeLoad}
-                  sandbox="allow-scripts allow-same-origin allow-forms allow-modals allow-popups allow-pointer-lock" />
+                <div className="w-full h-full flex">
+                  <div className={dualView ? "relative flex-1 border-r border-gray-300" : "relative w-full h-full"}>
+                    {dualView && (
+                      <div className="absolute top-2 left-2 z-10 px-2 py-0.5 rounded text-xs font-semibold"
+                        style={{ background: 'rgba(59,130,246,0.9)', color: '#fff' }}>
+                        Teacher View
+                      </div>
+                    )}
+                    <iframe ref={iframeRef} src={iframeUrl} className="w-full h-full border-none"
+                      style={{ background: '#ffffff' }}
+                      onLoad={handleIframeLoad}
+                      sandbox="allow-scripts allow-same-origin allow-forms allow-modals allow-popups allow-pointer-lock" />
+                  </div>
+                  {dualView && (
+                    <div className="relative flex-1">
+                      <div className="absolute top-2 left-2 z-10 px-2 py-0.5 rounded text-xs font-semibold"
+                        style={{ background: 'rgba(16,185,129,0.9)', color: '#fff' }}>
+                        Student Mirror (live)
+                      </div>
+                      <iframe ref={mirrorIframeRef} src={iframeUrl} className="w-full h-full border-none"
+                        style={{ background: '#ffffff' }}
+                        onLoad={handleMirrorLoad}
+                        sandbox="allow-scripts allow-same-origin allow-forms allow-modals allow-popups allow-pointer-lock" />
+                      {/* Block all pointer interactions inside the mirror so it stays passive */}
+                      <div className="absolute inset-0" style={{ pointerEvents: 'auto', cursor: 'not-allowed' }} />
+                    </div>
+                  )}
+                </div>
               ) : (
                 <div className="flex items-center justify-center h-full" style={{ background: 'var(--bg-surface)' }}>
                   <div className="text-center">
