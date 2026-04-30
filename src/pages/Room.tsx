@@ -228,6 +228,30 @@ export default function Room() {
   const snapshotRequestRef = useRef<string | null>(null);
   const lastRevisionRef = useRef(0);
 
+  const applySessionState = useCallback((state: any) => {
+    if (typeof state.revision === 'number') {
+      if (state.revision < lastRevisionRef.current) return;
+      lastRevisionRef.current = state.revision;
+    }
+    if (state.files) setFiles(state.files);
+    if (state.activeFileId !== undefined) setActiveFileId(state.activeFileId);
+    if (typeof state.isPaused === 'boolean') setIsPaused(state.isPaused);
+    if (typeof state.scrollSyncEnabled === 'boolean') setScrollSyncEnabled(state.scrollSyncEnabled);
+    if (typeof state.studentInteractionAllowed === 'boolean') setStudentInteractionAllowed(state.studentInteractionAllowed);
+    if (typeof state.currentStep === 'number') setCurrentStep(state.currentStep);
+    if (state.gates) setGates(state.gates);
+    if (state.tempContent) {
+      setTempContent(state.tempContent);
+      setShowTempContent(true);
+    }
+    const html = state.effectiveHtml || state.liveSnapshotHtml || state.lastRunHtml || state.sourceHtml;
+    if (html) {
+      setHtmlCode(state.sourceHtml || html);
+      setPreviewHtml((prev: string) => prev === html ? prev : html);
+    }
+    setLastSyncTime(Date.now());
+  }, []);
+
   // ── Refs ──
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -261,6 +285,7 @@ export default function Room() {
     newSocket.on("disconnect", () => setConnected(false));
 
     newSocket.on("room_state", (state: any) => {
+      applySessionState(state);
       setFiles(state.files || []);
       setActiveFileId(state.activeFileId);
       setIsPaused(state.isPaused);
@@ -277,6 +302,9 @@ export default function Room() {
         } else if (f) { setHtmlCode(f.html); setPreviewHtml(f.html); }
       }
     });
+
+    newSocket.on("session_state", applySessionState);
+    newSocket.on("sync_full_state", applySessionState);
 
     newSocket.on("user_list", (list: UserInfo[]) => setUsers(list));
     newSocket.on("user_left", (data: { userId: string; userName: string }) => {
@@ -629,8 +657,10 @@ export default function Room() {
         if (snapshotRequestRef.current && e.data.requestId === snapshotRequestRef.current) {
           const requestId = snapshotRequestRef.current;
           snapshotRequestRef.current = null;
+          console.info('[sync]', { eventType: 'snapshot_ack', roomId, requestId, role: 'teacher' });
           socket.emit("dom_snapshot", { roomId, html: e.data.html, requestId });
         } else {
+          console.info('[sync]', { eventType: 'snapshot_ack_unrequested', roomId, requestId: e.data.requestId, role: 'teacher' });
           socket.emit("sync_html_update", { roomId, html: e.data.html, requestId: e.data.requestId });
         }
         return;

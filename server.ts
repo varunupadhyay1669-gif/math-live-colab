@@ -43,6 +43,25 @@ interface RoomData {
   revision: number;
 }
 
+interface SessionStatePayload {
+  type: 'session_state' | 'sync_full_state';
+  reason: 'join' | 'reconnect' | 'request_content' | 'run_preview' | 'snapshot_ack' | 'force_sync' | 'restore';
+  roomId: string;
+  requestId?: string;
+  revision: number;
+  activeFileId: string | null;
+  sourceHtml: string | null;
+  liveSnapshotHtml: string | null;
+  effectiveHtml: string | null;
+  files: FileEntry[];
+  isPaused: boolean;
+  scrollSyncEnabled: boolean;
+  studentInteractionAllowed: boolean;
+  currentStep: number;
+  gates: Record<number, { question: string; options: string[]; correctIndex: number }>;
+  tempContent: { html: string; name: string } | null;
+}
+
 async function startServer() {
   const app = express();
   const PORT = parseInt(process.env.PORT || '3000', 10);
@@ -281,6 +300,63 @@ async function startServer() {
     return room.revision;
   }
 
+  function getSourceHtml(room: RoomData): string | null {
+    if (room.activeFileId) {
+      const file = room.files.find(f => f.id === room.activeFileId);
+      if (file?.html) return file.html;
+    }
+    return room.lastRunHtml;
+  }
+
+  function buildSessionState(roomId: string, room: RoomData, type: SessionStatePayload['type'], reason: SessionStatePayload['reason'], requestId?: string): SessionStatePayload {
+    const sourceHtml = getSourceHtml(room);
+    const effectiveHtml = room.liveSnapshotHtml || room.lastRunHtml || sourceHtml;
+    return {
+      type,
+      reason,
+      roomId,
+      requestId,
+      revision: room.revision,
+      activeFileId: room.activeFileId,
+      sourceHtml,
+      liveSnapshotHtml: room.liveSnapshotHtml,
+      effectiveHtml,
+      files: room.files,
+      isPaused: room.isPaused,
+      scrollSyncEnabled: room.scrollSyncEnabled,
+      studentInteractionAllowed: room.studentInteractionAllowed,
+      currentStep: room.currentStep,
+      gates: room.gates,
+      tempContent: room.tempContent,
+    };
+  }
+
+  function logSync(eventType: string, details: { roomId: string; revision?: number; requestId?: string; role?: string; socketId?: string; reason?: string }) {
+    console.log(JSON.stringify({
+      scope: 'sync',
+      eventType,
+      roomId: details.roomId,
+      revision: details.revision,
+      requestId: details.requestId,
+      role: details.role,
+      socketId: details.socketId,
+      reason: details.reason,
+      at: Date.now(),
+    }));
+  }
+
+  function emitSessionState(socketId: string, roomId: string, room: RoomData, reason: SessionStatePayload['reason'], requestId?: string) {
+    const payload = buildSessionState(roomId, room, 'session_state', reason, requestId);
+    io.to(socketId).emit('session_state', payload);
+    logSync('session_state', { roomId, revision: payload.revision, requestId, socketId, reason });
+  }
+
+  function broadcastFullState(roomId: string, room: RoomData, reason: SessionStatePayload['reason'], requestId?: string) {
+    const payload = buildSessionState(roomId, room, 'sync_full_state', reason, requestId);
+    io.to(roomId).emit('sync_full_state', payload);
+    logSync('sync_full_state', { roomId, revision: payload.revision, requestId, reason });
+  }
+
   // ─── CHAT RATE LIMITING ───
   const chatRateLimits = new Map<string, { count: number; resetAt: number }>();
   const CHAT_RATE_LIMIT = 10; // max messages per window
@@ -355,8 +431,8 @@ async function startServer() {
         io.to(room.teacherSocketId).emit('request_html_sync', { requestId: `late-${socket.id}-${Date.now()}` });
       }
 
-      // Send current state to the newly joined user
-      socket.emit('room_state', {
+      // Send current state to the newly joined user (legacy + canonical)
+      const legacyState = {
         files: room.files,
         activeFileId: room.activeFileId,
         lastRunHtml: room.lastRunHtml,
@@ -368,7 +444,9 @@ async function startServer() {
         revision: room.revision,
         users: getRoomUserList(room),
         chat: room.chat.slice(-50), // Last 50 messages
-      });
+      };
+      socket.emit('room_state', legacyState);
+      emitSessionState(socket.id, roomId, room, 'join');
 
       // Immediately push content to the joining student so they don't stay on "Waiting for teacher"
       if (role === 'student' && room.lastRunHtml && room.activeFileId) {
@@ -389,6 +467,7 @@ async function startServer() {
     socket.on('request_content', ({ roomId }: { roomId: string }) => {
       const room = rooms.get(roomId);
       if (!isMember(room, socket.id)) return;
+      emitSessionState(socket.id, roomId, room, 'request_content');
       if (room.lastRunHtml) {
         socket.emit('run_preview', { fileId: room.activeFileId, html: room.lastRunHtml, revision: room.revision });
       }
@@ -449,6 +528,7 @@ async function startServer() {
       const revision = bumpRevision(room);
       io.to(roomId).emit('file_uploaded', file);
       io.to(roomId).emit('active_file_changed', { fileId: file.id, fileName: file.name, html: file.html, currentStep: room.currentStep, revision });
+      broadcastFullState(roomId, room, 'run_preview');
       // Auto-push HTML to all connected clients immediately
       io.to(roomId).emit('run_preview', { fileId: file.id, html: file.html, revision });
     });
@@ -484,6 +564,7 @@ async function startServer() {
         const revision = bumpRevision(room);
         // Send file content WITH the active_file_changed so student never reads stale state
         io.to(roomId).emit('active_file_changed', { fileId, fileName: file.name, html: file.html, currentStep: room.currentStep, revision });
+        broadcastFullState(roomId, room, 'run_preview');
         io.to(roomId).emit('run_preview', { fileId, html: file.html, revision });
       }
     });
@@ -502,6 +583,7 @@ async function startServer() {
       room.lastRunHtml = html;
       room.liveSnapshotHtml = null;
       const revision = bumpRevision(room);
+      broadcastFullState(roomId, room, 'run_preview');
       // Send to everyone (including sender for confirmation)
       io.to(roomId).emit('run_preview', { fileId, html, revision });
     });
@@ -519,9 +601,10 @@ async function startServer() {
         const pending = Array.from(room.pendingSyncStudents);
         room.pendingSyncStudents.clear();
         for (const studentId of pending) {
+          emitSessionState(studentId, roomId, room, 'snapshot_ack', requestId);
           io.to(studentId).emit('run_preview', { fileId: room.activeFileId, html, revision });
         }
-        console.log(`📤 Sent live HTML rev ${revision} to ${pending.length} pending student(s) in room ${roomId}${requestId ? ` request=${requestId}` : ''}`);
+        logSync('pending_snapshot_ack', { roomId, revision, requestId, reason: `pending=${pending.length}` });
       }
     });
 
@@ -531,8 +614,9 @@ async function startServer() {
       room.liveSnapshotHtml = html;
       room.lastRunHtml = html;
       const revision = bumpRevision(room);
+      broadcastFullState(roomId, room, requestId?.startsWith('force-') ? 'force_sync' : 'snapshot_ack', requestId);
       io.to(roomId).emit('dom_snapshot', { fileId: room.activeFileId, html, revision, requestId });
-      console.log(`📸 DOM snapshot room=${roomId} rev=${revision}${requestId ? ` request=${requestId}` : ''}`);
+      logSync('snapshot_ack', { roomId, revision, requestId });
     });
 
     // ─── FORCE SYNC (Server-authoritative) ───
@@ -541,18 +625,13 @@ async function startServer() {
       if (!requireTeacher(room, socket.id)) return;
       updateRoomActivity(roomId);
 
-      // Build the authoritative state snapshot
-      const syncPayload = {
-        files: room.files,
-        activeFileId: room.activeFileId,
-        lastRunHtml: room.lastRunHtml,
-        isPaused: room.isPaused,
-        revision: room.revision,
-      };
-
-      // Broadcast to all clients in the room
-      io.to(roomId).emit('force_sync_state', syncPayload);
-      console.log(`🔄 Force Sync triggered for room ${roomId}`);
+      const requestId = `force-${socket.id}-${Date.now()}`;
+      if (room.teacherSocketId) {
+        io.to(room.teacherSocketId).emit('request_html_sync', { requestId, reason: 'force_sync' });
+        logSync('snapshot_request', { roomId, revision: room.revision, requestId, role: 'teacher', socketId: socket.id, reason: 'force_sync' });
+      } else {
+        broadcastFullState(roomId, room, 'force_sync', requestId);
+      }
     });
 
     // ─── TEACHER CONTROLS ───

@@ -167,6 +167,26 @@ export default function StudentView() {
   const lastInboundSeqRef = useRef(0);
   const lastRevisionRef = useRef(0);
 
+  const applySessionState = useCallback((state: any) => {
+    if (typeof state.revision === 'number') {
+      if (state.revision < lastRevisionRef.current) return;
+      lastRevisionRef.current = state.revision;
+    }
+    if (state.files) setFiles(state.files);
+    if (state.activeFileId !== undefined) setActiveFileId(state.activeFileId);
+    if (typeof state.isPaused === 'boolean') setIsPaused(state.isPaused);
+    if (typeof state.scrollSyncEnabled === 'boolean') setScrollSyncEnabled(state.scrollSyncEnabled);
+    if (typeof state.studentInteractionAllowed === 'boolean') setInteractionAllowed(state.studentInteractionAllowed);
+    if (typeof state.currentStep === 'number') setCurrentStep(state.currentStep);
+    if (state.chat) setChatMessages(state.chat);
+    const html = state.effectiveHtml || state.liveSnapshotHtml || state.lastRunHtml || state.sourceHtml;
+    if (html) {
+      const activeFile = state.files?.find((f: FileEntry) => f.id === state.activeFileId);
+      setCurrentFileName(activeFile?.name || 'Simulation');
+      setCurrentHtml(prev => prev === html ? prev : html);
+    }
+  }, []);
+
   const iframeRef = useRef<HTMLIFrameElement>(null);
 
   const notifTimeoutRef = useRef<ReturnType<typeof setTimeout>>();
@@ -224,6 +244,7 @@ export default function StudentView() {
     });
 
     newSocket.on("room_state", (state: any) => {
+      applySessionState(state);
       setFiles(state.files || []);
       setActiveFileId(state.activeFileId);
       setIsPaused(state.isPaused);
@@ -241,6 +262,9 @@ export default function StudentView() {
         if (f) { setCurrentFileName(f.name); setCurrentHtml(f.html); }
       }
     });
+
+    newSocket.on("session_state", applySessionState);
+    newSocket.on("sync_full_state", applySessionState);
 
     newSocket.on("file_uploaded", (file: FileEntry) => {
       setFiles(prev => [...prev, file]);
