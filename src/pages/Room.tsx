@@ -1039,7 +1039,7 @@ export default function Room() {
             {(['code', 'split', 'preview'] as ViewMode[]).map(mode => (
               <button key={mode} onClick={() => setViewMode(mode)}
                 className={`tb-btn ${viewMode === mode ? 'active' : ''}`}
-                data-tip={mode.charAt(0).toUpperCase() + mode.slice(1)}>
+                data-tip={mode.charAt(0).toUpperCase() + mode.slice(1)} aria-label={mode.charAt(0).toUpperCase() + mode.slice(1)}>
                 {mode === 'code' && (
                   <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                     <polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/>
@@ -1141,7 +1141,7 @@ export default function Room() {
           <div className="header-divider hidden sm:block" />
 
           {/* Icon buttons: Library, Record, Fullscreen, Sound */}
-          <button onClick={() => setShowLibrary(true)} className="btn-icon hidden sm:inline-flex" data-tip="Library">
+          <button onClick={() => setShowLibrary(true)} className="btn-icon hidden sm:inline-flex" data-tip="Library" aria-label="Library">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M4 19.5A2.5 2.5 0 016.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 014 19.5v-15A2.5 2.5 0 016.5 2z"/>
             </svg>
@@ -1149,7 +1149,7 @@ export default function Room() {
 
           <button onClick={toggleRecording}
             className={`btn-icon hidden sm:inline-flex ${isRecording ? 'active-rose' : ''}`}
-            data-tip={isRecording ? 'Stop Recording' : 'Record'}>
+            data-tip={isRecording ? 'Stop Recording' : 'Record'} aria-label={isRecording ? 'Stop Recording' : 'Record'}>
             {isRecording ? (
               <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="none"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
             ) : (
@@ -1160,14 +1160,14 @@ export default function Room() {
           <button onClick={() => {
             if (document.fullscreenElement) document.exitFullscreen();
             else document.documentElement.requestFullscreen().catch(() => {});
-          }} className="btn-icon" data-tip="Fullscreen">
+          }} className="btn-icon" data-tip="Fullscreen" aria-label="Fullscreen">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/>
             </svg>
           </button>
 
           <button onClick={() => { const m = sounds.toggleMute(); setSoundMuted(m); }}
-            className="btn-icon" data-tip={soundMuted ? 'Unmute' : 'Mute'}>
+            className="btn-icon" data-tip={soundMuted ? 'Unmute' : 'Mute'} aria-label={soundMuted ? 'Unmute' : 'Mute'}>
             {soundMuted ? (
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/>
