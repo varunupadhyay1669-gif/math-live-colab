@@ -778,7 +778,7 @@ export default function StudentView() {
           {/* Level / XP pill */}
           <button
             className="flex items-center gap-2 px-2.5 py-1 rounded-full transition-all"
-            data-tip="View leaderboard"
+            aria-label="View leaderboard" data-tip="View leaderboard"
             style={{
               background: 'linear-gradient(135deg, rgba(99,102,241,0.12), rgba(139,92,246,0.12))',
               border: '1px solid rgba(99,102,241,0.25)',
@@ -864,7 +864,7 @@ export default function StudentView() {
           </button>
 
           {/* Chat Toggle */}
-          <button onClick={toggleChat} className={`btn-icon relative ${chatOpen ? 'active' : ''}`} data-tip="Chat">
+          <button onClick={toggleChat} className={`btn-icon relative ${chatOpen ? 'active' : ''}`} aria-label="Chat" data-tip="Chat">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/>
             </svg>
