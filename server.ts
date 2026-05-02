@@ -872,6 +872,19 @@ async function startServer() {
       socket.to(roomId).emit('whiteboard_delete_stroke', { strokeIndex });
     });
 
+    socket.on('whiteboard_delete_strokes', ({ roomId, strokeIndices }: { roomId: string; strokeIndices: number[] }) => {
+      const room = rooms.get(roomId);
+      if (!isMember(room, socket.id)) return;
+      const user = room.users.get(socket.id);
+      if (user?.role !== 'teacher' && !room.studentInteractionAllowed) return;
+      const unique = Array.from(new Set((strokeIndices || [])
+        .filter(index => Number.isInteger(index) && index >= 0 && index < room.whiteboard.strokes.length)))
+        .sort((a, b) => b - a);
+      if (unique.length === 0) return;
+      for (const index of unique) room.whiteboard.strokes.splice(index, 1);
+      socket.to(roomId).emit('whiteboard_delete_strokes', { strokeIndices: unique });
+    });
+
     socket.on('whiteboard_mode_toggle', ({ roomId, active }: { roomId: string; active: boolean }) => {
       const room = rooms.get(roomId);
       if (!requireTeacher(room, socket.id)) return;
