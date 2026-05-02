@@ -1222,23 +1222,44 @@ export default function Room() {
             {showShareMenu && (
               <>
                 <div className="fixed inset-0 z-40" onClick={() => setShowShareMenu(false)} />
-                <div className="absolute top-full right-0 mt-2 z-50 animate-slide-down"
-                  style={{ width: '300px', background: 'var(--bg-card)', borderRadius: 'var(--radius-lg)', border: '1px solid var(--border-subtle)', boxShadow: 'var(--shadow-xl)', padding: '16px' }}>
-                  <div className="text-[11px] font-bold mb-3" style={{ color: 'var(--text-muted)', letterSpacing: '0.06em', textTransform: 'uppercase' }}>Share with students</div>
-
-                  <div className="flex items-center gap-2 p-2.5 rounded-lg mb-3" style={{ background: 'var(--bg-surface)' }}>
-                    <span className="text-[12px] font-mono truncate flex-1" style={{ color: 'var(--accent-indigo)', fontWeight: 600 }}>
-                      {window.location.origin}/live/{roomId}
-                    </span>
+                <div className="fixed z-[100] animate-slide-down"
+                  style={{
+                    top: 62,
+                    right: 18,
+                    width: 'min(360px, calc(100vw - 24px))',
+                    background: '#FFFFFF',
+                    borderRadius: 14,
+                    border: '1px solid rgba(15,23,42,0.10)',
+                    boxShadow: '0 24px 60px -18px rgba(15,23,42,0.35), 0 0 0 1px rgba(15,23,42,0.04)',
+                    padding: 16,
+                    color: '#0F172A',
+                  }}>
+                  <div className="flex items-center justify-between mb-3">
+                    <div className="text-[11px] font-bold" style={{ color: '#64748B', letterSpacing: '0.06em', textTransform: 'uppercase' }}>Share with students</div>
+                    <button onClick={() => setShowShareMenu(false)}
+                      style={{ border: 'none', background: '#F1F5F9', color: '#475569', borderRadius: 8, width: 28, height: 28, cursor: 'pointer', fontWeight: 800 }}>
+                      x
+                    </button>
                   </div>
 
+                  <label className="block text-[11px] font-semibold mb-1.5" style={{ color: '#475569' }}>
+                    Student link
+                  </label>
+                  <input
+                    readOnly
+                    value={`${window.location.origin}/live/${roomId}`}
+                    onFocus={(e) => e.currentTarget.select()}
+                    className="input-field mb-3"
+                    style={{ fontSize: '13px', padding: '9px 11px', color: '#0F172A', background: '#F8FAFC', fontFamily: "'JetBrains Mono', monospace" }}
+                  />
+
                   <div className="mb-3">
-                    <label className="block text-[11px] font-semibold mb-1.5" style={{ color: 'var(--text-secondary)' }}>
-                      Room Passcode <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}>(optional)</span>
+                    <label className="block text-[11px] font-semibold mb-1.5" style={{ color: '#475569' }}>
+                      Room passcode <span style={{ color: '#94A3B8', fontWeight: 400 }}>(optional)</span>
                     </label>
                     <input type="text" placeholder="e.g. math123" value={roomPassword}
                       onChange={(e) => saveRoomPassword(e.target.value)}
-                      className="input-field" style={{ fontSize: '13px', padding: '8px 12px' }} />
+                      className="input-field" style={{ fontSize: '13px', padding: '9px 11px', color: '#0F172A', background: '#FFFFFF' }} />
                   </div>
 
                   <button onClick={copyStudentLink} className="btn-primary w-full justify-center"

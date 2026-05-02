@@ -1191,3 +1191,239 @@ body {
     var(--bg-code) !important;
   background-size: 64px 64px;
 }
+
+/* ===== Canva-style Whiteboard ===== */
+.whiteboard-shell {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: #e8edf5;
+}
+
+.whiteboard-canvas-wrap {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+}
+
+.whiteboard-rail {
+  position: absolute;
+  left: 14px;
+  top: 76px;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 72px;
+  padding: 8px;
+  border-radius: 18px;
+  background: rgba(255,255,255,0.94);
+  border: 1px solid rgba(15,23,42,0.08);
+  box-shadow: 0 24px 54px -28px rgba(15,23,42,0.45);
+  backdrop-filter: blur(16px);
+}
+
+.whiteboard-tool {
+  display: flex;
+  min-height: 54px;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  border: 1px solid transparent;
+  border-radius: 13px;
+  background: transparent;
+  color: #64748b;
+  cursor: pointer;
+  font-size: 10px;
+  font-weight: 700;
+  transition: all 0.16s ease;
+}
+
+.whiteboard-tool:hover {
+  background: #f1f5f9;
+  color: #0f172a;
+}
+
+.whiteboard-tool.active {
+  background: linear-gradient(180deg, rgba(79,70,229,0.13), rgba(79,70,229,0.07));
+  border-color: rgba(79,70,229,0.20);
+  color: #4f46e5;
+}
+
+.whiteboard-rail-divider {
+  height: 1px;
+  background: rgba(15,23,42,0.08);
+  margin: 2px 6px;
+}
+
+.whiteboard-topbar {
+  position: absolute;
+  left: 104px;
+  right: 14px;
+  top: 14px;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 48px;
+  padding: 7px 9px;
+  border-radius: 16px;
+  background: rgba(255,255,255,0.94);
+  border: 1px solid rgba(15,23,42,0.08);
+  box-shadow: 0 24px 54px -30px rgba(15,23,42,0.45);
+  backdrop-filter: blur(16px);
+  overflow-x: auto;
+}
+
+.whiteboard-chip {
+  flex-shrink: 0;
+  padding: 7px 11px;
+  border-radius: 999px;
+  background: #f1f5f9;
+  color: #334155;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.whiteboard-control-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px;
+  border-radius: 13px;
+  background: #f8fafc;
+  border: 1px solid rgba(15,23,42,0.06);
+}
+
+.whiteboard-swatch {
+  width: 24px;
+  height: 24px;
+  border-radius: 999px;
+  border: 2px solid #fff;
+  box-shadow: 0 0 0 1px rgba(15,23,42,0.14);
+  cursor: pointer;
+}
+
+.whiteboard-swatch.active {
+  box-shadow: 0 0 0 2px #4f46e5, 0 0 0 4px rgba(79,70,229,0.14);
+}
+
+.whiteboard-size {
+  width: 30px;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.whiteboard-size span {
+  display: block;
+  min-width: 3px;
+  min-height: 3px;
+  border-radius: 999px;
+  background: #111827;
+}
+
+.whiteboard-size.active {
+  background: rgba(79,70,229,0.10);
+  border-color: rgba(79,70,229,0.16);
+}
+
+.whiteboard-spacer {
+  flex: 1;
+}
+
+.whiteboard-action {
+  height: 32px;
+  padding: 0 11px;
+  border-radius: 10px;
+  border: 1px solid rgba(15,23,42,0.08);
+  background: #fff;
+  color: #334155;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 800;
+  white-space: nowrap;
+  transition: all 0.16s ease;
+}
+
+.whiteboard-action:hover {
+  background: #f8fafc;
+  border-color: rgba(15,23,42,0.16);
+}
+
+.whiteboard-action:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.whiteboard-action.danger {
+  color: #e11d48;
+}
+
+.whiteboard-empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  text-align: center;
+  padding: 24px;
+}
+
+.whiteboard-empty h3 {
+  font-size: 22px;
+  font-weight: 900;
+  color: #111827;
+}
+
+.whiteboard-empty p {
+  max-width: 440px;
+  margin-top: 8px;
+  color: #64748b;
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.whiteboard-hint {
+  position: absolute;
+  left: 112px;
+  bottom: 14px;
+  max-width: calc(100% - 126px);
+  border-radius: 999px;
+  padding: 8px 12px;
+  background: rgba(255,255,255,0.92);
+  border: 1px solid rgba(15,23,42,0.08);
+  color: #475569;
+  font-size: 12px;
+  font-weight: 650;
+  box-shadow: 0 14px 32px -24px rgba(15,23,42,0.45);
+}
+
+@media (max-width: 760px) {
+  .whiteboard-rail {
+    left: 8px;
+    top: 68px;
+    width: 58px;
+  }
+  .whiteboard-tool {
+    min-height: 48px;
+  }
+  .whiteboard-topbar {
+    left: 74px;
+    right: 8px;
+    top: 8px;
+  }
+  .whiteboard-hint {
+    left: 76px;
+    max-width: calc(100% - 84px);
+  }
+}
