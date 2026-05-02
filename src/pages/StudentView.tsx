@@ -115,6 +115,7 @@ export default function StudentView() {
   const [whiteboardMode, setWhiteboardMode] = useState(false);
   const [whiteboardScrollX, setWhiteboardScrollX] = useState(0);
   const [whiteboardScrollY, setWhiteboardScrollY] = useState(0);
+  const [whiteboardState, setWhiteboardState] = useState<any>(null);
   const whiteboardRef = useRef<import('../components/Whiteboard').WhiteboardRef>(null);
 
   // ── Follow Teacher Clicks ──
@@ -178,7 +179,16 @@ export default function StudentView() {
     if (typeof state.scrollSyncEnabled === 'boolean') setScrollSyncEnabled(state.scrollSyncEnabled);
     if (typeof state.studentInteractionAllowed === 'boolean') setInteractionAllowed(state.studentInteractionAllowed);
     if (typeof state.currentStep === 'number') setCurrentStep(state.currentStep);
+    if (typeof state.zoomLevel === 'number') setZoomLevel(state.zoomLevel);
     if (state.chat) setChatMessages(state.chat);
+    if (state.whiteboard) setWhiteboardState(state.whiteboard);
+    if (state.lastTeacherScroll) {
+      const remoteScroll = { ...state.lastTeacherScroll, type: 'REMOTE_SCROLL' };
+      pendingMessagesRef.current = pendingMessagesRef.current
+        .filter((msg: any) => msg.type !== 'REMOTE_SCROLL')
+        .concat(remoteScroll)
+        .slice(-500);
+    }
     const html = state.effectiveHtml || state.liveSnapshotHtml || state.lastRunHtml || state.sourceHtml;
     if (html) {
       const activeFile = state.files?.find((f: FileEntry) => f.id === state.activeFileId);
@@ -928,6 +938,7 @@ export default function StudentView() {
               scrollX={whiteboardScrollX}
               scrollY={whiteboardScrollY}
               isActive={true}
+              initialState={whiteboardState}
             />
           ) : iframeUrl ? (
             <>

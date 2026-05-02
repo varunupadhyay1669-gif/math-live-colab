@@ -169,6 +169,7 @@ export default function Room() {
   const [whiteboardMode, setWhiteboardMode] = useState(false);
   const [whiteboardScrollX, setWhiteboardScrollX] = useState(0);
   const [whiteboardScrollY, setWhiteboardScrollY] = useState(0);
+  const [whiteboardState, setWhiteboardState] = useState<any>(null);
   const whiteboardRef = useRef<import('../components/Whiteboard').WhiteboardRef>(null);
 
   // ── Student Interaction Mode ──
@@ -239,11 +240,13 @@ export default function Room() {
     if (typeof state.scrollSyncEnabled === 'boolean') setScrollSyncEnabled(state.scrollSyncEnabled);
     if (typeof state.studentInteractionAllowed === 'boolean') setStudentInteractionAllowed(state.studentInteractionAllowed);
     if (typeof state.currentStep === 'number') setCurrentStep(state.currentStep);
+    if (typeof state.zoomLevel === 'number') setZoomLevel(state.zoomLevel);
     if (state.gates) setGates(state.gates);
     if (state.tempContent) {
       setTempContent(state.tempContent);
       setShowTempContent(true);
     }
+    if (state.whiteboard) setWhiteboardState(state.whiteboard);
     const html = state.effectiveHtml || state.liveSnapshotHtml || state.lastRunHtml || state.sourceHtml;
     if (html) {
       setHtmlCode(state.sourceHtml || html);
@@ -1561,6 +1564,7 @@ export default function Room() {
                   scrollX={whiteboardScrollX}
                   scrollY={whiteboardScrollY}
                   isActive={true}
+                  initialState={whiteboardState}
                 />
               ) : iframeUrl ? (
                 <div className="w-full h-full flex">

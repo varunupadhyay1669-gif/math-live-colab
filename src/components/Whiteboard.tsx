@@ -10,6 +10,11 @@ interface WhiteboardProps {
   scrollX: number;
   scrollY: number;
   isActive: boolean;
+  initialState?: {
+    objects?: BoardImageObject[];
+    strokes?: DrawStroke[];
+    view?: BoardView | null;
+  } | null;
 }
 
 interface DrawPoint {
@@ -61,7 +66,7 @@ const MAX_SCALE = 5;
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
 
 const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
-  ({ socket, roomId, isTeacher, interactive, isActive }, ref) => {
+  ({ socket, roomId, isTeacher, interactive, isActive, initialState }, ref) => {
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const containerRef = useRef<HTMLDivElement>(null);
     const uploadInputRef = useRef<HTMLInputElement>(null);
@@ -81,6 +86,7 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
     const [selectedObjectId, setSelectedObjectId] = useState<string | null>(null);
     const [strokes, setStrokes] = useState<DrawStroke[]>([]);
     const [currentStroke, setCurrentStroke] = useState<DrawPoint[]>([]);
+    const currentStrokeRef = useRef<DrawPoint[]>([]);
     const [tool, setTool] = useState<'pen' | 'eraser' | 'stroke-eraser' | 'select' | 'pan'>('pen');
     const [color, setColor] = useState('#000000');
     const [width, setWidth] = useState(4);
@@ -88,6 +94,11 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
     const [spacePan, setSpacePan] = useState(false);
 
     const selectedObject = selectedObjectId ? objects.find(obj => obj.id === selectedObjectId) : null;
+
+    const setLiveStroke = useCallback((points: DrawPoint[]) => {
+      currentStrokeRef.current = points;
+      setCurrentStroke(points);
+    }, []);
 
     const emitView = useCallback((nextView: BoardView) => {
       if (socket && isTeacher) socket.emit('whiteboard_set_view', { roomId, view: nextView });
@@ -313,6 +324,14 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
     }, [objects, loadImageIntoCache, redrawCanvas]);
 
     useEffect(() => {
+      if (!initialState) return;
+      setObjects(initialState.objects || []);
+      setStrokes(initialState.strokes || []);
+      if (initialState.view) setView(initialState.view);
+      (initialState.objects || []).forEach(loadImageIntoCache);
+    }, [initialState, loadImageIntoCache]);
+
+    useEffect(() => {
       redrawCanvas();
     }, [redrawCanvas]);
 
@@ -448,6 +467,20 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
       if (socket && isTeacher) socket.emit('whiteboard_delete_stroke', { roomId, strokeIndex });
     }, [strokes.length, socket, isTeacher, roomId]);
 
+    const undoLastStroke = useCallback(() => {
+      if (strokes.length === 0) return;
+      deleteStroke(strokes.length - 1);
+    }, [strokes.length, deleteStroke]);
+
+    const downloadBoard = useCallback(() => {
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+      const link = document.createElement('a');
+      link.download = `whiteboard-${Date.now()}.png`;
+      link.href = canvas.toDataURL('image/png');
+      link.click();
+    }, []);
+
     const handlePointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
       if (!interactive) return;
       e.currentTarget.setPointerCapture(e.pointerId);
@@ -471,7 +504,7 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
         return;
       }
       dragRef.current = { mode: 'draw', pointerId: e.pointerId, startClientX: e.clientX, startClientY: e.clientY, startOffsetX: view.boardOffsetX, startOffsetY: view.boardOffsetY };
-      setCurrentStroke([point]);
+      setLiveStroke([point]);
     };
 
     const handlePointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
@@ -491,15 +524,19 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
         setObjects(prev => prev.map(obj => obj.id === nextObject.id ? nextObject : obj));
         return;
       }
-      if (drag.mode === 'draw') setCurrentStroke(prev => [...prev, screenToBoard(e.clientX, e.clientY)]);
+      if (drag.mode === 'draw') {
+        const nextStroke = [...currentStrokeRef.current, screenToBoard(e.clientX, e.clientY)];
+        setLiveStroke(nextStroke);
+      }
     };
 
     const handlePointerUp = (e: React.PointerEvent<HTMLCanvasElement>) => {
       const drag = dragRef.current;
       if (!drag || drag.pointerId !== e.pointerId) return;
       try { e.currentTarget.releasePointerCapture(e.pointerId); } catch {}
-      if (drag.mode === 'draw' && currentStroke.length > 1) {
-        const stroke: DrawStroke = { points: currentStroke, color, width, tool: tool === 'eraser' ? 'eraser' : 'pen' };
+      const finishedStroke = currentStrokeRef.current;
+      if (drag.mode === 'draw' && finishedStroke.length > 1) {
+        const stroke: DrawStroke = { points: finishedStroke, color, width, tool: tool === 'eraser' ? 'eraser' : 'pen' };
         setStrokes(prev => [...prev, stroke]);
         if (socket) socket.emit('whiteboard_draw', { roomId, stroke });
       }
@@ -508,7 +545,7 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
         if (object) updateObject(object);
       }
       if (drag.mode === 'pan') emitView(view);
-      setCurrentStroke([]);
+      setLiveStroke([]);
       dragRef.current = null;
     };
 
@@ -592,6 +629,7 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
             <>
               <input ref={uploadInputRef} type="file" accept="image/*" onChange={handleImageUpload} className="hidden" />
               <button onClick={() => uploadInputRef.current?.click()} className="btn text-xs px-3 py-1.5" style={{ background: 'var(--accent-indigo)', color: '#fff' }}>Upload Image</button>
+              <button onClick={undoLastStroke} disabled={strokes.length === 0} className="btn text-xs px-3 py-1.5 disabled:opacity-40">Undo Ink</button>
               <button onClick={() => zoomAt(1.2)} className="btn text-xs px-3 py-1.5">Zoom +</button>
               <button onClick={() => zoomAt(1 / 1.2)} className="btn text-xs px-3 py-1.5">Zoom -</button>
               <button onClick={fitBoard} className="btn text-xs px-3 py-1.5">Fit Board</button>
@@ -599,6 +637,8 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
               <button onClick={resetBoardView} className="btn text-xs px-3 py-1.5">Reset View</button>
               {selectedObject && <button onClick={removeSelectedObject} className="btn text-xs px-3 py-1.5" style={{ background: 'var(--bg-locked)', color: 'var(--text-secondary)' }}>Remove Selected</button>}
               <button onClick={() => { setStrokes([]); if (socket) socket.emit('whiteboard_reset', { roomId }); }} className="btn text-xs px-3 py-1.5" style={{ background: 'var(--bg-locked)', color: 'var(--text-secondary)' }}>Clear Ink</button>
+              <button onClick={() => { setObjects([]); setStrokes([]); setSelectedObjectId(null); objectImageCacheRef.current.clear(); if (socket) socket.emit('whiteboard_clear', { roomId }); }} className="btn text-xs px-3 py-1.5" style={{ background: 'var(--bg-locked)', color: 'var(--text-secondary)' }}>Clear Board</button>
+              <button onClick={downloadBoard} className="btn text-xs px-3 py-1.5">Download</button>
             </>
           )}
           <span className="text-xs" style={{ color: 'var(--text-muted)' }}>{Math.round(view.boardScale * 100)}% ? {objects.length} images ? {strokes.length} strokes</span>

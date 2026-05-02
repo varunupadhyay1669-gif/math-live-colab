@@ -1,5 +1,5 @@
-import React, { useRef, useEffect } from 'react';
-import { Socket } from 'socket.io-client';
+import React, { useEffect, useRef, useState } from "react";
+import { Socket } from "socket.io-client";
 
 interface ChatMessage {
   id: string;
@@ -17,144 +17,145 @@ interface ChatPanelProps {
   isOpen: boolean;
   onToggle: () => void;
   unreadCount?: number;
-  /** Compact sidebar mode (teacher view) vs full panel (student view) */
-  variant?: 'sidebar' | 'panel';
+  variant?: "sidebar" | "panel";
 }
 
 export default function ChatPanel({
-  socket, roomId, userName, messages, isOpen, onToggle, unreadCount = 0, variant = 'sidebar',
+  socket,
+  roomId,
+  userName,
+  messages,
+  isOpen,
+  onToggle,
+  unreadCount = 0,
+  variant = "sidebar",
 }: ChatPanelProps) {
   const chatEndRef = useRef<HTMLDivElement>(null);
-  const [chatInput, setChatInput] = React.useState('');
+  const [chatInput, setChatInput] = useState("");
 
   useEffect(() => {
-    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
   const sendChat = (e: React.FormEvent) => {
     e.preventDefault();
     if (!socket || !chatInput.trim()) return;
-    socket.emit('send_chat', { roomId, message: chatInput.trim(), userName });
-    setChatInput('');
+    socket.emit("send_chat", { roomId, message: chatInput.trim(), userName });
+    setChatInput("");
   };
 
-  const formatTime = (ts: number) => {
-    const d = new Date(ts);
-    return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  };
+  const formatTime = (ts: number) => new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 
-  // ── Panel variant (student view - slides in from right) ──
-  if (variant === 'panel') {
-    if (!isOpen) return null;
-    return (
-      <div className="flex flex-col shrink-0 animate-slide-in-right"
-        style={{ width: '280px', background: 'var(--bg-secondary)', borderLeft: '1px solid var(--border-subtle)' }}>
-        <div className="flex items-center justify-between px-3 py-2.5 shrink-0"
-          style={{ borderBottom: '1px solid var(--border-subtle)' }}>
-          <span className="badge badge-indigo text-[10px]">💬 CHAT</span>
-          <button onClick={onToggle}
-            style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '14px' }}>✕</button>
-        </div>
-        <div className="flex-1 overflow-y-auto p-3 space-y-2.5">
-          {messages.length === 0 ? (
-            <div className="text-center py-8">
-              <div className="text-3xl mb-2">💬</div>
-              <p className="text-xs" style={{ color: 'var(--text-muted)' }}>No messages yet</p>
-            </div>
-          ) : messages.map(msg => (
-            <div key={msg.id} className="animate-fade-in">
-              <div className="flex items-center gap-2 mb-0.5">
-                <span className="text-[10px] font-bold"
-                  style={{ color: msg.userName === userName ? 'var(--accent-emerald)' : 'var(--accent-indigo)' }}>
-                  {msg.userName}
-                </span>
-                <span className="text-[9px]" style={{ color: 'var(--text-muted)' }}>{formatTime(msg.timestamp)}</span>
-              </div>
-              <div className="text-sm px-3 py-2 rounded-xl"
-                style={{
-                  background: msg.userName === userName ? 'var(--accent-indigo-light)' : 'var(--bg-surface)',
-                  color: 'var(--text-primary)',
-                  borderRadius: msg.userName === userName ? '12px 12px 4px 12px' : '4px 12px 12px 12px',
-                }}>
-                {msg.message}
-              </div>
-            </div>
-          ))}
-          <div ref={chatEndRef} />
-        </div>
-        <form onSubmit={sendChat} className="p-3 shrink-0" style={{ borderTop: '1px solid var(--border-subtle)' }}>
-          <div className="flex gap-2">
-            <input value={chatInput} onChange={(e) => setChatInput(e.target.value)}
-              placeholder="Type a message..."
-              className="input-field text-sm" style={{ padding: '8px 12px' }} />
-            <button type="submit" className="btn-primary" style={{ padding: '8px 12px', fontSize: '14px' }}>↑</button>
-          </div>
-        </form>
+  const content = (
+    <div className="flex h-full flex-col animate-fade-in">
+      <div className="flex shrink-0 items-center justify-between px-3 py-3" style={{ borderBottom: "1px solid var(--border-subtle)" }}>
+        <span className="ml-badge ml-badge-indigo">Chat</span>
+        <button onClick={onToggle} className="ml-icon-btn ml-icon-btn-sm" aria-label="Close chat">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+            <path d="M18 6 6 18M6 6l12 12" />
+          </svg>
+        </button>
       </div>
-    );
-  }
 
-  // ── Sidebar variant (teacher view - in-place expand/collapse) ──
-  return (
-    <div className="flex flex-col shrink-0" style={{
-      width: isOpen ? '280px' : '52px',
-      borderLeft: '1px solid var(--border-subtle)',
-      background: 'var(--bg-secondary)',
-      transition: 'width 0.25s ease',
-    }}>
-      {isOpen ? (
-        <div className="flex flex-col h-full animate-fade-in">
-          <div className="flex items-center justify-between px-3 py-2.5 shrink-0"
-            style={{ borderBottom: '1px solid var(--border-subtle)' }}>
-            <span className="badge badge-indigo text-[10px]">💬 CHAT</span>
-            <button onClick={onToggle}
-              style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '16px' }}>✕</button>
+      <div className="flex-1 space-y-3 overflow-y-auto p-3">
+        {messages.length === 0 ? (
+          <div className="flex h-full items-center justify-center text-center">
+            <p className="text-xs" style={{ color: "var(--text-muted)" }}>No messages yet</p>
           </div>
-          <div className="flex-1 overflow-y-auto p-3 space-y-2">
-            {messages.length === 0 && (
-              <p className="text-center text-xs py-8" style={{ color: 'var(--text-muted)' }}>No messages yet</p>
-            )}
-            {messages.map(msg => (
-              <div key={msg.id}>
-                <div className="flex items-center gap-2 mb-0.5">
-                  <span className="text-[10px] font-bold" style={{ color: 'var(--accent-indigo)' }}>{msg.userName}</span>
-                  <span className="text-[9px]" style={{ color: 'var(--text-muted)' }}>{formatTime(msg.timestamp)}</span>
+        ) : (
+          messages.map((msg) => {
+            const mine = msg.userName === userName;
+            return (
+              <div key={msg.id} className={`animate-fade-in ${mine ? "ml-7" : "mr-7"}`}>
+                <div className="mb-1 flex items-center gap-2">
+                  <span className="text-[11px] font-bold" style={{ color: mine ? "var(--accent-emerald)" : "var(--accent-indigo)" }}>
+                    {msg.userName}
+                  </span>
+                  <span className="text-[10px]" style={{ color: "var(--text-muted)" }}>{formatTime(msg.timestamp)}</span>
                 </div>
-                <div className="text-[13px] px-3 py-2"
+                <div
+                  className="px-3 py-2 text-[13px] leading-5"
                   style={{
-                    background: 'var(--bg-surface)', color: 'var(--text-primary)',
-                    borderRadius: '4px 12px 12px 12px',
-                  }}>
+                    background: mine ? "rgba(5,150,105,0.10)" : "#F1F5F9",
+                    color: "var(--text-primary)",
+                    border: "1px solid rgba(15,23,42,0.06)",
+                    borderRadius: mine ? "14px 14px 4px 14px" : "4px 14px 14px 14px",
+                  }}
+                >
                   {msg.message}
                 </div>
               </div>
-            ))}
-            <div ref={chatEndRef} />
-          </div>
-          <form onSubmit={sendChat} className="p-2.5 shrink-0" style={{ borderTop: '1px solid var(--border-subtle)' }}>
-            <div className="flex gap-2">
-              <input value={chatInput} onChange={(e) => setChatInput(e.target.value)} placeholder="Message..."
-                className="input-field text-[13px]" style={{ padding: '7px 10px' }} />
-              <button type="submit" className="btn-primary" style={{ padding: '7px 12px', fontSize: '14px' }}>↑</button>
-            </div>
-          </form>
+            );
+          })
+        )}
+        <div ref={chatEndRef} />
+      </div>
+
+      <form onSubmit={sendChat} className="shrink-0 p-3" style={{ borderTop: "1px solid var(--border-subtle)" }}>
+        <div className="flex gap-2">
+          <input
+            value={chatInput}
+            onChange={(e) => setChatInput(e.target.value)}
+            placeholder="Message..."
+            className="input-field text-[13px]"
+            style={{ height: 36, padding: "0 12px" }}
+          />
+          <button type="submit" className="ml-btn ml-btn-primary ml-btn-sm" aria-label="Send message">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <path d="m22 2-7 20-4-9-9-4 20-7Z" />
+              <path d="M22 2 11 13" />
+            </svg>
+          </button>
         </div>
+      </form>
+    </div>
+  );
+
+  if (variant === "panel") {
+    if (!isOpen) return null;
+    return (
+      <aside
+        className="flex shrink-0 flex-col animate-slide-in-right"
+        style={{
+          width: 304,
+          background: "rgba(255,255,255,0.92)",
+          borderLeft: "1px solid rgba(15,23,42,0.08)",
+          backdropFilter: "blur(18px)",
+        }}
+      >
+        {content}
+      </aside>
+    );
+  }
+
+  return (
+    <aside
+      className="flex shrink-0 flex-col"
+      style={{
+        width: isOpen ? 304 : 56,
+        borderLeft: "1px solid rgba(15,23,42,0.08)",
+        background: "rgba(255,255,255,0.92)",
+        transition: "width 0.25s ease",
+        backdropFilter: "blur(18px)",
+      }}
+    >
+      {isOpen ? (
+        content
       ) : (
-        <div className="flex flex-col items-center py-3 gap-1.5">
-          <button onClick={onToggle}
-            className="w-[40px] h-[40px] rounded-xl flex items-center justify-center text-[17px] transition-all hover:scale-110 relative"
-            style={{ background: 'var(--bg-surface)', border: '1px solid var(--border-subtle)', cursor: 'pointer' }}
-            title="Chat">
-            💬
+        <div className="flex flex-col items-center gap-2 py-3">
+          <button onClick={onToggle} className="ml-icon-btn relative" title="Chat" aria-label="Open chat">
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z" />
+            </svg>
             {unreadCount > 0 && (
-              <span className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold text-white animate-bounce-in"
-                style={{ background: 'var(--accent-rose)', boxShadow: '0 2px 6px rgba(244,63,94,0.4)' }}>
+              <span className="absolute -right-1.5 -top-1.5 flex h-5 min-w-5 items-center justify-center rounded-full px-1 text-[10px] font-bold text-white animate-bounce-in"
+                style={{ background: "var(--accent-rose)", boxShadow: "0 2px 8px rgba(225,29,72,0.35)" }}>
                 {unreadCount}
               </span>
             )}
           </button>
         </div>
       )}
-    </div>
+    </aside>
   );
 }
