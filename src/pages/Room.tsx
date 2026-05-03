@@ -1221,54 +1221,111 @@ export default function Room() {
             </button>
             {showShareMenu && (
               <>
-                <div className="fixed inset-0 z-40" onClick={() => setShowShareMenu(false)} />
-                <div className="fixed z-[100] animate-slide-down"
+                <div
+                  className="fixed inset-0 z-[90]"
                   style={{
-                    top: 62,
-                    right: 18,
-                    width: 'min(360px, calc(100vw - 24px))',
-                    background: '#FFFFFF',
-                    borderRadius: 14,
-                    border: '1px solid rgba(15,23,42,0.10)',
-                    boxShadow: '0 24px 60px -18px rgba(15,23,42,0.35), 0 0 0 1px rgba(15,23,42,0.04)',
-                    padding: 16,
-                    color: '#0F172A',
-                  }}>
-                  <div className="flex items-center justify-between mb-3">
-                    <div className="text-[11px] font-bold" style={{ color: '#64748B', letterSpacing: '0.06em', textTransform: 'uppercase' }}>Share with students</div>
-                    <button onClick={() => setShowShareMenu(false)}
-                      style={{ border: 'none', background: '#F1F5F9', color: '#475569', borderRadius: 8, width: 28, height: 28, cursor: 'pointer', fontWeight: 800 }}>
-                      x
-                    </button>
+                    background: 'rgba(15, 23, 42, 0.32)',
+                    backdropFilter: 'blur(6px)',
+                  }}
+                  onClick={() => setShowShareMenu(false)}
+                />
+                <div
+                  className="fixed inset-0 z-[100] flex items-start justify-center px-4 pt-24 sm:items-center sm:pt-0"
+                  onClick={() => setShowShareMenu(false)}
+                >
+                  <div
+                    className="animate-slide-down w-full max-w-[520px]"
+                    onClick={(e) => e.stopPropagation()}
+                    style={{
+                      background: '#FFFFFF',
+                      borderRadius: 18,
+                      border: '1px solid rgba(15,23,42,0.10)',
+                      boxShadow: '0 30px 80px -24px rgba(15,23,42,0.45), 0 0 0 1px rgba(15,23,42,0.04)',
+                      padding: 20,
+                      color: '#0F172A',
+                    }}
+                  >
+                    <div className="flex items-start justify-between gap-4 mb-4">
+                      <div>
+                        <div className="text-[11px] font-bold" style={{ color: '#64748B', letterSpacing: '0.06em', textTransform: 'uppercase' }}>Invite students</div>
+                        <div className="mt-1 text-[18px] font-semibold" style={{ color: '#0F172A' }}>Share this room</div>
+                        <p className="mt-1 text-sm" style={{ color: '#64748B', lineHeight: 1.5 }}>
+                          Copy the student link below or share the room code and passcode manually.
+                        </p>
+                      </div>
+                      <button
+                        onClick={() => setShowShareMenu(false)}
+                        aria-label="Close invite dialog"
+                        style={{ border: 'none', background: '#F1F5F9', color: '#475569', borderRadius: 10, width: 32, height: 32, cursor: 'pointer', fontWeight: 800, flexShrink: 0 }}
+                      >
+                        x
+                      </button>
+                    </div>
+
+                    <div className="grid gap-3 sm:grid-cols-[1.4fr_0.8fr]">
+                      <div>
+                        <label className="block text-[11px] font-semibold mb-1.5" style={{ color: '#475569' }}>
+                          Student link
+                        </label>
+                        <input
+                          readOnly
+                          value={`${window.location.origin}/live/${roomId}`}
+                          onFocus={(e) => e.currentTarget.select()}
+                          className="input-field"
+                          style={{ fontSize: '13px', padding: '11px 12px', color: '#0F172A', background: '#F8FAFC', fontFamily: "'JetBrains Mono', monospace" }}
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-[11px] font-semibold mb-1.5" style={{ color: '#475569' }}>
+                          Room code
+                        </label>
+                        <input
+                          readOnly
+                          value={roomId || ''}
+                          onFocus={(e) => e.currentTarget.select()}
+                          className="input-field"
+                          style={{ fontSize: '13px', padding: '11px 12px', color: '#0F172A', background: '#F8FAFC', fontFamily: "'JetBrains Mono', monospace", letterSpacing: '0.08em' }}
+                        />
+                      </div>
+                    </div>
+
+                    <div className="mt-3">
+                      <label className="block text-[11px] font-semibold mb-1.5" style={{ color: '#475569' }}>
+                        Room passcode <span style={{ color: '#94A3B8', fontWeight: 400 }}>(optional)</span>
+                      </label>
+                      <input
+                        type="text"
+                        placeholder="e.g. math123"
+                        value={roomPassword}
+                        onChange={(e) => saveRoomPassword(e.target.value)}
+                        className="input-field"
+                        style={{ fontSize: '13px', padding: '11px 12px', color: '#0F172A', background: '#FFFFFF' }}
+                      />
+                    </div>
+
+                    <div className="mt-4 flex flex-col gap-2 sm:flex-row">
+                      <button
+                        onClick={copyStudentLink}
+                        className="btn-primary flex-1 justify-center"
+                        style={{ height: '42px', fontSize: '13px', borderRadius: '10px', gap: '6px' }}
+                      >
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/>
+                        </svg>
+                        {roomPassword ? 'Copy Link + Passcode' : 'Copy Link'}
+                      </button>
+                      <a
+                        href={`${window.location.origin}/live/${roomId}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="btn-secondary flex-1 justify-center"
+                        style={{ height: '42px', fontSize: '13px', borderRadius: '10px', textDecoration: 'none' }}
+                      >
+                        Open Student View
+                      </a>
+                    </div>
                   </div>
-
-                  <label className="block text-[11px] font-semibold mb-1.5" style={{ color: '#475569' }}>
-                    Student link
-                  </label>
-                  <input
-                    readOnly
-                    value={`${window.location.origin}/live/${roomId}`}
-                    onFocus={(e) => e.currentTarget.select()}
-                    className="input-field mb-3"
-                    style={{ fontSize: '13px', padding: '9px 11px', color: '#0F172A', background: '#F8FAFC', fontFamily: "'JetBrains Mono', monospace" }}
-                  />
-
-                  <div className="mb-3">
-                    <label className="block text-[11px] font-semibold mb-1.5" style={{ color: '#475569' }}>
-                      Room passcode <span style={{ color: '#94A3B8', fontWeight: 400 }}>(optional)</span>
-                    </label>
-                    <input type="text" placeholder="e.g. math123" value={roomPassword}
-                      onChange={(e) => saveRoomPassword(e.target.value)}
-                      className="input-field" style={{ fontSize: '13px', padding: '9px 11px', color: '#0F172A', background: '#FFFFFF' }} />
-                  </div>
-
-                  <button onClick={copyStudentLink} className="btn-primary w-full justify-center"
-                    style={{ height: '38px', fontSize: '13px', borderRadius: '8px', gap: '6px' }}>
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/>
-                    </svg>
-                    {roomPassword ? 'Copy Link + Passcode' : 'Copy Link'}
-                  </button>
                 </div>
               </>
             )}
