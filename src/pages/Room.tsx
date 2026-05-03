@@ -421,9 +421,11 @@ export default function Room() {
         if (event.serverSeq <= lastInboundSeqRef.current) return;
         lastInboundSeqRef.current = event.serverSeq;
       }
-      if (typeof event.syncEpoch === 'number' && event.syncEpoch < syncEpochRef.current) {
-        return;
-      }
+      // Do NOT filter by syncEpoch here. syncEpoch is a per-client local counter
+      // (not coordinated by the server), so comparing a student's epoch to the
+      // teacher's would silently drop every student event whenever the two
+      // counters drift — e.g. after a teacher-only state change. serverSeq above
+      // already prevents stale/replayed events.
       if (event.type === "SYNC_CURSOR") {
         setCursors(prev => ({
           ...prev,
@@ -745,9 +747,18 @@ export default function Room() {
   }, [socket, roomId, scrollSyncEnabled, dualView, postToMirror]);
 
   useEffect(() => {
+    // syncEpoch must mirror the student-side dependency set so the two counters
+    // stay in lock-step. Including teacher-only UI flags like dualView here used
+    // to drift the teacher's epoch ahead of the student's, after which all
+    // student interaction events were silently dropped.
     syncEpochRef.current += 1;
-    // Reset iframe readiness when content source changes — the new iframe needs to fire onLoad
     iframeReadyRef.current = false;
+  }, [iframeUrl, showTempContent, whiteboardMode]);
+
+  // Mirror iframe readiness must reset when the mirror is created/destroyed
+  // (dualView toggle) or when its content URL changes — but this is a local
+  // ready-tracking concern, not a content-version reset.
+  useEffect(() => {
     mirrorReadyRef.current = false;
     pendingMirrorMessagesRef.current = [];
   }, [iframeUrl, showTempContent, whiteboardMode, dualView]);
