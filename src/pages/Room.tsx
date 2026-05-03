@@ -1726,17 +1726,64 @@ export default function Room() {
               {/* Cursor Overlay */}
               <CursorOverlay cursors={cursors} />
 
-              {/* Student click ripples — visual indicator of where students click */}
-              <div className="absolute inset-0 pointer-events-none overflow-hidden">
+              {/* Student click ripples — visual indicator of where students click.
+                  Uses inline styles + a high z-index so it can't be hidden by the
+                  AnnotationLayer/iframe stacking context, and renders both a
+                  filled dot (always visible) plus an expanding ring (animated). */}
+              <div className="absolute inset-0 pointer-events-none overflow-hidden" style={{ zIndex: 50 }}>
                 {studentClickIndicators.map(ind => (
-                  <div key={ind.id} className="absolute"
+                  <div
+                    key={ind.id}
                     style={{
+                      position: 'absolute',
                       left: `${ind.x * 100}%`,
                       top: `${ind.y * 100}%`,
                       transform: 'translate(-50%, -50%)',
-                    }}>
-                    <div className="ml-click-ripple" style={{ borderColor: ind.color }} />
-                    <div className="ml-click-ripple-label" style={{ background: ind.color }}>
+                      pointerEvents: 'none',
+                    }}
+                  >
+                    {/* Solid centre dot (always visible, no animation needed) */}
+                    <div
+                      style={{
+                        position: 'absolute',
+                        top: 0, left: 0,
+                        transform: 'translate(-50%, -50%)',
+                        width: 14, height: 14,
+                        borderRadius: '50%',
+                        background: ind.color,
+                        boxShadow: `0 0 0 3px rgba(255,255,255,0.85), 0 0 12px ${ind.color}`,
+                        animation: 'fade-in 100ms ease-out, reaction-float-up 1.6s ease-out forwards',
+                      }}
+                    />
+                    {/* Expanding ring */}
+                    <div
+                      style={{
+                        position: 'absolute',
+                        top: 0, left: 0,
+                        transform: 'translate(-50%, -50%)',
+                        width: 14, height: 14,
+                        borderRadius: '50%',
+                        border: `3px solid ${ind.color}`,
+                        animation: 'click-ripple-expand 1.6s ease-out forwards',
+                      }}
+                    />
+                    {/* Name label */}
+                    <div
+                      style={{
+                        position: 'absolute',
+                        top: 16, left: '50%',
+                        transform: 'translateX(-50%)',
+                        background: ind.color,
+                        color: '#fff',
+                        padding: '2px 8px',
+                        borderRadius: 6,
+                        fontSize: 11,
+                        fontWeight: 600,
+                        whiteSpace: 'nowrap',
+                        boxShadow: '0 2px 6px rgba(0,0,0,0.25)',
+                        animation: 'fade-in 100ms ease-out, reaction-float-up 1.6s ease-out forwards',
+                      }}
+                    >
                       {ind.name}
                     </div>
                   </div>
