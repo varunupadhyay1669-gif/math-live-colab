@@ -647,8 +647,27 @@ async function startServer() {
       const file = room.files.find(f => f.id === room.activeFileId);
       if (file) file.html = html;
       const revision = bumpRevision(room);
-      broadcastFullState(roomId, room, requestId?.startsWith('force-') ? 'force_sync' : 'snapshot_ack', requestId);
-      io.to(roomId).emit('dom_snapshot', { fileId: room.activeFileId, html, revision, requestId });
+
+      const isForceSync = requestId?.startsWith('force-');
+      if (isForceSync) {
+        // Genuine force-sync: every client should re-render to match the snapshot.
+        broadcastFullState(roomId, room, 'force_sync', requestId);
+        io.to(roomId).emit('dom_snapshot', { fileId: room.activeFileId, html, revision, requestId });
+      } else {
+        // Snapshot-ack triggered by a join/retry: only the late-joining students
+        // need this fresh HTML. Existing students already have a coherent state
+        // from their own SYNC_* event stream — broadcasting the snapshot to them
+        // would force a needless iframe reload (the auto-refresh-during-use bug).
+        if (room.pendingSyncStudents.size > 0) {
+          const pending = Array.from(room.pendingSyncStudents);
+          room.pendingSyncStudents.clear();
+          for (const studentId of pending) {
+            emitSessionState(studentId, roomId, room, 'snapshot_ack', requestId);
+            io.to(studentId).emit('run_preview', { fileId: room.activeFileId, html, revision });
+            io.to(studentId).emit('dom_snapshot', { fileId: room.activeFileId, html, revision, requestId });
+          }
+        }
+      }
       logSync('snapshot_ack', { roomId, revision, requestId });
     });
 
@@ -689,7 +708,9 @@ async function startServer() {
       room.scrollSyncEnabled = enabled;
       const revision = bumpRevision(room);
       io.to(roomId).emit('scroll_sync_changed', { enabled, revision });
-      broadcastFullState(roomId, room, 'force_sync');
+      // No broadcastFullState — clients update from `scroll_sync_changed` alone.
+      // Sending full state here would re-emit the latest iframe HTML snapshot,
+      // forcing a student iframe reload on every settings toggle.
     });
 
     // ─── STUDENT INTERACTION TOGGLE ───
@@ -699,7 +720,7 @@ async function startServer() {
       room.studentInteractionAllowed = allowed;
       const revision = bumpRevision(room);
       io.to(roomId).emit('student_interaction_changed', { allowed, revision });
-      broadcastFullState(roomId, room, 'force_sync');
+      // No broadcastFullState — see comment in toggle_scroll_sync above.
       console.log(`${allowed ? '🖐️' : '👁️'} Room ${roomId}: Student interaction ${allowed ? 'enabled' : 'disabled (view-only)'}`);
     });
 
@@ -1015,7 +1036,7 @@ async function startServer() {
       room.currentStep = safeStep;
       const revision = bumpRevision(room);
       io.to(roomId).emit('step_changed', { step: safeStep, revision });
-      broadcastFullState(roomId, room, 'force_sync');
+      // No broadcastFullState — `step_changed` carries everything clients need.
     });
 
     socket.on('add_gate', ({ roomId, step, question, options, correctIndex }: { roomId: string; step: number; question: string; options: string[]; correctIndex: number }) => {
@@ -1024,7 +1045,7 @@ async function startServer() {
       room.gates[step] = { question, options, correctIndex };
       const revision = bumpRevision(room);
       io.to(roomId).emit('gate_added', { step, revision });
-      broadcastFullState(roomId, room, 'force_sync');
+      // No broadcastFullState — `gate_added` carries everything clients need.
     });
 
     socket.on('gate_answer', ({ roomId, step, answerIndex, studentName }: { roomId: string; step: number; answerIndex: number; studentName: string }) => {
