@@ -101,6 +101,7 @@ async function startServer() {
     for (const [roomId, room] of rooms.entries()) {
       // Hard expiry: 48 hours of no activity at all
       if (now - room.lastActivityAt > absoluteExpiryMs) {
+        cancelViewOnlyAutoSync(roomId);
         rooms.delete(roomId);
         deletedCount++;
         continue;
@@ -111,6 +112,7 @@ async function startServer() {
         // Only expire if no students are currently connected
         const hasStudents = Array.from(room.users.values()).some(u => u.role === 'student');
         if (!hasStudents) {
+          cancelViewOnlyAutoSync(roomId);
           rooms.delete(roomId);
           deletedCount++;
           continue;
@@ -375,6 +377,51 @@ async function startServer() {
     const payload = buildSessionState(roomId, room, 'session_state', reason, requestId);
     io.to(socketId).emit('session_state', payload);
     logSync('session_state', { roomId, revision: payload.revision, requestId, socketId, reason });
+  }
+
+  // ─── AUTO-SYNC FOR VIEW-ONLY STUDENTS ───
+  // When the room is in view-only mode and the teacher does anything that can
+  // change internal simulation state (typing, clicking, dragging), schedule a
+  // debounced snapshot push. The teacher's iframe DOM is captured a couple of
+  // seconds after they stop, then forwarded ONLY to view-only student sockets
+  // — so they catch up to teacher's state even when individual SYNC_* events
+  // can't perfectly replay (random number generators, internal JS state, etc.).
+  // Interactive students are unaffected (no iframe reload).
+  const viewOnlySyncTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  const VIEW_ONLY_SYNC_DEBOUNCE_MS = 2500;
+
+  function scheduleViewOnlyAutoSync(roomId: string, room: RoomData) {
+    if (room.studentInteractionAllowed) return; // not view-only
+    if (!room.teacherSocketId) return;
+    let hasStudents = false;
+    for (const u of room.users.values()) {
+      if (u.role === 'student') { hasStudents = true; break; }
+    }
+    if (!hasStudents) return;
+
+    const existing = viewOnlySyncTimers.get(roomId);
+    if (existing) clearTimeout(existing);
+
+    const timer = setTimeout(() => {
+      viewOnlySyncTimers.delete(roomId);
+      const r = rooms.get(roomId);
+      if (!r || !r.teacherSocketId || r.studentInteractionAllowed) return;
+      // Recheck students — may have left while debouncing.
+      let stillHasStudents = false;
+      for (const u of r.users.values()) {
+        if (u.role === 'student') { stillHasStudents = true; break; }
+      }
+      if (!stillHasStudents) return;
+      const requestId = `auto-vo-${Date.now()}`;
+      io.to(r.teacherSocketId).emit('request_html_sync', { requestId, reason: 'view_only_auto' });
+    }, VIEW_ONLY_SYNC_DEBOUNCE_MS);
+
+    viewOnlySyncTimers.set(roomId, timer);
+  }
+
+  function cancelViewOnlyAutoSync(roomId: string) {
+    const t = viewOnlySyncTimers.get(roomId);
+    if (t) { clearTimeout(t); viewOnlySyncTimers.delete(roomId); }
   }
 
   function broadcastFullState(roomId: string, room: RoomData, reason: SessionStatePayload['reason'], requestId?: string) {
@@ -649,10 +696,23 @@ async function startServer() {
       const revision = bumpRevision(room);
 
       const isForceSync = requestId?.startsWith('force-');
+      const isAutoViewOnly = requestId?.startsWith('auto-vo-');
       if (isForceSync) {
         // Genuine force-sync: every client should re-render to match the snapshot.
         broadcastFullState(roomId, room, 'force_sync', requestId);
         io.to(roomId).emit('dom_snapshot', { fileId: room.activeFileId, html, revision, requestId });
+      } else if (isAutoViewOnly) {
+        // Debounced auto-sync for view-only students: push the fresh HTML to
+        // every student in the room (which by definition is view-only here, since
+        // we only schedule this when room.studentInteractionAllowed is false).
+        // Teacher and any non-student sockets are NOT pushed — they don't need it.
+        if (!room.studentInteractionAllowed) {
+          for (const [socketId, u] of room.users.entries()) {
+            if (u.role === 'student') {
+              io.to(socketId).emit('run_preview', { fileId: room.activeFileId, html, revision });
+            }
+          }
+        }
       } else {
         // Snapshot-ack triggered by a join/retry: only the late-joining students
         // need this fresh HTML. Existing students already have a coherent state
@@ -718,6 +778,10 @@ async function startServer() {
       const room = rooms.get(roomId);
       if (!requireTeacher(room, socket.id)) return; // Only teacher
       room.studentInteractionAllowed = allowed;
+      // Switching back to interactive mode: cancel any pending auto-sync push.
+      // Switching to view-only: a snapshot will be scheduled on the next teacher
+      // interaction (no need to fire one immediately).
+      if (allowed) cancelViewOnlyAutoSync(roomId);
       const revision = bumpRevision(room);
       io.to(roomId).emit('student_interaction_changed', { allowed, revision });
       // No broadcastFullState — see comment in toggle_scroll_sync above.
@@ -999,6 +1063,21 @@ async function startServer() {
         }
         // Teacher → broadcast to all students (one-way sync)
         socket.to(roomId).emit('interaction', event);
+        // For state-affecting events (not cursor / pure scroll), schedule a
+        // debounced snapshot push so view-only students catch up to internal
+        // simulation state that incremental SYNC_* events don't capture.
+        if (
+          event.type === 'SYNC_INPUT' ||
+          event.type === 'SYNC_CHANGE' ||
+          event.type === 'SYNC_CLICK' ||
+          event.type === 'SYNC_KEYDOWN' ||
+          event.type === 'SYNC_MOUSEDOWN' ||
+          event.type === 'SYNC_MOUSEUP' ||
+          event.type === 'SYNC_DRAGEND' ||
+          event.type === 'SYNC_DROP'
+        ) {
+          scheduleViewOnlyAutoSync(roomId, room);
+        }
       } else if (user?.role === 'student') {
         // Student → only relay if interaction is allowed, and only cursor to teacher
         if (event.type === 'SYNC_CURSOR') {
@@ -1170,6 +1249,7 @@ async function startServer() {
           if (room.users.size === 0) {
             setTimeout(() => {
               if (rooms.has(roomId) && rooms.get(roomId)!.users.size === 0) {
+                cancelViewOnlyAutoSync(roomId);
                 rooms.delete(roomId);
                 console.log(`Room ${roomId} cleaned up (empty)`);
               }
