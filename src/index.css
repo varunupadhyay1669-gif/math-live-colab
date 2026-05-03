@@ -586,6 +586,30 @@ h1, h2, h3, h4, .font-display {
 @keyframes confetti-fall { 0% { opacity: 1; transform: translateY(-100vh) rotate(0deg); } 100% { opacity: 0; transform: translateY(100vh) rotate(720deg); } }
 @keyframes reaction-pop { 0% { transform: scale(0); opacity: 0; } 60% { transform: scale(1.2); opacity: 1; } 100% { transform: scale(1); opacity: 1; } }
 @keyframes reaction-float-up { 0% { opacity: 1; transform: translateY(0); } 100% { opacity: 0; transform: translateY(-120px); } }
+@keyframes click-ripple-expand {
+  0%   { width: 14px; height: 14px; opacity: 0.95; }
+  100% { width: 56px; height: 56px; opacity: 0;    }
+}
+.ml-click-ripple {
+  border-style: solid;
+  border-width: 2.5px;
+  border-radius: 9999px;
+  animation: click-ripple-expand 1.6s ease-out forwards;
+}
+.ml-click-ripple-label {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  color: #fff;
+  padding: 2px 8px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.18);
+  animation: fade-in 120ms ease-out, reaction-float-up 1.6s ease-out forwards;
+}
 @keyframes dot-pulse { 0%, 100% { opacity: 0.4; } 50% { opacity: 1; } }
 @keyframes dot-alive { 0%, 100% { box-shadow: 0 0 0 2px rgba(16,185,129,0.12); } 50% { box-shadow: 0 0 0 3px rgba(16,185,129,0.20), 0 0 6px rgba(16,185,129,0.15); } }
 @keyframes pulse-glow { 0%, 100% { opacity: 0.5; } 50% { opacity: 1; } }

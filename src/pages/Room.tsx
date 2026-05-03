@@ -1726,6 +1726,23 @@ export default function Room() {
               {/* Cursor Overlay */}
               <CursorOverlay cursors={cursors} />
 
+              {/* Student click ripples — visual indicator of where students click */}
+              <div className="absolute inset-0 pointer-events-none overflow-hidden">
+                {studentClickIndicators.map(ind => (
+                  <div key={ind.id} className="absolute"
+                    style={{
+                      left: `${ind.x * 100}%`,
+                      top: `${ind.y * 100}%`,
+                      transform: 'translate(-50%, -50%)',
+                    }}>
+                    <div className="ml-click-ripple" style={{ borderColor: ind.color }} />
+                    <div className="ml-click-ripple-label" style={{ background: ind.color }}>
+                      {ind.name}
+                    </div>
+                  </div>
+                ))}
+              </div>
+
               {/* Reactions */}
               <div className="absolute inset-0 pointer-events-none overflow-hidden">
                 {reactions.map(r => (
