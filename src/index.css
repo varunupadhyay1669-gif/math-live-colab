@@ -973,6 +973,36 @@ select option { background: var(--bg-card); color: var(--text-primary); }
   .ml-btn-sm { height: 36px; }
 }
 
+/* Share / Invite popover (rendered via portal at body) */
+.ml-share-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  pointer-events: none;
+}
+.ml-share-backdrop {
+  position: absolute;
+  inset: 0;
+  background: transparent;
+  pointer-events: auto;
+}
+.ml-share-popover {
+  position: fixed;
+  pointer-events: auto;
+  padding: 18px;
+  max-width: calc(100vw - 24px);
+  max-height: calc(100vh - 96px);
+  overflow: auto;
+  isolation: isolate;
+}
+@media (max-width: 640px) {
+  .ml-share-popover {
+    left: 12px !important;
+    right: 12px !important;
+    width: auto !important;
+  }
+}
+
 /* ===== Visual Refresh v4 ===== */
 :root {
   --bg-primary: #F5F7FB;
