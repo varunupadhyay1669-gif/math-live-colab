@@ -32,6 +32,22 @@ export const injectedSyncScript = `
       return true;
     }
 
+    // In view-only mode, fully suppress local user-initiated interaction events
+    // BEFORE they reach the simulation's own handlers. The simulation's own
+    // onclick / oninput / etc. listeners would otherwise advance internal state
+    // (e.g. a quiz's "Next" button), causing the student's iframe to drift out
+    // of sync with the teacher (the originally-reported "teacher on Q2,
+    // student on Q5" bug). Remote-replayed events (isRemote()) and presenter
+    // mode bypass this block.
+    // Returns true if the event was suppressed — caller should return immediately.
+    function blockLocalInteraction(e) {
+      if (!interactionBlocked || isRemote() || presenterMode) return false;
+      try { e.preventDefault(); } catch(ignore) {}
+      try { e.stopPropagation(); } catch(ignore) {}
+      try { e.stopImmediatePropagation(); } catch(ignore) {}
+      return true;
+    }
+
     // Strict scroll blocking for view-only mode
     function enforceScrollLock() {
       if (!interactionBlocked || isRemote()) return;
@@ -161,7 +177,8 @@ export const injectedSyncScript = `
 
     // ── Input events ──
     document.addEventListener('input', function(e) {
-      if (isRemote() || interactionBlocked) return;
+      if (isRemote()) return;
+      if (blockLocalInteraction(e)) return;
       var path = getElementPath(e.target);
       if (path) {
         window.parent.postMessage({ type: 'SYNC_INPUT', path: path, value: e.target.value, checked: e.target.checked }, '*');
@@ -169,7 +186,8 @@ export const injectedSyncScript = `
     }, true);
 
     document.addEventListener('change', function(e) {
-      if (isRemote() || interactionBlocked) return;
+      if (isRemote()) return;
+      if (blockLocalInteraction(e)) return;
       var path = getElementPath(e.target);
       if (path) {
         window.parent.postMessage({ type: 'SYNC_CHANGE', path: path, value: e.target.value, checked: e.target.checked }, '*');
@@ -178,7 +196,9 @@ export const injectedSyncScript = `
 
     // ── Click events ──
     document.addEventListener('click', function(e) {
-      if (isRemote() || interactionBlocked || !e.isTrusted) return;
+      if (isRemote()) return;
+      if (blockLocalInteraction(e)) return;
+      if (!e.isTrusted) return;
       var path = getElementPath(e.target);
       if (path) {
         window.parent.postMessage({ type: 'SYNC_CLICK', path: path, clientX: e.clientX / window.innerWidth, clientY: e.clientY / window.innerHeight }, '*');
@@ -233,7 +253,11 @@ export const injectedSyncScript = `
     }, true);
 
     document.addEventListener('touchstart', function(e) {
-      if (isRemote() || interactionBlocked) return;
+      if (isRemote()) return;
+      // Note: this listener is passive:true so preventDefault is a no-op here,
+      // but a sibling touchstart handler with passive:false (added below) does
+      // the actual blocking. We only need to skip the SYNC emit on this side.
+      if (interactionBlocked && !presenterMode) return;
       var touch = e.touches[0];
       if (touch) {
         var el = document.elementFromPoint(touch.clientX, touch.clientY);
@@ -245,6 +269,12 @@ export const injectedSyncScript = `
         }
       }
     }, { passive: true });
+
+    // Companion touchstart blocker: passive:false so preventDefault actually
+    // suppresses the simulation's own touchstart handlers in view-only mode.
+    document.addEventListener('touchstart', function(e) {
+      blockLocalInteraction(e);
+    }, { capture: true, passive: false });
 
     // ── Scroll sync (toggleable, smooth) ──
     var scrollSyncEnabled = true;
@@ -432,7 +462,9 @@ export const injectedSyncScript = `
 
     // ── Mouse down/up events ──
     document.addEventListener('mousedown', function(e) {
-      if (isRemote() || interactionBlocked || !e.isTrusted) return;
+      if (isRemote()) return;
+      if (blockLocalInteraction(e)) return;
+      if (!e.isTrusted) return;
       var path = getElementPath(e.target);
       if (path) {
         window.parent.postMessage({ type: 'SYNC_MOUSEDOWN', path: path, x: e.clientX / window.innerWidth, y: e.clientY / window.innerHeight, button: e.button }, '*');
@@ -440,7 +472,9 @@ export const injectedSyncScript = `
     }, true);
 
     document.addEventListener('mouseup', function(e) {
-      if (isRemote() || interactionBlocked || !e.isTrusted) return;
+      if (isRemote()) return;
+      if (blockLocalInteraction(e)) return;
+      if (!e.isTrusted) return;
       var path = getElementPath(e.target);
       if (path) {
         window.parent.postMessage({ type: 'SYNC_MOUSEUP', path: path, x: e.clientX / window.innerWidth, y: e.clientY / window.innerHeight }, '*');
@@ -452,13 +486,16 @@ export const injectedSyncScript = `
     var lastDrag = 0;
 
     document.addEventListener('dragstart', function(e) {
-      if (isRemote() || interactionBlocked) return;
+      if (isRemote()) return;
+      if (blockLocalInteraction(e)) return;
       dragStartPath = getElementPath(e.target);
       window.parent.postMessage({ type: 'SYNC_DRAGSTART', path: dragStartPath, clientX: e.clientX / window.innerWidth, clientY: e.clientY / window.innerHeight }, '*');
     }, true);
 
     document.addEventListener('drag', function(e) {
-      if (isRemote() || interactionBlocked || !e.clientX) return;
+      if (isRemote()) return;
+      if (blockLocalInteraction(e)) return;
+      if (!e.clientX) return;
       var now = Date.now();
       if (now - lastDrag < 50) return;
       lastDrag = now;
@@ -466,13 +503,15 @@ export const injectedSyncScript = `
     }, true);
 
     document.addEventListener('dragend', function(e) {
-      if (isRemote() || interactionBlocked) return;
+      if (isRemote()) return;
+      if (blockLocalInteraction(e)) return;
       window.parent.postMessage({ type: 'SYNC_DRAGEND', path: dragStartPath, clientX: e.clientX / window.innerWidth, clientY: e.clientY / window.innerHeight }, '*');
       dragStartPath = '';
     }, true);
 
     document.addEventListener('drop', function(e) {
-      if (isRemote() || interactionBlocked) return;
+      if (isRemote()) return;
+      if (blockLocalInteraction(e)) return;
       e.preventDefault();
       var dropPath = getElementPath(e.target);
       window.parent.postMessage({ type: 'SYNC_DROP', dragPath: dragStartPath, dropPath: dropPath, clientX: e.clientX / window.innerWidth, clientY: e.clientY / window.innerHeight }, '*');
@@ -482,12 +521,14 @@ export const injectedSyncScript = `
 
     // ── Key events for simulations ──
     document.addEventListener('keydown', function(e) {
-      if (isRemote() || interactionBlocked) return;
+      if (isRemote()) return;
+      if (blockLocalInteraction(e)) return;
       window.parent.postMessage({ type: 'SYNC_KEYDOWN', key: e.key, code: e.code, shiftKey: e.shiftKey, ctrlKey: e.ctrlKey, altKey: e.altKey }, '*');
     }, true);
 
     document.addEventListener('keyup', function(e) {
-      if (isRemote() || interactionBlocked) return;
+      if (isRemote()) return;
+      if (blockLocalInteraction(e)) return;
       window.parent.postMessage({ type: 'SYNC_KEYUP', key: e.key, code: e.code }, '*');
     }, true);
 
