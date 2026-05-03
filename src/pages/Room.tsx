@@ -512,7 +512,14 @@ export default function Room() {
 
     // ── Sync ──
     newSocket.on("request_html_sync", ({ requestId }: { requestId?: string } = {}) => {
-      postToIframe({ type: 'REQUEST_HTML', requestId: requestId || `teacher-${Date.now()}` });
+      const finalRequestId = requestId || `teacher-${Date.now()}`;
+      // Track the snapshot request so the SYNC_PROVIDE_HTML response is
+      // recognised as a real ack and emitted as `dom_snapshot` (which the
+      // server handles for force-sync, auto-vo, and pending-student paths).
+      // Without this, the response falls through to `sync_html_update`,
+      // which silently no-ops for our auto-sync flow.
+      snapshotRequestRef.current = finalRequestId;
+      postToIframe({ type: 'REQUEST_HTML', requestId: finalRequestId });
     });
     newSocket.on("force_sync_state", (state: any) => {
       if (typeof state.revision === 'number') {
