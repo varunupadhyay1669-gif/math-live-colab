@@ -1,0 +1,22 @@
+services:
+  - type: web
+    name: math-live
+    runtime: node
+    plan: free
+    region: oregon
+    branch: main
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    healthCheckPath: /
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: NODE_VERSION
+        value: "20"
+    autoDeploy: true
+    # NOTE: To persist .rooms/ across restarts, upgrade to a paid plan and add:
+    #   disk:
+    #     name: rooms-data
+    #     mountPath: /opt/render/project/src/.rooms
+    #     sizeGB: 1
+    # Free plan rooms are in-memory only and reset on cold-start.
