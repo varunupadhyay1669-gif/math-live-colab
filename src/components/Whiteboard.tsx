@@ -13,8 +13,23 @@ interface WhiteboardProps {
   initialState?: {
     objects?: BoardImageObject[];
     strokes?: DrawStroke[];
+    shapes?: BoardShape[];
     view?: BoardView | null;
   } | null;
+}
+
+type ShapeKind = 'line' | 'rect' | 'circle' | 'arrow';
+
+interface BoardShape {
+  id: string;
+  kind: ShapeKind;
+  // For line/arrow: x1,y1=start, x2,y2=end.
+  // For rect: x1,y1 and x2,y2 are opposite corners (board-space).
+  // For circle: x1,y1=center, x2,y2=an edge point (radius = distance).
+  x1: number; y1: number;
+  x2: number; y2: number;
+  color: string;
+  width: number;
 }
 
 interface DrawPoint {
@@ -57,7 +72,10 @@ export interface WhiteboardRef {
   getCanvas: () => HTMLCanvasElement | null;
 }
 
-type BoardTool = 'select' | 'pen' | 'eraser' | 'pan';
+type BoardTool = 'select' | 'pen' | 'eraser' | 'pan' | 'line' | 'rect' | 'circle' | 'arrow';
+
+const SHAPE_TOOLS: BoardTool[] = ['line', 'rect', 'circle', 'arrow'];
+const isShapeTool = (t: BoardTool): t is ShapeKind => SHAPE_TOOLS.includes(t);
 
 const COLORS = ['#111827', '#EF4444', '#10B981', '#2563EB', '#F59E0B', '#7C3AED', '#FFFFFF'];
 const WIDTHS = [2, 4, 6, 10, 16, 24];
@@ -86,8 +104,10 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
     const currentStrokeRef = useRef<DrawPoint[]>([]);
     const strokesRef = useRef<DrawStroke[]>([]);
     const erasedDuringDragRef = useRef<Set<number>>(new Set());
+    const shapesRef = useRef<BoardShape[]>([]);
+    const draftShapeRef = useRef<BoardShape | null>(null);
     const dragRef = useRef<{
-      mode: 'draw' | 'erase' | 'pan' | 'object' | null;
+      mode: 'draw' | 'erase' | 'pan' | 'object' | 'shape-create' | 'shape-move' | null;
       pointerId: number;
       startClientX: number;
       startClientY: number;
@@ -96,13 +116,18 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
       objectId?: string;
       objectStartX?: number;
       objectStartY?: number;
+      shapeId?: string;
+      shapeStart?: { x1: number; y1: number; x2: number; y2: number };
     } | null>(null);
 
     const [objects, setObjects] = useState<BoardImageObject[]>([]);
     const [strokes, setStrokes] = useState<DrawStroke[]>([]);
+    const [shapes, setShapes] = useState<BoardShape[]>([]);
+    const [draftShape, setDraftShape] = useState<BoardShape | null>(null);
     const [currentStroke, setCurrentStroke] = useState<DrawPoint[]>([]);
     const [selectedObjectId, setSelectedObjectId] = useState<string | null>(null);
     const [selectedStrokeIndex, setSelectedStrokeIndex] = useState<number | null>(null);
+    const [selectedShapeId, setSelectedShapeId] = useState<string | null>(null);
     const [tool, setTool] = useState<BoardTool>('select');
     const [color, setColor] = useState('#111827');
     const [width, setWidth] = useState(4);
@@ -115,6 +140,70 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
     useEffect(() => {
       strokesRef.current = strokes;
     }, [strokes]);
+
+    useEffect(() => {
+      shapesRef.current = shapes;
+    }, [shapes]);
+
+    useEffect(() => {
+      draftShapeRef.current = draftShape;
+    }, [draftShape]);
+
+    const selectedShape = selectedShapeId ? shapes.find(s => s.id === selectedShapeId) : null;
+
+    // ── Shape geometry helpers ──
+    const shapeBounds = useCallback((shape: BoardShape) => {
+      const pad = shape.width / 2 + 8 / view.boardScale;
+      if (shape.kind === 'circle') {
+        const r = Math.hypot(shape.x2 - shape.x1, shape.y2 - shape.y1);
+        return { x: shape.x1 - r - pad, y: shape.y1 - r - pad, w: 2 * (r + pad), h: 2 * (r + pad) };
+      }
+      const minX = Math.min(shape.x1, shape.x2);
+      const minY = Math.min(shape.y1, shape.y2);
+      const maxX = Math.max(shape.x1, shape.x2);
+      const maxY = Math.max(shape.y1, shape.y2);
+      return { x: minX - pad, y: minY - pad, w: (maxX - minX) + pad * 2, h: (maxY - minY) + pad * 2 };
+    }, [view.boardScale]);
+
+    const shapeHit = useCallback((point: DrawPoint, shape: BoardShape) => {
+      const tol = shape.width / 2 + 10 / view.boardScale;
+      if (shape.kind === 'line' || shape.kind === 'arrow') {
+        return distanceToSegment(point, { x: shape.x1, y: shape.y1 }, { x: shape.x2, y: shape.y2 }) <= tol;
+      }
+      if (shape.kind === 'rect') {
+        const minX = Math.min(shape.x1, shape.x2);
+        const minY = Math.min(shape.y1, shape.y2);
+        const maxX = Math.max(shape.x1, shape.x2);
+        const maxY = Math.max(shape.y1, shape.y2);
+        // Hollow rect: hit only on the border (within tol).
+        const onLeft   = Math.abs(point.x - minX) <= tol && point.y >= minY - tol && point.y <= maxY + tol;
+        const onRight  = Math.abs(point.x - maxX) <= tol && point.y >= minY - tol && point.y <= maxY + tol;
+        const onTop    = Math.abs(point.y - minY) <= tol && point.x >= minX - tol && point.x <= maxX + tol;
+        const onBottom = Math.abs(point.y - maxY) <= tol && point.x >= minX - tol && point.x <= maxX + tol;
+        return onLeft || onRight || onTop || onBottom;
+      }
+      if (shape.kind === 'circle') {
+        const r = Math.hypot(shape.x2 - shape.x1, shape.y2 - shape.y1);
+        const d = Math.hypot(point.x - shape.x1, point.y - shape.y1);
+        return Math.abs(d - r) <= tol;
+      }
+      return false;
+    }, [view.boardScale]);
+
+    const findShapeAt = useCallback((point: DrawPoint): BoardShape | null => {
+      for (let i = shapes.length - 1; i >= 0; i--) {
+        if (shapeHit(point, shapes[i])) return shapes[i];
+      }
+      return null;
+    }, [shapes, shapeHit]);
+
+    const removeSelectedShape = useCallback(() => {
+      if (!selectedShapeId) return;
+      const id = selectedShapeId;
+      setShapes(prev => prev.filter(s => s.id !== id));
+      setSelectedShapeId(null);
+      if (socket && isTeacher) socket.emit('whiteboard_remove_shape', { roomId, shapeId: id });
+    }, [selectedShapeId, socket, isTeacher, roomId]);
 
     const setLiveStroke = useCallback((points: DrawPoint[]) => {
       currentStrokeRef.current = points;
@@ -334,6 +423,56 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
         }
       });
 
+      // ── Shapes (between images and ink) ──
+      const drawShape = (shape: BoardShape) => {
+        ctx.save();
+        ctx.strokeStyle = shape.color;
+        ctx.lineWidth = shape.width;
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+        if (shape.kind === 'rect') {
+          const x = Math.min(shape.x1, shape.x2);
+          const y = Math.min(shape.y1, shape.y2);
+          const w = Math.abs(shape.x2 - shape.x1);
+          const h = Math.abs(shape.y2 - shape.y1);
+          ctx.strokeRect(x, y, w, h);
+        } else if (shape.kind === 'circle') {
+          const r = Math.hypot(shape.x2 - shape.x1, shape.y2 - shape.y1);
+          ctx.beginPath();
+          ctx.arc(shape.x1, shape.y1, r, 0, Math.PI * 2);
+          ctx.stroke();
+        } else if (shape.kind === 'line' || shape.kind === 'arrow') {
+          ctx.beginPath();
+          ctx.moveTo(shape.x1, shape.y1);
+          ctx.lineTo(shape.x2, shape.y2);
+          ctx.stroke();
+          if (shape.kind === 'arrow') {
+            // Arrowhead at (x2,y2). Length scales with line width.
+            const angle = Math.atan2(shape.y2 - shape.y1, shape.x2 - shape.x1);
+            const headLen = Math.max(shape.width * 4, 14);
+            const headAngle = Math.PI / 7;
+            ctx.beginPath();
+            ctx.moveTo(shape.x2, shape.y2);
+            ctx.lineTo(shape.x2 - headLen * Math.cos(angle - headAngle), shape.y2 - headLen * Math.sin(angle - headAngle));
+            ctx.moveTo(shape.x2, shape.y2);
+            ctx.lineTo(shape.x2 - headLen * Math.cos(angle + headAngle), shape.y2 - headLen * Math.sin(angle + headAngle));
+            ctx.stroke();
+          }
+        }
+        ctx.restore();
+      };
+      shapes.forEach(drawShape);
+      if (draftShape) drawShape(draftShape);
+      if (selectedShape) {
+        const b = shapeBounds(selectedShape);
+        ctx.save();
+        ctx.strokeStyle = '#2563eb';
+        ctx.lineWidth = 2 / view.boardScale;
+        ctx.setLineDash([8 / view.boardScale, 6 / view.boardScale]);
+        ctx.strokeRect(b.x, b.y, b.w, b.h);
+        ctx.restore();
+      }
+
       const drawStroke = (stroke: DrawStroke) => {
         if (stroke.points.length === 0) return;
         ctx.beginPath();
@@ -358,7 +497,7 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
         }
       }
       ctx.restore();
-    }, [objects, selectedObjectId, selectedStrokeIndex, strokeBounds, strokes, currentStroke, color, width, tool, view]);
+    }, [objects, selectedObjectId, selectedStrokeIndex, strokeBounds, strokes, currentStroke, color, width, tool, view, shapes, draftShape, selectedShape, shapeBounds]);
 
     const downloadBoard = useCallback(() => {
       const canvas = canvasRef.current;
@@ -397,6 +536,7 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
       const normalized = (initialState.strokes || []).map(stroke => ({ ...stroke, id: stroke.id || newId('stroke'), tool: 'pen' as const }));
       setObjects(initialState.objects || []);
       setStrokes(normalized);
+      setShapes(initialState.shapes || []);
       if (initialState.view) setView(initialState.view);
       (initialState.objects || []).forEach(loadImage);
     }, [initialState, loadImage]);
@@ -413,13 +553,13 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
     useEffect(() => {
       if (!isActive) return;
       const resize = () => {
-        if (objects.length === 0 && strokes.length === 0) setView(getInitialView());
+        if (objects.length === 0 && strokes.length === 0 && shapes.length === 0) setView(getInitialView());
         redrawCanvas();
       };
       resize();
       window.addEventListener('resize', resize);
       return () => window.removeEventListener('resize', resize);
-    }, [isActive, getInitialView, redrawCanvas, objects.length, strokes.length]);
+    }, [isActive, getInitialView, redrawCanvas, objects.length, strokes.length, shapes.length]);
 
     useEffect(() => {
       if (!isActive) return;
@@ -431,6 +571,7 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
         if ((e.key === 'Backspace' || e.key === 'Delete') && canEdit) {
           if (selectedObjectId) removeSelectedObject();
           if (selectedStrokeIndex !== null) deleteStrokeIndices([selectedStrokeIndex]);
+          if (selectedShapeId) removeSelectedShape();
         }
       };
       const up = (e: KeyboardEvent) => {
@@ -442,7 +583,7 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
         window.removeEventListener('keydown', down);
         window.removeEventListener('keyup', up);
       };
-    }, [isActive, canEdit, selectedObjectId, selectedStrokeIndex, removeSelectedObject, deleteStrokeIndices]);
+    }, [isActive, canEdit, selectedObjectId, selectedStrokeIndex, selectedShapeId, removeSelectedObject, deleteStrokeIndices, removeSelectedShape]);
 
     useEffect(() => {
       if (!socket) return;
@@ -470,11 +611,23 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
         const stroke = { ...data.stroke, id: data.stroke.id || newId('stroke'), tool: 'pen' as const };
         setStrokes(prev => prev.some(existing => existing.id === stroke.id) ? prev : [...prev, stroke]);
       };
+      const handleAddShape = (data: { shape: BoardShape }) => {
+        setShapes(prev => prev.some(s => s.id === data.shape.id) ? prev : [...prev, data.shape]);
+      };
+      const handleUpdateShape = (data: { shape: BoardShape }) => {
+        setShapes(prev => prev.map(s => s.id === data.shape.id ? data.shape : s));
+      };
+      const handleRemoveShape = (data: { shapeId: string }) => {
+        setShapes(prev => prev.filter(s => s.id !== data.shapeId));
+        setSelectedShapeId(prev => prev === data.shapeId ? null : prev);
+      };
       const handleClear = () => {
         setStrokes([]);
         setObjects([]);
+        setShapes([]);
         setSelectedObjectId(null);
         setSelectedStrokeIndex(null);
+        setSelectedShapeId(null);
         imageCacheRef.current.clear();
       };
       const handleReset = () => {
@@ -492,6 +645,9 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
       socket.on('whiteboard_add_image', handleAddImage);
       socket.on('whiteboard_update_object', handleUpdateObject);
       socket.on('whiteboard_remove_object', handleRemoveObject);
+      socket.on('whiteboard_add_shape', handleAddShape);
+      socket.on('whiteboard_update_shape', handleUpdateShape);
+      socket.on('whiteboard_remove_shape', handleRemoveShape);
       socket.on('whiteboard_set_view', handleSetView);
       socket.on('whiteboard_stroke', handleStroke);
       socket.on('whiteboard_clear', handleClear);
@@ -503,6 +659,9 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
         socket.off('whiteboard_add_image', handleAddImage);
         socket.off('whiteboard_update_object', handleUpdateObject);
         socket.off('whiteboard_remove_object', handleRemoveObject);
+        socket.off('whiteboard_add_shape', handleAddShape);
+        socket.off('whiteboard_update_shape', handleUpdateShape);
+        socket.off('whiteboard_remove_shape', handleRemoveShape);
         socket.off('whiteboard_set_view', handleSetView);
         socket.off('whiteboard_stroke', handleStroke);
         socket.off('whiteboard_clear', handleClear);
@@ -532,16 +691,43 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
         if (hitObject) {
           setSelectedObjectId(hitObject.id);
           setSelectedStrokeIndex(null);
+          setSelectedShapeId(null);
           dragRef.current = { mode: 'object', pointerId: e.pointerId, startClientX: e.clientX, startClientY: e.clientY, startOffsetX: view.boardOffsetX, startOffsetY: view.boardOffsetY, objectId: hitObject.id, objectStartX: hitObject.x, objectStartY: hitObject.y };
+          return;
+        }
+        const hitShape = findShapeAt(point);
+        if (hitShape) {
+          setSelectedShapeId(hitShape.id);
+          setSelectedObjectId(null);
+          setSelectedStrokeIndex(null);
+          dragRef.current = {
+            mode: 'shape-move',
+            pointerId: e.pointerId,
+            startClientX: e.clientX, startClientY: e.clientY,
+            startOffsetX: view.boardOffsetX, startOffsetY: view.boardOffsetY,
+            shapeId: hitShape.id,
+            shapeStart: { x1: hitShape.x1, y1: hitShape.y1, x2: hitShape.x2, y2: hitShape.y2 },
+          };
           return;
         }
         const strokeIndex = findStrokeAtPoint(point);
         setSelectedObjectId(null);
+        setSelectedShapeId(null);
         setSelectedStrokeIndex(strokeIndex === -1 ? null : strokeIndex);
+        return;
+      }
+      if (isShapeTool(tool)) {
+        setSelectedObjectId(null);
+        setSelectedStrokeIndex(null);
+        setSelectedShapeId(null);
+        const draft: BoardShape = { id: newId('shape'), kind: tool as ShapeKind, x1: point.x, y1: point.y, x2: point.x, y2: point.y, color, width };
+        setDraftShape(draft);
+        dragRef.current = { mode: 'shape-create', pointerId: e.pointerId, startClientX: e.clientX, startClientY: e.clientY, startOffsetX: view.boardOffsetX, startOffsetY: view.boardOffsetY, shapeId: draft.id };
         return;
       }
       setSelectedObjectId(null);
       setSelectedStrokeIndex(null);
+      setSelectedShapeId(null);
       dragRef.current = { mode: 'draw', pointerId: e.pointerId, startClientX: e.clientX, startClientY: e.clientY, startOffsetX: view.boardOffsetX, startOffsetY: view.boardOffsetY };
       setLiveStroke([point]);
     };
@@ -565,6 +751,23 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
         setObjects(prev => prev.map(obj => obj.id === drag.objectId ? { ...obj, x: (drag.objectStartX || 0) + dx, y: (drag.objectStartY || 0) + dy } : obj));
         return;
       }
+      if (drag.mode === 'shape-create' && draftShapeRef.current) {
+        const point = screenToBoard(e.clientX, e.clientY);
+        const next = { ...draftShapeRef.current, x2: point.x, y2: point.y };
+        setDraftShape(next);
+        return;
+      }
+      if (drag.mode === 'shape-move' && drag.shapeId && drag.shapeStart) {
+        const dx = (e.clientX - drag.startClientX) / view.boardScale;
+        const dy = (e.clientY - drag.startClientY) / view.boardScale;
+        const start = drag.shapeStart;
+        setShapes(prev => prev.map(s => s.id === drag.shapeId ? {
+          ...s,
+          x1: start.x1 + dx, y1: start.y1 + dy,
+          x2: start.x2 + dx, y2: start.y2 + dy,
+        } : s));
+        return;
+      }
       if (drag.mode === 'draw') setLiveStroke([...currentStrokeRef.current, screenToBoard(e.clientX, e.clientY)]);
     };
 
@@ -580,6 +783,24 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
       if (drag.mode === 'object' && drag.objectId) {
         const object = objects.find(obj => obj.id === drag.objectId);
         if (object) updateObject(object);
+      }
+      if (drag.mode === 'shape-create' && draftShapeRef.current) {
+        const finished = draftShapeRef.current;
+        // Reject zero-length shapes (a stray click).
+        const minDelta = 4 / view.boardScale;
+        const dx = Math.abs(finished.x2 - finished.x1);
+        const dy = Math.abs(finished.y2 - finished.y1);
+        if (dx > minDelta || dy > minDelta) {
+          setShapes(prev => [...prev, finished]);
+          if (socket && isTeacher) socket.emit('whiteboard_add_shape', { roomId, shape: finished });
+          setSelectedShapeId(finished.id);
+          setTool('select');
+        }
+        setDraftShape(null);
+      }
+      if (drag.mode === 'shape-move' && drag.shapeId) {
+        const moved = shapes.find(s => s.id === drag.shapeId);
+        if (moved && socket && isTeacher) socket.emit('whiteboard_update_shape', { roomId, shape: moved });
       }
       if (drag.mode === 'pan') emitView(view);
       setLiveStroke([]);
@@ -641,8 +862,10 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
     const clearBoard = () => {
       setObjects([]);
       setStrokes([]);
+      setShapes([]);
       setSelectedObjectId(null);
       setSelectedStrokeIndex(null);
+      setSelectedShapeId(null);
       imageCacheRef.current.clear();
       if (socket && isTeacher) socket.emit('whiteboard_clear', { roomId });
     };
@@ -666,9 +889,25 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
     const tools: Array<{ id: BoardTool; label: string; icon: React.ReactNode }> = [
       { id: 'select', label: 'Select', icon: <path d="M4 4l7 16 2-7 7-2L4 4z" /> },
       { id: 'pen', label: 'Pen', icon: <path d="M17 3a2.8 2.8 0 0 1 4 4L8 20l-5 1 1-5L17 3z" /> },
+      { id: 'line', label: 'Line', icon: <path d="M5 19L19 5" /> },
+      { id: 'rect', label: 'Rectangle', icon: <rect x="4" y="6" width="16" height="12" /> },
+      { id: 'circle', label: 'Circle', icon: <circle cx="12" cy="12" r="8" /> },
+      { id: 'arrow', label: 'Arrow', icon: <><path d="M5 19L19 5" /><path d="M12 5h7v7" /></> },
       { id: 'eraser', label: 'Eraser', icon: <><path d="m7 21-4-4 11-11 4 4L7 21z" /><path d="M14 6l4-4 4 4-4 4" /><path d="M3 21h18" /></> },
       { id: 'pan', label: 'Hand', icon: <><path d="M18 11V6a2 2 0 0 0-4 0v5" /><path d="M14 10V4a2 2 0 0 0-4 0v8" /><path d="M10 12V6a2 2 0 0 0-4 0v7" /><path d="M6 13c-2 0-3 1-3 3 0 4 4 6 8 6h3c4 0 7-3 7-7v-4a2 2 0 0 0-4 0" /></> },
     ];
+
+    const toolChip =
+      tool === 'eraser' ? 'Erase ink' :
+      tool === 'pan' ? 'Move board' :
+      tool === 'select' ? 'Select and arrange' :
+      tool === 'line' ? 'Draw line — click and drag' :
+      tool === 'rect' ? 'Draw rectangle — click and drag' :
+      tool === 'circle' ? 'Draw circle — click and drag from centre' :
+      tool === 'arrow' ? 'Draw arrow — click and drag from start to head' :
+      'Draw ink';
+
+    const showColorAndWidth = tool === 'pen' || isShapeTool(tool);
 
     return (
       <div className="whiteboard-shell">
@@ -701,15 +940,15 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
         )}
 
         <div className="whiteboard-topbar">
-          <div className="whiteboard-chip">{tool === 'eraser' ? 'Erase ink' : tool === 'pan' ? 'Move board' : tool === 'select' ? 'Select and arrange' : 'Draw ink'}</div>
-          {tool === 'pen' && (
+          <div className="whiteboard-chip">{toolChip}</div>
+          {showColorAndWidth && (
             <div className="whiteboard-control-group">
               {COLORS.map(c => (
                 <button key={c} onClick={() => setColor(c)} className={`whiteboard-swatch ${color === c ? 'active' : ''}`} style={{ background: c }} aria-label={`Color ${c}`} />
               ))}
             </div>
           )}
-          {(tool === 'pen' || tool === 'eraser') && (
+          {(showColorAndWidth || tool === 'eraser') && (
             <div className="whiteboard-control-group">
               {WIDTHS.map(w => (
                 <button key={w} onClick={() => setWidth(w)} className={`whiteboard-size ${width === w ? 'active' : ''}`}>
@@ -720,6 +959,7 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
           )}
           <div className="whiteboard-spacer" />
           {canEdit && selectedObject && <button onClick={removeSelectedObject} className="whiteboard-action danger">Delete image</button>}
+          {canEdit && selectedShape && <button onClick={removeSelectedShape} className="whiteboard-action danger">Delete shape</button>}
           {canEdit && selectedStrokeIndex !== null && <button onClick={() => deleteStrokeIndices([selectedStrokeIndex])} className="whiteboard-action danger">Delete stroke</button>}
           {canEdit && <button onClick={undoLastStroke} disabled={strokes.length === 0} className="whiteboard-action">Undo</button>}
           <button onClick={() => zoomAt(1 / 1.2)} className="whiteboard-action">-</button>
@@ -737,7 +977,11 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
             className="absolute inset-0"
             style={{
               touchAction: 'none',
-              cursor: tool === 'pan' || spacePan ? 'grab' : tool === 'select' ? 'default' : tool === 'eraser' ? 'cell' : 'crosshair',
+              cursor:
+                tool === 'pan' || spacePan ? 'grab' :
+                tool === 'select' ? 'default' :
+                tool === 'eraser' ? 'cell' :
+                'crosshair',
             }}
             onPointerDown={handlePointerDown}
             onPointerMove={handlePointerMove}
@@ -745,10 +989,10 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
             onPointerCancel={handlePointerUp}
             onWheel={handleWheel}
           />
-          {objects.length === 0 && strokes.length === 0 && (
+          {objects.length === 0 && strokes.length === 0 && shapes.length === 0 && (
             <div className="whiteboard-empty">
               <h3>Whiteboard</h3>
-              <p>{canEdit ? 'Use the tools on the left to draw, erase, upload images, and arrange the board.' : 'Waiting for the teacher to use the whiteboard.'}</p>
+              <p>{canEdit ? 'Use the tools on the left to draw, add shapes, erase, upload images, and arrange the board.' : 'Waiting for the teacher to use the whiteboard.'}</p>
             </div>
           )}
           <div className="whiteboard-hint">

@@ -44,6 +44,7 @@ interface RoomData {
   whiteboard: {
     objects: any[];
     strokes: any[];
+    shapes: any[];
     view: any | null;
   };
   lastTeacherScroll: any | null;
@@ -70,6 +71,7 @@ interface SessionStatePayload {
   whiteboard: {
     objects: any[];
     strokes: any[];
+    shapes: any[];
     view: any | null;
   };
   lastTeacherScroll: any | null;
@@ -175,7 +177,7 @@ async function startServer() {
       tempContent: null,
       liveSnapshotHtml: null,
       revision: 0,
-      whiteboard: { objects: [], strokes: [], view: null },
+      whiteboard: { objects: [], strokes: [], shapes: [], view: null },
       lastTeacherScroll: null,
       zoomLevel: 1,
     };
@@ -261,7 +263,9 @@ async function startServer() {
           room.scores = raw.scores || {};
           room.revision = raw.revision || 0;
           room.liveSnapshotHtml = raw.liveSnapshotHtml || null;
-          room.whiteboard = raw.whiteboard || { objects: [], strokes: [], view: null };
+          room.whiteboard = raw.whiteboard
+            ? { objects: raw.whiteboard.objects || [], strokes: raw.whiteboard.strokes || [], shapes: raw.whiteboard.shapes || [], view: raw.whiteboard.view ?? null }
+            : { objects: [], strokes: [], shapes: [], view: null };
           room.lastTeacherScroll = raw.lastTeacherScroll || null;
           room.zoomLevel = raw.zoomLevel || 1;
           rooms.set(raw.roomId, room);
@@ -870,10 +874,36 @@ async function startServer() {
       socket.to(roomId).emit('whiteboard_set_view', { view });
     });
 
+    // ─── WHITEBOARD: SHAPES ───
+    socket.on('whiteboard_add_shape', ({ roomId, shape }: any) => {
+      const room = rooms.get(roomId);
+      if (!requireTeacher(room, socket.id) || !shape || typeof shape.id !== 'string') return;
+      // Avoid duplicates if the same shape arrives twice
+      if (room.whiteboard.shapes.some((s: any) => s.id === shape.id)) return;
+      room.whiteboard.shapes.push(shape);
+      // Cap to prevent unbounded growth
+      if (room.whiteboard.shapes.length > 2000) room.whiteboard.shapes = room.whiteboard.shapes.slice(-2000);
+      io.to(roomId).emit('whiteboard_add_shape', { shape });
+    });
+
+    socket.on('whiteboard_update_shape', ({ roomId, shape }: any) => {
+      const room = rooms.get(roomId);
+      if (!requireTeacher(room, socket.id) || !shape || typeof shape.id !== 'string') return;
+      room.whiteboard.shapes = room.whiteboard.shapes.map((s: any) => s.id === shape.id ? shape : s);
+      socket.to(roomId).emit('whiteboard_update_shape', { shape });
+    });
+
+    socket.on('whiteboard_remove_shape', ({ roomId, shapeId }: { roomId: string; shapeId: string }) => {
+      const room = rooms.get(roomId);
+      if (!requireTeacher(room, socket.id) || typeof shapeId !== 'string') return;
+      room.whiteboard.shapes = room.whiteboard.shapes.filter((s: any) => s.id !== shapeId);
+      io.to(roomId).emit('whiteboard_remove_shape', { shapeId });
+    });
+
     socket.on('whiteboard_clear', ({ roomId }: { roomId: string }) => {
       const room = rooms.get(roomId);
       if (!requireTeacher(room, socket.id)) return;
-      room.whiteboard = { objects: [], strokes: [], view: null };
+      room.whiteboard = { objects: [], strokes: [], shapes: [], view: null };
       io.to(roomId).emit('whiteboard_clear');
     });
 
