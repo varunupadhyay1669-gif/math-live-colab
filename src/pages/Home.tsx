@@ -2,198 +2,217 @@ import React, { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { v4 as uuidv4 } from "uuid";
 
+type RecentRoom = { id: string; name: string; date: string };
+
 export default function Home() {
   const navigate = useNavigate();
-  const [teacherName, setTeacherName] = useState(() => localStorage.getItem('mathslive_teacher_name') || '');
-  const [studentName, setStudentName] = useState('');
+  const [teacherName, setTeacherName] = useState(() => localStorage.getItem("mathslive_teacher_name") || "");
+  const [studentName, setStudentName] = useState("");
   const [roomCode, setRoomCode] = useState("");
-  const [recentRooms, setRecentRooms] = useState<Array<{ id: string; name: string; date: string }>>([]);
-  const [activeCard, setActiveCard] = useState<'teacher' | 'student' | null>(null);
+  const [recentRooms, setRecentRooms] = useState<RecentRoom[]>([]);
 
   useEffect(() => {
     try {
-      const stored = localStorage.getItem('mathslive_recent_rooms');
+      const stored = localStorage.getItem("mathslive_recent_rooms");
       if (stored) setRecentRooms(JSON.parse(stored));
     } catch {}
   }, []);
 
   const createRoom = () => {
-    if (!teacherName.trim()) return;
-    localStorage.setItem('mathslive_teacher_name', teacherName.trim());
+    const name = teacherName.trim();
+    if (!name) return;
+    localStorage.setItem("mathslive_teacher_name", name);
     const newRoomId = uuidv4().slice(0, 8);
-    const updated = [{ id: newRoomId, name: teacherName, date: new Date().toLocaleString() }, ...recentRooms].slice(0, 5);
-    localStorage.setItem('mathslive_recent_rooms', JSON.stringify(updated));
-    navigate(`/room/${newRoomId}?name=${encodeURIComponent(teacherName.trim())}`);
+    const updated: RecentRoom[] = [
+      { id: newRoomId, name, date: new Date().toLocaleString() },
+      ...recentRooms.filter(r => r.id !== newRoomId),
+    ].slice(0, 5);
+    localStorage.setItem("mathslive_recent_rooms", JSON.stringify(updated));
+    navigate(`/room/${newRoomId}?name=${encodeURIComponent(name)}`);
   };
 
   const joinRoom = (e: React.FormEvent) => {
     e.preventDefault();
-    if (roomCode.trim() && studentName.trim()) {
-      navigate(`/live/${roomCode.trim()}?name=${encodeURIComponent(studentName.trim())}`);
+    const code = roomCode.trim();
+    const name = studentName.trim();
+    if (code && name) {
+      navigate(`/live/${code}?name=${encodeURIComponent(name)}`);
     }
   };
 
   const joinRecent = (id: string) => {
-    navigate(`/room/${id}?name=${encodeURIComponent(teacherName.trim() || 'Teacher')}`);
+    const name = teacherName.trim() || "Teacher";
+    navigate(`/room/${id}?name=${encodeURIComponent(name)}`);
   };
 
+  const teacherDisabled = !teacherName.trim();
+  const studentDisabled = !roomCode.trim() || !studentName.trim();
+
   return (
-    <div className="min-h-screen flex flex-col items-center justify-center relative overflow-hidden"
-      style={{ background: '#F4F5F7' }}>
-
-      {/* Subtle grid */}
-      <div className="fixed inset-0 pointer-events-none z-0"
-        style={{ backgroundImage: 'radial-gradient(#D0D3DA 0.8px, transparent 0.8px)', backgroundSize: '24px 24px', opacity: 0.5 }} />
-
-      <div className="relative z-10 flex flex-col items-center gap-8 max-w-[520px] w-full px-5">
-
-        {/* Title */}
-        <div className="text-center">
-          <h1 className="font-display font-extrabold leading-none mb-3"
-            style={{ fontSize: '48px', letterSpacing: '-0.04em', color: '#111318' }}>
-            Maths<span style={{ color: '#5B5FE6' }}>Live</span>
-          </h1>
-          <p style={{ color: '#6B7080', fontSize: '15px', lineHeight: '1.6' }}>
-            Real-time collaborative simulations for teachers and students.
-          </p>
-        </div>
-
-        {/* Teacher Card */}
-        <div
-          onClick={() => setActiveCard('teacher')}
-          style={{
-            background: '#FFFFFF',
-            border: activeCard === 'teacher' ? '2px solid #5B5FE6' : '2px solid transparent',
-            borderRadius: '12px',
-            boxShadow: activeCard === 'teacher'
-              ? '0 8px 30px rgba(91,95,230,0.12), 0 0 0 1px rgba(91,95,230,0.08)'
-              : '0 2px 8px rgba(0,0,0,0.06), 0 0 0 1px rgba(0,0,0,0.06)',
-            padding: '24px',
-            width: '100%',
-            cursor: 'pointer',
-            transition: 'all 0.15s ease',
-          }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '16px' }}>
-            <div style={{
-              width: '36px', height: '36px', borderRadius: '8px',
-              background: '#5B5FE6', display: 'flex', alignItems: 'center', justifyContent: 'center',
-            }}>
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M15 3h4a2 2 0 012 2v14a2 2 0 01-2 2h-4M10 17l5-5-5-5M13.8 12H3"/>
+    <div className="ml-page-bg">
+      <div className="relative z-10 mx-auto flex min-h-screen w-full max-w-[1180px] flex-col px-6 py-8 lg:py-14">
+        {/* Top bar */}
+        <header className="flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <span className="ml-brandmark" aria-hidden="true">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M4 18l6-12 4 8 6-4" />
               </svg>
-            </div>
-            <div>
-              <div style={{ fontWeight: 700, fontSize: '16px', color: '#111318' }}>Launch Session</div>
-              <div style={{ fontSize: '13px', color: '#8B90A0' }}>Create a room and share simulations</div>
-            </div>
+            </span>
+            <span className="text-[15px] font-semibold tracking-tight text-[color:var(--text-primary)]">
+              Math<span className="text-[color:var(--accent-indigo)]">Live</span>
+            </span>
           </div>
+          <span className="ml-badge ml-badge-indigo">
+            <span className="ml-badge-dot" />
+            Live teaching platform
+          </span>
+        </header>
 
-          <div style={{ marginBottom: '12px' }}>
-            <label style={{ display: 'block', fontSize: '11px', fontWeight: 700, color: '#8B90A0', marginBottom: '6px', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
-              Session Title
-            </label>
-            <input
-              type="text"
-              placeholder="e.g. Calculus Visualization 101"
-              value={teacherName}
-              onChange={(e) => setTeacherName(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && createRoom()}
-              onFocus={() => setActiveCard('teacher')}
-              onClick={(e) => e.stopPropagation()}
-              className="input-field"
-            />
-          </div>
+        {/* Hero + cards */}
+        <main className="mt-12 grid flex-1 grid-cols-1 items-center gap-12 lg:mt-16 lg:grid-cols-[1.1fr_1fr] lg:gap-16">
+          {/* Hero copy */}
+          <section>
+            <span className="ml-eyebrow">For teachers and students</span>
+            <h1 className="ml-display mt-4">
+              Run live HTML simulations with{" "}
+              <span className="bg-clip-text text-transparent" style={{ backgroundImage: "var(--gradient-primary)" }}>
+                deterministic sync
+              </span>
+              .
+            </h1>
+            <p className="ml-body mt-5 max-w-[520px] text-[15px]">
+              Math Live is a premium delivery platform for interactive simulations. Bring custom HTML from your
+              authoring tools, present it live, annotate, and stay perfectly in sync with every student in the room.
+            </p>
 
-          <button onClick={(e) => { e.stopPropagation(); createRoom(); }} disabled={!teacherName.trim()}
-            style={{
-              width: '100%', height: '42px', borderRadius: '8px', border: 'none',
-              background: !teacherName.trim() ? '#D0D3DA' : '#5B5FE6',
-              color: 'white', fontWeight: 700, fontSize: '14px', cursor: teacherName.trim() ? 'pointer' : 'not-allowed',
-              transition: 'all 0.12s ease',
-              boxShadow: teacherName.trim() ? '0 2px 8px rgba(91,95,230,0.25)' : 'none',
-            }}>
-            Create Room
-          </button>
-        </div>
-
-        {/* Student Card */}
-        <div
-          onClick={() => setActiveCard('student')}
-          style={{
-            background: '#FFFFFF',
-            border: activeCard === 'student' ? '2px solid #7C5CE6' : '2px solid transparent',
-            borderRadius: '12px',
-            boxShadow: activeCard === 'student'
-              ? '0 8px 30px rgba(124,92,230,0.12), 0 0 0 1px rgba(124,92,230,0.08)'
-              : '0 2px 8px rgba(0,0,0,0.06), 0 0 0 1px rgba(0,0,0,0.06)',
-            padding: '24px',
-            width: '100%',
-            cursor: 'pointer',
-            transition: 'all 0.15s ease',
-          }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '16px' }}>
-            <div style={{
-              width: '36px', height: '36px', borderRadius: '8px',
-              background: '#7C5CE6', display: 'flex', alignItems: 'center', justifyContent: 'center',
-            }}>
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87"/><path d="M16 3.13a4 4 0 010 7.75"/>
-              </svg>
-            </div>
-            <div>
-              <div style={{ fontWeight: 700, fontSize: '16px', color: '#111318' }}>Join Session</div>
-              <div style={{ fontSize: '13px', color: '#8B90A0' }}>Enter a code to join a live session</div>
-            </div>
-          </div>
-
-          <form onSubmit={joinRoom} onClick={(e) => e.stopPropagation()}>
-            <div style={{ marginBottom: '10px' }}>
-              <label style={{ display: 'block', fontSize: '11px', fontWeight: 700, color: '#8B90A0', marginBottom: '6px', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
-                Your Name
-              </label>
-              <input type="text" placeholder="e.g. Arjun" value={studentName}
-                onChange={(e) => setStudentName(e.target.value)} onFocus={() => setActiveCard('student')}
-                className="input-field" />
-            </div>
-            <div style={{ marginBottom: '14px' }}>
-              <label style={{ display: 'block', fontSize: '11px', fontWeight: 700, color: '#8B90A0', marginBottom: '6px', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
-                Room Code
-              </label>
-              <input type="text" placeholder="Enter room code" value={roomCode}
-                onChange={(e) => setRoomCode(e.target.value)} onFocus={() => setActiveCard('student')}
-                className="input-field"
-                style={{ fontFamily: "'JetBrains Mono', monospace", letterSpacing: '0.12em', textAlign: 'center' }} />
-            </div>
-            <button type="submit" disabled={!roomCode.trim() || !studentName.trim()}
-              style={{
-                width: '100%', height: '42px', borderRadius: '8px', border: 'none',
-                background: (!roomCode.trim() || !studentName.trim()) ? '#D0D3DA' : '#7C5CE6',
-                color: 'white', fontWeight: 700, fontSize: '14px',
-                cursor: (roomCode.trim() && studentName.trim()) ? 'pointer' : 'not-allowed',
-                transition: 'all 0.12s ease',
-                boxShadow: (roomCode.trim() && studentName.trim()) ? '0 2px 8px rgba(124,92,230,0.25)' : 'none',
-              }}>
-              Join Room
-            </button>
-          </form>
-        </div>
-
-        {/* Recent rooms */}
-        {recentRooms.length > 0 && (
-          <div style={{ textAlign: 'center' }}>
-            <div style={{ fontSize: '11px', fontWeight: 700, color: '#8B90A0', marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
-              Recent Sessions
-            </div>
-            <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'center', gap: '6px' }}>
-              {recentRooms.map((room) => (
-                <button key={room.id} onClick={() => joinRecent(room.id)} className="btn"
-                  style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: '12px' }}>
-                  {room.id}
-                </button>
+            <ul className="mt-8 grid gap-3 text-[14px] text-[color:var(--text-secondary)] sm:grid-cols-2">
+              {[
+                "Teacher-authoritative live sync",
+                "Late-join and reconnect recovery",
+                "Whiteboard, annotation, and laser tools",
+                "View-only or interactive student modes",
+              ].map(item => (
+                <li key={item} className="flex items-start gap-2">
+                  <svg className="mt-[3px] flex-shrink-0 text-[color:var(--accent-indigo)]" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M20 6L9 17l-5-5" />
+                  </svg>
+                  <span>{item}</span>
+                </li>
               ))}
+            </ul>
+          </section>
+
+          {/* Entry cards */}
+          <section className="flex flex-col gap-5">
+            {/* Teacher */}
+            <div className="ml-surface-elevated p-6">
+              <div className="flex items-center justify-between">
+                <div>
+                  <div className="ml-eyebrow">Teach</div>
+                  <h2 className="ml-headline mt-1">Launch a session</h2>
+                </div>
+                <span className="ml-badge ml-badge-indigo">Teacher</span>
+              </div>
+              <p className="ml-caption mt-2">Create a room and bring students into your simulation.</p>
+
+              <div className="mt-5">
+                <label htmlFor="teacher-name" className="ml-field-label">Your name or session title</label>
+                <input
+                  id="teacher-name"
+                  type="text"
+                  className="ml-input"
+                  placeholder="e.g. Calculus — Visualizing Limits"
+                  value={teacherName}
+                  onChange={e => setTeacherName(e.target.value)}
+                  onKeyDown={e => e.key === "Enter" && createRoom()}
+                  autoComplete="off"
+                />
+              </div>
+
+              <button
+                type="button"
+                className="ml-btn ml-btn-primary ml-btn-lg ml-btn-block mt-4"
+                onClick={createRoom}
+                disabled={teacherDisabled}
+              >
+                Create room
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M5 12h14M13 5l7 7-7 7" />
+                </svg>
+              </button>
+
+              {recentRooms.length > 0 && (
+                <div className="mt-5">
+                  <div className="ml-eyebrow mb-2">Recent rooms</div>
+                  <div className="flex flex-wrap gap-2">
+                    {recentRooms.map(room => (
+                      <button
+                        key={room.id}
+                        type="button"
+                        className="ml-btn ml-btn-secondary ml-btn-sm"
+                        onClick={() => joinRecent(room.id)}
+                        title={`Re-open ${room.name}`}
+                      >
+                        <span className="font-mono tracking-[0.16em] text-[12px]">{room.id}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
-          </div>
-        )}
+
+            {/* Student */}
+            <div className="ml-surface p-6">
+              <div className="flex items-center justify-between">
+                <div>
+                  <div className="ml-eyebrow">Join</div>
+                  <h2 className="ml-headline mt-1">Enter a session</h2>
+                </div>
+                <span className="ml-badge">Student</span>
+              </div>
+              <p className="ml-caption mt-2">Got a room code from your teacher? Join the live session.</p>
+
+              <form onSubmit={joinRoom} className="mt-5 grid gap-4 sm:grid-cols-[1fr_auto] sm:items-end">
+                <div className="grid gap-3">
+                  <div>
+                    <label htmlFor="student-name" className="ml-field-label">Your name</label>
+                    <input
+                      id="student-name"
+                      type="text"
+                      className="ml-input"
+                      placeholder="Arjun"
+                      value={studentName}
+                      onChange={e => setStudentName(e.target.value)}
+                      autoComplete="off"
+                    />
+                  </div>
+                  <div>
+                    <label htmlFor="room-code" className="ml-field-label">Room code</label>
+                    <input
+                      id="room-code"
+                      type="text"
+                      className="ml-input ml-input-mono"
+                      placeholder="e.g. K3D-7P9"
+                      value={roomCode}
+                      onChange={e => setRoomCode(e.target.value)}
+                      autoComplete="off"
+                      maxLength={20}
+                    />
+                  </div>
+                </div>
+                <button type="submit" className="ml-btn ml-btn-violet ml-btn-lg sm:self-end" disabled={studentDisabled}>
+                  Join
+                </button>
+              </form>
+            </div>
+          </section>
+        </main>
+
+        <footer className="mt-12 flex flex-col items-center justify-between gap-3 border-t border-[color:var(--ml-border-soft)] pt-6 text-[12px] text-[color:var(--text-muted)] sm:flex-row">
+          <span>Built for live teaching of custom HTML simulations.</span>
+          <span className="font-mono tracking-wider">v3 · math-live</span>
+        </footer>
       </div>
     </div>
   );
