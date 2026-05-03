@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useRef, useCallback, useMemo } from "react";
+import { createPortal } from "react-dom";
 import { useParams, useNavigate, useSearchParams } from "react-router-dom";
 import { io, Socket } from "socket.io-client";
 import { injectedSyncScript } from "../lib/syncScript";
@@ -1246,122 +1247,110 @@ export default function Room() {
           </div>
 
           {/* Invite */}
-          <div className="relative">
-            <button
-              ref={inviteButtonRef}
-              onClick={toggleShareMenu}
-              className={linkCopied ? 'btn-accent' : 'btn'}
-              style={{ height: '32px', padding: '0 12px', fontSize: '12.5px' }}>
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71"/>
-                <path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71"/>
-              </svg>
-              {linkCopied ? 'Copied!' : 'Invite'}
-            </button>
-            {showShareMenu && (
-              <>
-                <div className="fixed inset-0 z-40" onClick={() => setShowShareMenu(false)} />
-                <div
-                  className="fixed z-[300]"
-                  style={{ top: shareMenuPos.top, right: shareMenuPos.right, width: shareMenuPos.width }}
-                >
-                  <div
-                    className="animate-slide-down w-full"
-                    onClick={(e) => e.stopPropagation()}
-                    style={{
-                      background: '#FFFFFF',
-                      borderRadius: 16,
-                      border: '1px solid rgba(15,23,42,0.10)',
-                      boxShadow: '0 22px 60px -24px rgba(15,23,42,0.38), 0 0 0 1px rgba(15,23,42,0.04)',
-                      padding: 16,
-                      color: '#0F172A',
-                    }}
+          <button
+            ref={inviteButtonRef}
+            onClick={toggleShareMenu}
+            className={`ml-btn ml-btn-sm ${linkCopied ? 'ml-btn-success' : 'ml-btn-secondary'}`}
+            aria-haspopup="dialog"
+            aria-expanded={showShareMenu}>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71"/>
+              <path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71"/>
+            </svg>
+            {linkCopied ? 'Copied' : 'Invite'}
+          </button>
+          {showShareMenu && createPortal(
+            <div className="ml-share-overlay" role="presentation">
+              <div className="ml-share-backdrop" onClick={() => setShowShareMenu(false)} />
+              <div
+                role="dialog"
+                aria-label="Invite students"
+                className="ml-share-popover ml-surface-elevated animate-slide-down"
+                style={{ top: shareMenuPos.top, right: shareMenuPos.right, width: shareMenuPos.width }}
+                onClick={(e) => e.stopPropagation()}
+              >
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <div className="ml-eyebrow">Invite</div>
+                    <div className="ml-headline mt-1" style={{ fontSize: 18 }}>Share this room</div>
+                    <p className="ml-caption mt-1">Copy the student link, or share the room code.</p>
+                  </div>
+                  <button
+                    onClick={() => setShowShareMenu(false)}
+                    aria-label="Close invite dialog"
+                    className="ml-icon-btn ml-icon-btn-sm"
                   >
-                    <div className="flex items-start justify-between gap-4 mb-3">
-                      <div>
-                        <div className="text-[11px] font-bold" style={{ color: '#64748B', letterSpacing: '0.06em', textTransform: 'uppercase' }}>Invite students</div>
-                        <div className="mt-1 text-[16px] font-semibold" style={{ color: '#0F172A' }}>Share this room</div>
-                        <p className="mt-1 text-[12px]" style={{ color: '#64748B', lineHeight: 1.45 }}>
-                          Copy the student link or share the room code manually.
-                        </p>
-                      </div>
-                      <button
-                        onClick={() => setShowShareMenu(false)}
-                        aria-label="Close invite dialog"
-                        style={{ border: 'none', background: '#F1F5F9', color: '#475569', borderRadius: 10, width: 32, height: 32, cursor: 'pointer', fontWeight: 800, flexShrink: 0 }}
-                      >
-                        x
-                      </button>
-                    </div>
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M18 6L6 18M6 6l12 12"/>
+                    </svg>
+                  </button>
+                </div>
 
-                    <div className="grid gap-3 sm:grid-cols-[1.35fr_0.8fr]">
-                      <div>
-                        <label className="block text-[11px] font-semibold mb-1.5" style={{ color: '#475569' }}>
-                          Student link
-                        </label>
-                        <input
-                          readOnly
-                          value={`${window.location.origin}/live/${roomId}`}
-                          onFocus={(e) => e.currentTarget.select()}
-                          className="input-field"
-                          style={{ fontSize: '12.5px', padding: '10px 11px', color: '#0F172A', background: '#F8FAFC', fontFamily: "'JetBrains Mono', monospace" }}
-                        />
-                      </div>
-
-                      <div>
-                        <label className="block text-[11px] font-semibold mb-1.5" style={{ color: '#475569' }}>
-                          Room code
-                        </label>
-                        <input
-                          readOnly
-                          value={roomId || ''}
-                          onFocus={(e) => e.currentTarget.select()}
-                          className="input-field"
-                          style={{ fontSize: '12.5px', padding: '10px 11px', color: '#0F172A', background: '#F8FAFC', fontFamily: "'JetBrains Mono', monospace", letterSpacing: '0.08em' }}
-                        />
-                      </div>
-                    </div>
-
-                    <div className="mt-3">
-                      <label className="block text-[11px] font-semibold mb-1.5" style={{ color: '#475569' }}>
-                        Room passcode <span style={{ color: '#94A3B8', fontWeight: 400 }}>(optional)</span>
-                      </label>
-                      <input
-                        type="text"
-                        placeholder="e.g. math123"
-                        value={roomPassword}
-                        onChange={(e) => saveRoomPassword(e.target.value)}
-                        className="input-field"
-                        style={{ fontSize: '12.5px', padding: '10px 11px', color: '#0F172A', background: '#FFFFFF' }}
-                      />
-                    </div>
-
-                    <div className="mt-3 flex flex-col gap-2 sm:flex-row">
-                      <button
-                        onClick={copyStudentLink}
-                        className="btn-primary flex-1 justify-center"
-                        style={{ height: '38px', fontSize: '12.5px', borderRadius: '10px', gap: '6px' }}
-                      >
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                          <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/>
-                        </svg>
-                        {roomPassword ? 'Copy Link + Passcode' : 'Copy Link'}
-                      </button>
-                      <a
-                        href={`${window.location.origin}/live/${roomId}`}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="btn-secondary flex-1 justify-center"
-                        style={{ height: '38px', fontSize: '12.5px', borderRadius: '10px', textDecoration: 'none' }}
-                      >
-                        Open Student View
-                      </a>
-                    </div>
+                <div className="mt-4 grid gap-3 sm:grid-cols-[1.35fr_0.8fr]">
+                  <div>
+                    <label className="ml-field-label" htmlFor="invite-link">Student link</label>
+                    <input
+                      id="invite-link"
+                      readOnly
+                      value={`${window.location.origin}/live/${roomId}`}
+                      onFocus={(e) => e.currentTarget.select()}
+                      onClick={(e) => e.currentTarget.select()}
+                      className="ml-input"
+                      style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 12.5 }}
+                    />
+                  </div>
+                  <div>
+                    <label className="ml-field-label" htmlFor="invite-code">Room code</label>
+                    <input
+                      id="invite-code"
+                      readOnly
+                      value={roomId || ''}
+                      onFocus={(e) => e.currentTarget.select()}
+                      onClick={(e) => e.currentTarget.select()}
+                      className="ml-input ml-input-mono"
+                      style={{ letterSpacing: '0.12em' }}
+                    />
                   </div>
                 </div>
-              </>
-            )}
-          </div>
+
+                <div className="mt-3">
+                  <label className="ml-field-label" htmlFor="invite-pass">
+                    Passcode <span style={{ fontWeight: 400, textTransform: 'none', letterSpacing: 0, color: 'var(--text-muted)' }}>(optional)</span>
+                  </label>
+                  <input
+                    id="invite-pass"
+                    type="text"
+                    placeholder="e.g. math123"
+                    value={roomPassword}
+                    onChange={(e) => saveRoomPassword(e.target.value)}
+                    className="ml-input"
+                  />
+                </div>
+
+                <div className="mt-4 flex flex-col gap-2 sm:flex-row">
+                  <button onClick={copyStudentLink} className="ml-btn ml-btn-primary ml-btn-block sm:flex-1">
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/>
+                    </svg>
+                    {roomPassword ? 'Copy link + passcode' : 'Copy link'}
+                  </button>
+                  <a
+                    href={`${window.location.origin}/live/${roomId}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="ml-btn ml-btn-secondary ml-btn-block sm:flex-1"
+                    style={{ textDecoration: 'none' }}
+                  >
+                    Open student view
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      <path d="M7 17L17 7M9 7h8v8"/>
+                    </svg>
+                  </a>
+                </div>
+              </div>
+            </div>,
+            document.body
+          )}
 
           <div className="header-divider hidden sm:block" />
 
