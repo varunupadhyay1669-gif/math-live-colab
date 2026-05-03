@@ -220,6 +220,11 @@ export default function Room() {
   // ── Room Password ──
   const [roomPassword, setRoomPassword] = useState<string>('');
   const [showShareMenu, setShowShareMenu] = useState(false);
+  const [shareMenuPos, setShareMenuPos] = useState<{ top: number; right: number; width: number }>({
+    top: 72,
+    right: 16,
+    width: 420,
+  });
 
   // ── Flag to skip our own run_preview echo ──
   const skipOwnPreviewRef = useRef(false);
@@ -258,6 +263,7 @@ export default function Room() {
   // ── Refs ──
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const inviteButtonRef = useRef<HTMLButtonElement>(null);
   const timerRef = useRef<ReturnType<typeof setInterval>>();
   const reactionIdRef = useRef(0);
 
@@ -274,6 +280,37 @@ export default function Room() {
     if (h > 0) return `${h}:${m.toString().padStart(2, '0')}:${sec.toString().padStart(2, '0')}`;
     return `${m.toString().padStart(2, '0')}:${sec.toString().padStart(2, '0')}`;
   };
+
+  const updateShareMenuPosition = useCallback(() => {
+    if (!inviteButtonRef.current || typeof window === 'undefined') return;
+    const rect = inviteButtonRef.current.getBoundingClientRect();
+    const viewportWidth = window.innerWidth;
+    const panelWidth = Math.min(420, Math.max(280, viewportWidth - 24));
+    const right = Math.max(12, viewportWidth - rect.right);
+    const top = rect.bottom + 10;
+    setShareMenuPos({ top, right, width: panelWidth });
+  }, []);
+
+  const toggleShareMenu = useCallback(() => {
+    if (showShareMenu) {
+      setShowShareMenu(false);
+      return;
+    }
+    updateShareMenuPosition();
+    setShowShareMenu(true);
+  }, [showShareMenu, updateShareMenuPosition]);
+
+  useEffect(() => {
+    if (!showShareMenu) return;
+    updateShareMenuPosition();
+    const handleViewportChange = () => updateShareMenuPosition();
+    window.addEventListener('resize', handleViewportChange);
+    window.addEventListener('scroll', handleViewportChange, true);
+    return () => {
+      window.removeEventListener('resize', handleViewportChange);
+      window.removeEventListener('scroll', handleViewportChange, true);
+    };
+  }, [showShareMenu, updateShareMenuPosition]);
 
   // ── Socket Connection ──
   useEffect(() => {
@@ -1210,7 +1247,9 @@ export default function Room() {
 
           {/* Invite */}
           <div className="relative">
-            <button onClick={() => setShowShareMenu(!showShareMenu)}
+            <button
+              ref={inviteButtonRef}
+              onClick={toggleShareMenu}
               className={linkCopied ? 'btn-accent' : 'btn'}
               style={{ height: '32px', padding: '0 12px', fontSize: '12.5px' }}>
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -1223,11 +1262,11 @@ export default function Room() {
               <>
                 <div className="fixed inset-0 z-40" onClick={() => setShowShareMenu(false)} />
                 <div
-                  className="absolute right-0 top-[calc(100%+10px)] z-[100]"
-                  style={{ width: 'min(420px, calc(100vw - 24px))' }}
+                  className="fixed z-[300]"
+                  style={{ top: shareMenuPos.top, right: shareMenuPos.right, width: shareMenuPos.width }}
                 >
                   <div
-                    className="animate-slide-down w-full max-w-[520px]"
+                    className="animate-slide-down w-full"
                     onClick={(e) => e.stopPropagation()}
                     style={{
                       background: '#FFFFFF',
