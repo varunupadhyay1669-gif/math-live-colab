@@ -25,7 +25,15 @@ interface AnnotationLayerProps {
   // Eraser width — pixel eraser uses this directly; stroke eraser uses it
   // as the click hit radius.
   eraserWidth?: number;
+  // ── Shape tool (Phase 32)
+  // Off by default. When set, takes precedence over draw/laser/eraser.
+  // Click and drag to commit a shape stroke using the current pen colour
+  // and width.
+  shapeTool?: 'off' | 'line' | 'rect' | 'circle' | 'arrow';
 }
+
+type ShapeKind = 'shape-line' | 'shape-rect' | 'shape-circle' | 'shape-arrow';
+type StrokeKind = 'pen' | 'eraser-pixel' | ShapeKind;
 
 interface StrokeData {
   id?: string;
@@ -34,10 +42,15 @@ interface StrokeData {
   width: number;
   time: number;
   transient?: boolean;
-  // 'pen' (default) is a normal coloured stroke. 'eraser-pixel' is rendered
-  // with globalCompositeOperation = 'destination-out' so it visually cuts
-  // a hole in everything beneath it.
-  kind?: 'pen' | 'eraser-pixel';
+  // 'pen' (default) — coloured freehand stroke.
+  // 'eraser-pixel' — rendered with destination-out so it cuts a hole.
+  // 'shape-*' — rendered as a vector shape using the FIRST and LAST entries
+  //   in `points` (no need for the rest):
+  //     shape-line   — straight line
+  //     shape-rect   — rectangle outline (corners = first / last)
+  //     shape-circle — circle (centre = first, edge = last; radius = distance)
+  //     shape-arrow  — line + arrowhead at last
+  kind?: StrokeKind;
 }
 
 const newStrokeId = () => `s-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -61,6 +74,7 @@ export default function AnnotationLayer({
   socket, roomId, drawMode, laserMode, penType, penColor, penWidth,
   iframeRef, interactive, laserPointer,
   eraserMode = 'off', eraserWidth = 18,
+  shapeTool = 'off',
 }: AnnotationLayerProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const currentStrokeRef = useRef<Array<{ x: number; y: number }>>([]);
@@ -73,6 +87,8 @@ export default function AnnotationLayer({
   const localLaserRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
 
   const eraserActive = interactive && eraserMode !== 'off';
+  const shapeActive = interactive && shapeTool !== 'off';
+  const isShapingRef = useRef<false | ShapeKind>(false);
 
   const getCanvasCoords = useCallback((e: React.PointerEvent<HTMLCanvasElement> | React.MouseEvent<HTMLCanvasElement>) => {
     const canvas = canvasRef.current;
@@ -103,6 +119,43 @@ export default function AnnotationLayer({
       return (now - s.time) < 1000;
     });
 
+    // Render a single shape stroke (line / rect / circle / arrow) using the
+    // first and last point in canvas-pixel space.
+    const drawShapeStroke = (kind: ShapeKind, p0: { x: number; y: number }, p1: { x: number; y: number }) => {
+      const x1 = p0.x * w;
+      const y1 = p0.y * h;
+      const x2 = p1.x * w;
+      const y2 = p1.y * h;
+      if (kind === 'shape-line' || kind === 'shape-arrow') {
+        ctx.beginPath();
+        ctx.moveTo(x1, y1);
+        ctx.lineTo(x2, y2);
+        ctx.stroke();
+        if (kind === 'shape-arrow') {
+          const angle = Math.atan2(y2 - y1, x2 - x1);
+          const headLen = Math.max(ctx.lineWidth * 4, 12);
+          const headAngle = Math.PI / 7;
+          ctx.beginPath();
+          ctx.moveTo(x2, y2);
+          ctx.lineTo(x2 - headLen * Math.cos(angle - headAngle), y2 - headLen * Math.sin(angle - headAngle));
+          ctx.moveTo(x2, y2);
+          ctx.lineTo(x2 - headLen * Math.cos(angle + headAngle), y2 - headLen * Math.sin(angle + headAngle));
+          ctx.stroke();
+        }
+      } else if (kind === 'shape-rect') {
+        const x = Math.min(x1, x2);
+        const y = Math.min(y1, y2);
+        const rw = Math.abs(x2 - x1);
+        const rh = Math.abs(y2 - y1);
+        ctx.strokeRect(x, y, rw, rh);
+      } else if (kind === 'shape-circle') {
+        const r = Math.hypot(x2 - x1, y2 - y1);
+        ctx.beginPath();
+        ctx.arc(x1, y1, r, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+    };
+
     strokesRef.current.forEach(stroke => {
       const age = now - stroke.time;
       let alpha = 1;
@@ -119,9 +172,7 @@ export default function AnnotationLayer({
       ctx.save();
       ctx.globalAlpha = alpha;
       if (stroke.kind === 'eraser-pixel') {
-        // Cut a hole in the overlay along this path. The hole reveals the
-        // iframe content underneath; on each redraw it is re-cut so it
-        // reads as permanent.
+        // Cut a hole in the overlay along this path.
         ctx.globalCompositeOperation = 'destination-out';
         ctx.strokeStyle = '#000';
       } else {
@@ -136,20 +187,28 @@ export default function AnnotationLayer({
       } else {
         ctx.shadowBlur = 0;
       }
-      ctx.beginPath();
-      stroke.points.forEach((p, i) => {
-        if (i === 0) ctx.moveTo(p.x * w, p.y * h);
-        else ctx.lineTo(p.x * w, p.y * h);
-      });
-      ctx.stroke();
+      // Shape strokes: use first/last only.
+      if (stroke.kind === 'shape-line' || stroke.kind === 'shape-rect' || stroke.kind === 'shape-circle' || stroke.kind === 'shape-arrow') {
+        if (stroke.points.length >= 2) {
+          drawShapeStroke(stroke.kind, stroke.points[0], stroke.points[stroke.points.length - 1]);
+        }
+      } else {
+        ctx.beginPath();
+        stroke.points.forEach((p, i) => {
+          if (i === 0) ctx.moveTo(p.x * w, p.y * h);
+          else ctx.lineTo(p.x * w, p.y * h);
+        });
+        ctx.stroke();
+      }
       ctx.restore();
     });
 
-    // Current active stroke
+    // Current active stroke (live preview)
     if (currentStrokeRef.current.length > 1) {
       ctx.save();
       ctx.globalAlpha = 1;
       const liveErasePixel = isErasingRef.current === 'pixel';
+      const liveShape = isShapingRef.current;
       if (liveErasePixel) {
         ctx.globalCompositeOperation = 'destination-out';
         ctx.strokeStyle = '#000';
@@ -157,17 +216,23 @@ export default function AnnotationLayer({
       } else {
         ctx.strokeStyle = penColor;
         ctx.lineWidth = penWidth;
-        ctx.shadowColor = penColor;
-        ctx.shadowBlur = 14;
+        if (!liveShape) {
+          ctx.shadowColor = penColor;
+          ctx.shadowBlur = 14;
+        }
       }
       ctx.lineCap = 'round';
       ctx.lineJoin = 'round';
-      ctx.beginPath();
-      currentStrokeRef.current.forEach((p, i) => {
-        if (i === 0) ctx.moveTo(p.x * w, p.y * h);
-        else ctx.lineTo(p.x * w, p.y * h);
-      });
-      ctx.stroke();
+      if (liveShape) {
+        drawShapeStroke(liveShape, currentStrokeRef.current[0], currentStrokeRef.current[currentStrokeRef.current.length - 1]);
+      } else {
+        ctx.beginPath();
+        currentStrokeRef.current.forEach((p, i) => {
+          if (i === 0) ctx.moveTo(p.x * w, p.y * h);
+          else ctx.lineTo(p.x * w, p.y * h);
+        });
+        ctx.stroke();
+      }
       ctx.restore();
     }
   }, [penColor, penWidth, eraserWidth]);
@@ -260,6 +325,15 @@ export default function AnnotationLayer({
   const startDraw = (e: React.PointerEvent<HTMLCanvasElement>) => {
     if (!interactive) return;
 
+    // Shape branch (takes precedence over draw / laser / eraser).
+    if (shapeTool !== 'off') {
+      try { (e.currentTarget as HTMLCanvasElement).setPointerCapture(e.pointerId); } catch {}
+      const pt = getCanvasCoords(e);
+      isShapingRef.current = (`shape-${shapeTool}` as ShapeKind);
+      currentStrokeRef.current = [pt, pt];
+      return;
+    }
+
     // Eraser branch (takes precedence over the pen / laser modes)
     if (eraserMode !== 'off') {
       try { (e.currentTarget as HTMLCanvasElement).setPointerCapture(e.pointerId); } catch {}
@@ -288,6 +362,13 @@ export default function AnnotationLayer({
   };
 
   const moveDraw = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    if (isShapingRef.current) {
+      // Shape draft — keep only [start, current] so render uses first/last only.
+      const pt = getCanvasCoords(e);
+      currentStrokeRef.current = [currentStrokeRef.current[0], pt];
+      renderStrokes();
+      return;
+    }
     if (isErasingRef.current === 'stroke') {
       const pt = getCanvasCoords(e);
       eraseStrokeAt(pt.x, pt.y);
@@ -308,6 +389,27 @@ export default function AnnotationLayer({
   const endDraw = (e?: React.PointerEvent<HTMLCanvasElement>) => {
     if (e) {
       try { (e.currentTarget as HTMLCanvasElement).releasePointerCapture(e.pointerId); } catch {}
+    }
+    if (isShapingRef.current) {
+      const kind: ShapeKind = isShapingRef.current;
+      isShapingRef.current = false;
+      const pts = currentStrokeRef.current;
+      // Reject zero-length shapes (a stray click).
+      if (pts.length >= 2 && socket) {
+        const a = pts[0];
+        const b = pts[pts.length - 1];
+        const dx = Math.abs(b.x - a.x);
+        const dy = Math.abs(b.y - a.y);
+        if (dx > 0.005 || dy > 0.005) {
+          const id = newStrokeId();
+          const stroke: StrokeData = { id, points: [a, b], color: penColor, width: penWidth, time: Date.now(), kind };
+          strokesRef.current.push(stroke);
+          socket.emit('draw_stroke', { roomId, id, points: [a, b], color: penColor, width: penWidth, kind });
+        }
+      }
+      currentStrokeRef.current = [];
+      renderStrokes();
+      return;
     }
     if (isErasingRef.current === 'pixel') {
       // Commit pixel-eraser stroke (and broadcast it)
@@ -371,9 +473,9 @@ export default function AnnotationLayer({
         className="absolute inset-0 w-full h-full"
         style={{
           cursor: interactive
-            ? (eraserActive ? 'cell' : drawMode ? 'crosshair' : laserMode ? 'none' : 'default')
+            ? (shapeActive ? 'crosshair' : eraserActive ? 'cell' : drawMode ? 'crosshair' : laserMode ? 'none' : 'default')
             : 'default',
-          pointerEvents: interactive && (drawMode || laserMode || eraserActive) ? 'auto' : 'none',
+          pointerEvents: interactive && (drawMode || laserMode || eraserActive || shapeActive) ? 'auto' : 'none',
           touchAction: 'none',
           zIndex: 10,
         }}
