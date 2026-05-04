@@ -15,6 +15,8 @@ interface WhiteboardProps {
     strokes?: DrawStroke[];
     shapes?: BoardShape[];
     view?: BoardView | null;
+    gridMode?: GridMode;
+    instruments?: BoardInstrument[];
   } | null;
   // Whiteboard mutual sync (Miro/Canva "shared book" model). When true on
   // both sides, every pan/zoom is mirrored to the other side in real time.
@@ -35,6 +37,35 @@ interface BoardShape {
   x2: number; y2: number;
   color: string;
   width: number;
+  // Compass tool draws circles with a tiny center dot so the construction
+  // point is visible (real compass behaviour). Plain circle tool leaves it
+  // unset / false.
+  centerMark?: boolean;
+}
+
+// Background grid style. 'blank' = no grid (plain white). 'grid' = light
+// minor grid lines (notebook-paper style — the original behaviour). 'graph'
+// = minor + major lines + numbered axes through (0,0), like graph paper.
+type GridMode = 'blank' | 'grid' | 'graph';
+
+// Geometry instruments — ruler / protractor. Persistent draggable widgets
+// that live in board-space (rotate/zoom with the canvas). Stored separately
+// from shapes/strokes because they're interactive overlays, not committed
+// drawings.
+type InstrumentKind = 'ruler' | 'protractor';
+interface BoardInstrument {
+  id: string;
+  kind: InstrumentKind;
+  // Board-space anchor.
+  //   ruler:      x,y = the LEFT tip of the ruler body.
+  //   protractor: x,y = the CENTER of the semicircle.
+  x: number;
+  y: number;
+  rotation: number; // degrees, clockwise
+  // ruler only: length in board units (the right tip controls this)
+  length?: number;
+  // protractor only: radius in board units
+  radius?: number;
 }
 
 interface DrawPoint {
@@ -86,10 +117,25 @@ export interface WhiteboardRef {
   getCanvas: () => HTMLCanvasElement | null;
 }
 
-type BoardTool = 'select' | 'pen' | 'highlighter' | 'eraser' | 'pan' | 'line' | 'rect' | 'circle' | 'arrow';
+type BoardTool = 'select' | 'pen' | 'highlighter' | 'eraser' | 'pan' | 'line' | 'rect' | 'circle' | 'arrow' | 'compass' | 'ruler' | 'protractor';
 
-const SHAPE_TOOLS: BoardTool[] = ['line', 'rect', 'circle', 'arrow'];
-const isShapeTool = (t: BoardTool): t is ShapeKind => SHAPE_TOOLS.includes(t);
+// Compass produces a regular circle shape but the gesture is "click + drag
+// from the centre" (which the existing circle tool already does — compass
+// just additionally tags the resulting shape with centerMark so the centre
+// point is visible). Ruler / protractor are spawn-toggle instruments and
+// don't go through the shape-create dispatch.
+const SHAPE_TOOLS: BoardTool[] = ['line', 'rect', 'circle', 'arrow', 'compass'];
+const isShapeTool = (t: BoardTool): boolean => SHAPE_TOOLS.includes(t);
+const shapeKindForTool = (t: BoardTool): ShapeKind | null => {
+  if (t === 'compass') return 'circle';
+  if (t === 'line' || t === 'rect' || t === 'circle' || t === 'arrow') return t;
+  return null;
+};
+
+// Default sizes for spawned instruments (board units).
+const RULER_DEFAULT_LENGTH = 600;
+const RULER_BODY_THICKNESS = 56; // height of the ruler body
+const PROTRACTOR_DEFAULT_RADIUS = 240;
 
 const COLORS = ['#111827', '#EF4444', '#10B981', '#2563EB', '#F59E0B', '#7C3AED', '#FFFFFF'];
 const WIDTHS = [2, 4, 6, 10, 16, 24];
@@ -177,7 +223,7 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
     const marqueeRef = useRef<{ x1: number; y1: number; x2: number; y2: number } | null>(null);
     type ObjectHandle = 'tl' | 'tr' | 'bl' | 'br' | 'rotate';
     const dragRef = useRef<{
-      mode: 'draw' | 'erase' | 'pan' | 'object' | 'object-resize' | 'object-rotate' | 'shape-create' | 'shape-move' | 'marquee' | null;
+      mode: 'draw' | 'erase' | 'pan' | 'object' | 'object-resize' | 'object-rotate' | 'shape-create' | 'shape-move' | 'marquee' | 'instrument-translate' | 'instrument-handle' | null;
       pointerId: number;
       startClientX: number;
       startClientY: number;
@@ -190,6 +236,8 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
       handle?: ObjectHandle;
       shapeId?: string;
       shapeStart?: { x1: number; y1: number; x2: number; y2: number };
+      instrumentId?: string;
+      instrumentStart?: BoardInstrument;
     } | null>(null);
 
     const [objects, setObjects] = useState<BoardImageObject[]>([]);
@@ -216,6 +264,12 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
     const [width, setWidth] = useState(4);
     const [view, setView] = useState<BoardView>({ boardScale: 1, boardOffsetX: 0, boardOffsetY: 0 });
     const [spacePan, setSpacePan] = useState(false);
+    // Background grid style — synced across the room (it's a board-level
+    // setting, like view). Default 'grid' to match the previous behaviour.
+    const [gridMode, setGridMode] = useState<GridMode>('grid');
+    // Geometry instruments (ruler / protractor) — synced across the room.
+    const [instruments, setInstruments] = useState<BoardInstrument[]>([]);
+    const instrumentsRef = useRef<BoardInstrument[]>([]);
 
     const selectedObject = selectedObjectId ? objects.find(obj => obj.id === selectedObjectId) : null;
     const canEdit = interactive;
@@ -235,6 +289,10 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
     useEffect(() => {
       marqueeRef.current = marquee;
     }, [marquee]);
+
+    useEffect(() => {
+      instrumentsRef.current = instruments;
+    }, [instruments]);
 
     // Highlighter fade tick: while any highlighter stroke exists, drive a
     // ~12fps timer that re-renders (so opacity recomputes) and prunes any
@@ -496,6 +554,62 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
       if (!whiteboardSyncEnabled) return;
       socket.emit('whiteboard_set_view', { roomId, view: nextView });
     }, [socket, roomId, whiteboardSyncEnabled]);
+
+    // ── Grid mode + instrument mutators (teacher-only sync) ──
+    const setGridModeSynced = useCallback((next: GridMode) => {
+      setGridMode(next);
+      if (socket && isTeacher) socket.emit('whiteboard_set_grid_mode', { roomId, gridMode: next });
+    }, [socket, isTeacher, roomId]);
+
+    const addInstrument = useCallback((inst: BoardInstrument) => {
+      setInstruments(prev => [...prev, inst]);
+      if (socket && isTeacher) socket.emit('whiteboard_add_instrument', { roomId, instrument: inst });
+    }, [socket, isTeacher, roomId]);
+
+    const updateInstrument = useCallback((inst: BoardInstrument, broadcast = true) => {
+      setInstruments(prev => prev.map(i => i.id === inst.id ? inst : i));
+      if (broadcast && socket && isTeacher) socket.emit('whiteboard_update_instrument', { roomId, instrument: inst });
+    }, [socket, isTeacher, roomId]);
+
+    const removeInstrument = useCallback((id: string) => {
+      setInstruments(prev => prev.filter(i => i.id !== id));
+      if (socket && isTeacher) socket.emit('whiteboard_remove_instrument', { roomId, instrumentId: id });
+    }, [socket, isTeacher, roomId]);
+
+    // Toggle helper for the toolbar buttons. Click "Ruler" → if no ruler is
+    // on the board, spawn one near the centre of the visible viewport. Click
+    // again → remove the existing ruler. Same pattern for protractor.
+    const toggleInstrument = useCallback((kind: InstrumentKind) => {
+      const existing = instrumentsRef.current.find(i => i.kind === kind);
+      if (existing) {
+        removeInstrument(existing.id);
+        return;
+      }
+      const container = containerRef.current;
+      if (!container) return;
+      const rect = container.getBoundingClientRect();
+      // Compute board-space centre of the current viewport.
+      const cx = (rect.width / 2 - view.boardOffsetX) / view.boardScale;
+      const cy = (rect.height / 2 - view.boardOffsetY) / view.boardScale;
+      const inst: BoardInstrument = kind === 'ruler'
+        ? {
+            id: newId('ruler'),
+            kind: 'ruler',
+            x: cx - RULER_DEFAULT_LENGTH / 2,
+            y: cy,
+            rotation: 0,
+            length: RULER_DEFAULT_LENGTH,
+          }
+        : {
+            id: newId('prot'),
+            kind: 'protractor',
+            x: cx,
+            y: cy + PROTRACTOR_DEFAULT_RADIUS / 2,
+            rotation: 0,
+            radius: PROTRACTOR_DEFAULT_RADIUS,
+          };
+      addInstrument(inst);
+    }, [view, addInstrument, removeInstrument]);
 
     const screenToBoard = useCallback((clientX: number, clientY: number) => {
       const rect = canvasRef.current?.getBoundingClientRect();
@@ -801,6 +915,80 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
       };
     }, [view.boardScale]);
 
+    // ── Instrument geometry helpers ──
+    // For ruler/protractor: where their interaction handles sit in board-space,
+    // already accounting for rotation. Used for hit-testing AND for drawing
+    // the handles inside redrawCanvas.
+    const getInstrumentPose = useCallback((inst: BoardInstrument) => {
+      const cosA = Math.cos((inst.rotation * Math.PI) / 180);
+      const sinA = Math.sin((inst.rotation * Math.PI) / 180);
+      if (inst.kind === 'ruler') {
+        const len = inst.length ?? RULER_DEFAULT_LENGTH;
+        // Left tip is the anchor (x,y). Body extends from local (0..len) along
+        // the rotation direction, with thickness centred on the rotation axis.
+        const rightTip = { x: inst.x + cosA * len, y: inst.y + sinA * len };
+        return {
+          length: len,
+          thickness: RULER_BODY_THICKNESS,
+          left: { x: inst.x, y: inst.y },
+          right: rightTip,
+        };
+      }
+      const r = inst.radius ?? PROTRACTOR_DEFAULT_RADIUS;
+      // Protractor: x,y is the centre. The flat bottom edge of the semicircle
+      // lies along the rotation axis, with 0° at the right end of the diameter.
+      // The rotate handle sits on the 0° tip.
+      const handle = { x: inst.x + cosA * r, y: inst.y + sinA * r };
+      return { radius: r, center: { x: inst.x, y: inst.y }, handle };
+    }, []);
+
+    // Hit test: returns 'body' if the pointer is over the instrument's grab
+    // area, 'handle' if over the rotation/length handle, or null.
+    const instrumentHit = useCallback((point: DrawPoint, inst: BoardInstrument): 'body' | 'handle' | null => {
+      const pose = getInstrumentPose(inst);
+      const handleR = 16 / view.boardScale;
+      if (inst.kind === 'ruler' && 'right' in pose) {
+        const distToHandle = Math.hypot(point.x - pose.right.x, point.y - pose.right.y);
+        if (distToHandle <= handleR) return 'handle';
+        // Body hit: rotate the test point into the ruler's local frame and
+        // check if it sits within the body rectangle.
+        const cosA = Math.cos((-inst.rotation * Math.PI) / 180);
+        const sinA = Math.sin((-inst.rotation * Math.PI) / 180);
+        const dx = point.x - inst.x;
+        const dy = point.y - inst.y;
+        const localX = dx * cosA - dy * sinA;
+        const localY = dx * sinA + dy * cosA;
+        if (localX >= 0 && localX <= pose.length && Math.abs(localY) <= pose.thickness / 2) return 'body';
+        return null;
+      }
+      if (inst.kind === 'protractor' && 'handle' in pose) {
+        const distToHandle = Math.hypot(point.x - pose.handle.x, point.y - pose.handle.y);
+        if (distToHandle <= handleR) return 'handle';
+        // Body hit: inside the semicircle (within radius, on the upper half
+        // relative to the rotation axis — local y <= 0).
+        const cosA = Math.cos((-inst.rotation * Math.PI) / 180);
+        const sinA = Math.sin((-inst.rotation * Math.PI) / 180);
+        const dx = point.x - inst.x;
+        const dy = point.y - inst.y;
+        const localX = dx * cosA - dy * sinA;
+        const localY = dx * sinA + dy * cosA;
+        const dist = Math.hypot(localX, localY);
+        if (dist <= pose.radius && localY <= 0.0001) return 'body';
+        return null;
+      }
+      return null;
+    }, [getInstrumentPose, view.boardScale]);
+
+    const findInstrumentAt = useCallback((point: DrawPoint): { inst: BoardInstrument; hit: 'body' | 'handle' } | null => {
+      // Iterate newest-last (back-to-front), prefer handle hits over body hits.
+      for (let i = instrumentsRef.current.length - 1; i >= 0; i--) {
+        const inst = instrumentsRef.current[i];
+        const hit = instrumentHit(point, inst);
+        if (hit) return { inst, hit };
+      }
+      return null;
+    }, [instrumentHit]);
+
     const redrawCanvas = useCallback(() => {
       const canvas = canvasRef.current;
       const container = containerRef.current;
@@ -831,23 +1019,110 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
       const visMaxX = (widthPx - view.boardOffsetX) / view.boardScale;
       const visMinY = -view.boardOffsetY / view.boardScale;
       const visMaxY = (heightPx - view.boardOffsetY) / view.boardScale;
-      ctx.strokeStyle = '#e5e7eb';
-      ctx.lineWidth = 1 / view.boardScale;
-      const gridStartX = Math.floor(visMinX / GRID_STEP) * GRID_STEP;
-      const gridEndX   = Math.ceil(visMaxX  / GRID_STEP) * GRID_STEP;
-      const gridStartY = Math.floor(visMinY / GRID_STEP) * GRID_STEP;
-      const gridEndY   = Math.ceil(visMaxY  / GRID_STEP) * GRID_STEP;
-      for (let x = gridStartX; x <= gridEndX; x += GRID_STEP) {
-        ctx.beginPath();
-        ctx.moveTo(x, gridStartY);
-        ctx.lineTo(x, gridEndY);
-        ctx.stroke();
-      }
-      for (let y = gridStartY; y <= gridEndY; y += GRID_STEP) {
-        ctx.beginPath();
-        ctx.moveTo(gridStartX, y);
-        ctx.lineTo(gridEndX, y);
-        ctx.stroke();
+
+      // Background grid — three modes:
+      //   blank → no grid, just the white fill above.
+      //   grid  → a single layer of light minor lines (the original look).
+      //   graph → minor lines + heavier major lines every 5 steps + bold axes
+      //           through (0,0) with numeric labels — graph paper for math.
+      if (gridMode !== 'blank') {
+        const minorStep = GRID_STEP;
+        const majorEvery = 5; // every 5 minor lines = a major line
+        const majorStep = minorStep * majorEvery;
+        const gridStartX = Math.floor(visMinX / minorStep) * minorStep;
+        const gridEndX   = Math.ceil(visMaxX  / minorStep) * minorStep;
+        const gridStartY = Math.floor(visMinY / minorStep) * minorStep;
+        const gridEndY   = Math.ceil(visMaxY  / minorStep) * minorStep;
+
+        // Minor lines (both modes use these, lighter colour for graph)
+        ctx.strokeStyle = gridMode === 'graph' ? '#eef2f7' : '#e5e7eb';
+        ctx.lineWidth = 1 / view.boardScale;
+        for (let x = gridStartX; x <= gridEndX; x += minorStep) {
+          ctx.beginPath();
+          ctx.moveTo(x, gridStartY);
+          ctx.lineTo(x, gridEndY);
+          ctx.stroke();
+        }
+        for (let y = gridStartY; y <= gridEndY; y += minorStep) {
+          ctx.beginPath();
+          ctx.moveTo(gridStartX, y);
+          ctx.lineTo(gridEndX, y);
+          ctx.stroke();
+        }
+
+        if (gridMode === 'graph') {
+          // Major lines every `majorEvery` steps — slightly darker.
+          ctx.strokeStyle = '#cbd5e1';
+          ctx.lineWidth = 1.2 / view.boardScale;
+          const majorStartX = Math.floor(visMinX / majorStep) * majorStep;
+          const majorEndX   = Math.ceil(visMaxX  / majorStep) * majorStep;
+          const majorStartY = Math.floor(visMinY / majorStep) * majorStep;
+          const majorEndY   = Math.ceil(visMaxY  / majorStep) * majorStep;
+          for (let x = majorStartX; x <= majorEndX; x += majorStep) {
+            ctx.beginPath();
+            ctx.moveTo(x, gridStartY);
+            ctx.lineTo(x, gridEndY);
+            ctx.stroke();
+          }
+          for (let y = majorStartY; y <= majorEndY; y += majorStep) {
+            ctx.beginPath();
+            ctx.moveTo(gridStartX, y);
+            ctx.lineTo(gridEndX, y);
+            ctx.stroke();
+          }
+          // Axes through the origin — bold so they read as the x/y axes.
+          ctx.strokeStyle = '#475569';
+          ctx.lineWidth = 1.6 / view.boardScale;
+          if (visMinX <= 0 && visMaxX >= 0) {
+            ctx.beginPath();
+            ctx.moveTo(0, gridStartY);
+            ctx.lineTo(0, gridEndY);
+            ctx.stroke();
+          }
+          if (visMinY <= 0 && visMaxY >= 0) {
+            ctx.beginPath();
+            ctx.moveTo(gridStartX, 0);
+            ctx.lineTo(gridEndX, 0);
+            ctx.stroke();
+          }
+          // Numeric labels on major lines along the axes. Each major step is
+          // displayed as the unit count (1, 2, 3…) — keeps numbers small and
+          // readable. Labels render in screen-space-stable size.
+          ctx.fillStyle = '#475569';
+          const labelPx = 11;
+          ctx.font = `${labelPx / view.boardScale}px ui-sans-serif, system-ui, sans-serif`;
+          ctx.textBaseline = 'top';
+          // X-axis labels (along y=0)
+          if (visMinY <= 0 && visMaxY >= 0) {
+            ctx.textAlign = 'center';
+            const labelStartX = Math.floor(visMinX / majorStep) * majorStep;
+            const labelEndX = Math.ceil(visMaxX / majorStep) * majorStep;
+            for (let x = labelStartX; x <= labelEndX; x += majorStep) {
+              if (x === 0) continue;
+              const unit = Math.round(x / majorStep);
+              ctx.fillText(String(unit), x, 4 / view.boardScale);
+            }
+          }
+          // Y-axis labels (along x=0). Math convention: positive y is UP, so
+          // negate the board y for display.
+          if (visMinX <= 0 && visMaxX >= 0) {
+            ctx.textAlign = 'right';
+            ctx.textBaseline = 'middle';
+            const labelStartY = Math.floor(visMinY / majorStep) * majorStep;
+            const labelEndY = Math.ceil(visMaxY / majorStep) * majorStep;
+            for (let y = labelStartY; y <= labelEndY; y += majorStep) {
+              if (y === 0) continue;
+              const unit = Math.round(-y / majorStep);
+              ctx.fillText(String(unit), -4 / view.boardScale, y);
+            }
+            // The "0" at the origin
+            if (visMinY <= 0 && visMaxY >= 0) {
+              ctx.textAlign = 'right';
+              ctx.textBaseline = 'top';
+              ctx.fillText('0', -4 / view.boardScale, 4 / view.boardScale);
+            }
+          }
+        }
       }
 
       [...objects].sort((a, b) => a.zIndex - b.zIndex).forEach(object => {
@@ -929,6 +1204,16 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
           ctx.beginPath();
           ctx.arc(shape.x1, shape.y1, r, 0, Math.PI * 2);
           ctx.stroke();
+          // Compass-drawn circles get a small filled dot at the centre point
+          // — matches what a real compass leaves on paper.
+          if (shape.centerMark) {
+            ctx.save();
+            ctx.fillStyle = shape.color;
+            ctx.beginPath();
+            ctx.arc(shape.x1, shape.y1, Math.max(shape.width * 0.9, 3 / view.boardScale), 0, Math.PI * 2);
+            ctx.fill();
+            ctx.restore();
+          }
         } else if (shape.kind === 'line' || shape.kind === 'arrow') {
           ctx.beginPath();
           ctx.moveTo(shape.x1, shape.y1);
@@ -1069,8 +1354,141 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
         ctx.restore();
       }
 
+      // ── Geometry instruments (ruler / protractor) ──
+      // Drawn last so they overlay everything. Both are translucent so the
+      // user can see what's underneath while measuring.
+      instruments.forEach(inst => {
+        if (inst.kind === 'ruler') {
+          const len = inst.length ?? RULER_DEFAULT_LENGTH;
+          ctx.save();
+          ctx.translate(inst.x, inst.y);
+          ctx.rotate((inst.rotation * Math.PI) / 180);
+          // Body — soft warm wood-coloured rectangle with a darker border.
+          const t = RULER_BODY_THICKNESS;
+          ctx.fillStyle = 'rgba(254, 243, 199, 0.85)'; // amber-50 / 85%
+          ctx.strokeStyle = '#92400E';                 // amber-800
+          ctx.lineWidth = 1.4 / view.boardScale;
+          ctx.fillRect(0, -t / 2, len, t);
+          ctx.strokeRect(0, -t / 2, len, t);
+          // Tick marks along the top edge — every 10 board units, taller
+          // every 50 board units, even taller every 100.
+          ctx.strokeStyle = '#78350F';
+          ctx.lineWidth = 1 / view.boardScale;
+          ctx.fillStyle = '#78350F';
+          const labelPx = 10 / view.boardScale;
+          ctx.font = `${labelPx}px ui-sans-serif, system-ui, sans-serif`;
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'top';
+          for (let unit = 0; unit <= len; unit += 10) {
+            const tickH = unit % 100 === 0 ? 12 : unit % 50 === 0 ? 8 : 4;
+            const tickPx = tickH / view.boardScale;
+            ctx.beginPath();
+            ctx.moveTo(unit, -t / 2);
+            ctx.lineTo(unit, -t / 2 + tickPx);
+            ctx.stroke();
+            if (unit % 100 === 0 && unit !== 0 && unit !== len) {
+              // Numeric label below the tick
+              ctx.fillText(String(unit / 10), unit, -t / 2 + tickPx + 1 / view.boardScale);
+            }
+          }
+          // Length readout near the right tip.
+          ctx.fillStyle = '#0F172A';
+          ctx.font = `bold ${12 / view.boardScale}px ui-sans-serif, system-ui, sans-serif`;
+          ctx.textAlign = 'right';
+          ctx.textBaseline = 'bottom';
+          ctx.fillText(`${Math.round(len)} u`, len - 4 / view.boardScale, -t / 2 - 4 / view.boardScale);
+          ctx.restore();
+          // Right-tip handle (in board space, post-rotation) — used to
+          // simultaneously rotate and resize. Drawn outside the rotated
+          // transform so the circle stays circular regardless of rotation.
+          const pose = getInstrumentPose(inst);
+          if ('right' in pose) {
+            ctx.save();
+            ctx.fillStyle = '#ffffff';
+            ctx.strokeStyle = '#92400E';
+            ctx.lineWidth = 1.6 / view.boardScale;
+            ctx.beginPath();
+            ctx.arc(pose.right.x, pose.right.y, 9 / view.boardScale, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.stroke();
+            ctx.restore();
+          }
+        } else if (inst.kind === 'protractor') {
+          const r = inst.radius ?? PROTRACTOR_DEFAULT_RADIUS;
+          ctx.save();
+          ctx.translate(inst.x, inst.y);
+          ctx.rotate((inst.rotation * Math.PI) / 180);
+          // Translucent semicircle body. The local frame: 0° is along +x,
+          // 180° is along -x, 90° is along -y (the curved side, "up").
+          // Canvas y grows downward, so the visible half is y <= 0.
+          ctx.fillStyle = 'rgba(219, 234, 254, 0.55)'; // blue-100 / 55%
+          ctx.strokeStyle = '#1D4ED8';                 // blue-700
+          ctx.lineWidth = 1.6 / view.boardScale;
+          ctx.beginPath();
+          ctx.arc(0, 0, r, Math.PI, 0, false);
+          ctx.lineTo(-r, 0);
+          ctx.fill();
+          ctx.stroke();
+          // Inner radius line (flat baseline, redundant with arc closure but
+          // makes the diameter visually distinct).
+          ctx.strokeStyle = '#1D4ED8';
+          ctx.lineWidth = 1.2 / view.boardScale;
+          ctx.beginPath();
+          ctx.moveTo(-r, 0);
+          ctx.lineTo(r, 0);
+          ctx.stroke();
+          // Degree ticks every 1°, longer every 5°, longest + numeric every 10°.
+          ctx.strokeStyle = '#1E3A8A';
+          ctx.fillStyle = '#1E3A8A';
+          const protLabelPx = 10 / view.boardScale;
+          ctx.font = `${protLabelPx}px ui-sans-serif, system-ui, sans-serif`;
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          for (let deg = 0; deg <= 180; deg++) {
+            const isMajor = deg % 10 === 0;
+            const isMid = deg % 5 === 0;
+            const tickLen = isMajor ? 14 : isMid ? 9 : 5;
+            const tickLenBoard = tickLen / view.boardScale;
+            // 0° at right (+x), 180° at left (-x). Tick angle from +x going up.
+            const a = -deg * Math.PI / 180; // negative because canvas y is down
+            const innerR = r - tickLenBoard;
+            ctx.lineWidth = (isMajor ? 1.4 : 1) / view.boardScale;
+            ctx.beginPath();
+            ctx.moveTo(innerR * Math.cos(a), innerR * Math.sin(a));
+            ctx.lineTo(r * Math.cos(a), r * Math.sin(a));
+            ctx.stroke();
+            if (isMajor) {
+              const labelR = r - tickLenBoard - 12 / view.boardScale;
+              ctx.fillText(String(deg), labelR * Math.cos(a), labelR * Math.sin(a));
+            }
+          }
+          // Crosshair at the centre — small + showing the rotation point.
+          ctx.strokeStyle = '#1E3A8A';
+          ctx.lineWidth = 1 / view.boardScale;
+          const cross = 6 / view.boardScale;
+          ctx.beginPath();
+          ctx.moveTo(-cross, 0); ctx.lineTo(cross, 0);
+          ctx.moveTo(0, -cross); ctx.lineTo(0, cross);
+          ctx.stroke();
+          ctx.restore();
+          // Rotate handle on the 0° tip (drawn unrotated so it stays circular).
+          const pose = getInstrumentPose(inst);
+          if ('handle' in pose) {
+            ctx.save();
+            ctx.fillStyle = '#ffffff';
+            ctx.strokeStyle = '#1D4ED8';
+            ctx.lineWidth = 1.6 / view.boardScale;
+            ctx.beginPath();
+            ctx.arc(pose.handle.x, pose.handle.y, 9 / view.boardScale, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.stroke();
+            ctx.restore();
+          }
+        }
+      });
+
       ctx.restore();
-    }, [objects, selectedObjectId, selectedStrokeIndex, strokeBounds, strokes, currentStroke, color, width, tool, view, shapes, draftShape, selectedShape, shapeBounds, getObjectHandlePositions, marquee, multiObjectIds, multiShapeIds, multiStrokeIndices, eraserMode]);
+    }, [objects, selectedObjectId, selectedStrokeIndex, strokeBounds, strokes, currentStroke, color, width, tool, view, shapes, draftShape, selectedShape, shapeBounds, getObjectHandlePositions, marquee, multiObjectIds, multiShapeIds, multiStrokeIndices, eraserMode, gridMode, instruments, getInstrumentPose]);
 
     const downloadBoard = useCallback(() => {
       const canvas = canvasRef.current;
@@ -1111,6 +1529,8 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
       setStrokes(normalized);
       setShapes(initialState.shapes || []);
       if (initialState.view) setView(initialState.view);
+      if (initialState.gridMode) setGridMode(initialState.gridMode);
+      if (initialState.instruments) setInstruments(initialState.instruments);
       (initialState.objects || []).forEach(loadImage);
     }, [initialState, loadImage]);
 
@@ -1224,6 +1644,7 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
         setStrokes([]);
         setObjects([]);
         setShapes([]);
+        setInstruments([]);
         setSelectedObjectId(null);
         setSelectedStrokeIndex(null);
         setSelectedShapeId(null);
@@ -1240,6 +1661,22 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
         const toDelete = new Set(data.strokeIndices || []);
         setStrokes(prev => prev.filter((_, index) => !toDelete.has(index)));
       };
+      const handleSetGridMode = (data: { gridMode: GridMode }) => {
+        if (data.gridMode === 'blank' || data.gridMode === 'grid' || data.gridMode === 'graph') {
+          setGridMode(data.gridMode);
+        }
+      };
+      const handleAddInstrument = (data: { instrument: BoardInstrument }) => {
+        if (!data.instrument || !data.instrument.id) return;
+        setInstruments(prev => prev.some(i => i.id === data.instrument.id) ? prev : [...prev, data.instrument]);
+      };
+      const handleUpdateInstrument = (data: { instrument: BoardInstrument }) => {
+        if (!data.instrument || !data.instrument.id) return;
+        setInstruments(prev => prev.map(i => i.id === data.instrument.id ? data.instrument : i));
+      };
+      const handleRemoveInstrument = (data: { instrumentId: string }) => {
+        setInstruments(prev => prev.filter(i => i.id !== data.instrumentId));
+      };
       socket.on('whiteboard_image', handleImage);
       socket.on('whiteboard_add_image', handleAddImage);
       socket.on('whiteboard_update_object', handleUpdateObject);
@@ -1253,6 +1690,10 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
       socket.on('whiteboard_reset', handleReset);
       socket.on('whiteboard_delete_stroke', handleDeleteStroke);
       socket.on('whiteboard_delete_strokes', handleDeleteStrokes);
+      socket.on('whiteboard_set_grid_mode', handleSetGridMode);
+      socket.on('whiteboard_add_instrument', handleAddInstrument);
+      socket.on('whiteboard_update_instrument', handleUpdateInstrument);
+      socket.on('whiteboard_remove_instrument', handleRemoveInstrument);
       return () => {
         socket.off('whiteboard_image', handleImage);
         socket.off('whiteboard_add_image', handleAddImage);
@@ -1267,6 +1708,10 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
         socket.off('whiteboard_reset', handleReset);
         socket.off('whiteboard_delete_stroke', handleDeleteStroke);
         socket.off('whiteboard_delete_strokes', handleDeleteStrokes);
+        socket.off('whiteboard_set_grid_mode', handleSetGridMode);
+        socket.off('whiteboard_add_instrument', handleAddInstrument);
+        socket.off('whiteboard_update_instrument', handleUpdateInstrument);
+        socket.off('whiteboard_remove_instrument', handleRemoveInstrument);
       };
     }, [socket, addImageObject, loadImage]);
 
@@ -1277,6 +1722,32 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
       const shouldPan = tool === 'pan' || spacePan || e.button === 1;
       if (shouldPan) {
         dragRef.current = { mode: 'pan', pointerId: e.pointerId, startClientX: e.clientX, startClientY: e.clientY, startOffsetX: view.boardOffsetX, startOffsetY: view.boardOffsetY };
+        return;
+      }
+
+      // Ruler / protractor tool click — toggle spawn/remove. The instrument
+      // itself is then interactive regardless of the active tool.
+      if (tool === 'ruler' || tool === 'protractor') {
+        toggleInstrument(tool);
+        setTool('select');
+        dragRef.current = null;
+        return;
+      }
+
+      // Instrument hit-test runs BEFORE the regular tool dispatch, so
+      // grabbing the ruler/protractor takes priority over "drawing on top
+      // of it" with whatever tool happens to be active. Handle hits enter
+      // rotate-and-resize mode; body hits enter translate mode.
+      const instHit = findInstrumentAt(point);
+      if (instHit) {
+        dragRef.current = {
+          mode: instHit.hit === 'handle' ? 'instrument-handle' : 'instrument-translate',
+          pointerId: e.pointerId,
+          startClientX: e.clientX, startClientY: e.clientY,
+          startOffsetX: view.boardOffsetX, startOffsetY: view.boardOffsetY,
+          instrumentId: instHit.inst.id,
+          instrumentStart: { ...instHit.inst },
+        };
         return;
       }
       if (tool === 'eraser') {
@@ -1360,7 +1831,16 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
         setSelectedObjectId(null);
         setSelectedStrokeIndex(null);
         setSelectedShapeId(null);
-        const draft: BoardShape = { id: newId('shape'), kind: tool as ShapeKind, x1: point.x, y1: point.y, x2: point.x, y2: point.y, color, width };
+        const kind = shapeKindForTool(tool);
+        if (!kind) return;
+        const draft: BoardShape = {
+          id: newId('shape'),
+          kind,
+          x1: point.x, y1: point.y, x2: point.x, y2: point.y,
+          color, width,
+          // Compass marks the construction-point centre on the resulting circle.
+          ...(tool === 'compass' ? { centerMark: true } : {}),
+        };
         setDraftShape(draft);
         dragRef.current = { mode: 'shape-create', pointerId: e.pointerId, startClientX: e.clientX, startClientY: e.clientY, startOffsetX: view.boardOffsetX, startOffsetY: view.boardOffsetY, shapeId: draft.id };
         return;
@@ -1423,6 +1903,38 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
           x1: start.x1 + dx, y1: start.y1 + dy,
           x2: start.x2 + dx, y2: start.y2 + dy,
         } : s));
+        return;
+      }
+      if (drag.mode === 'instrument-translate' && drag.instrumentId && drag.instrumentStart) {
+        const dx = (e.clientX - drag.startClientX) / view.boardScale;
+        const dy = (e.clientY - drag.startClientY) / view.boardScale;
+        const start = drag.instrumentStart;
+        const next: BoardInstrument = { ...start, x: start.x + dx, y: start.y + dy };
+        // Don't broadcast every frame for translate — we'd flood the wire.
+        // Local only here; emit on pointer-up.
+        setInstruments(prev => prev.map(i => i.id === next.id ? next : i));
+        return;
+      }
+      if (drag.mode === 'instrument-handle' && drag.instrumentId && drag.instrumentStart) {
+        const start = drag.instrumentStart;
+        const point = screenToBoard(e.clientX, e.clientY);
+        if (start.kind === 'ruler') {
+          // The handle simultaneously controls rotation AND length: place the
+          // right tip exactly at the cursor, leaving the left tip pinned.
+          const dx = point.x - start.x;
+          const dy = point.y - start.y;
+          const newLen = Math.max(40, Math.hypot(dx, dy));
+          const newRot = (Math.atan2(dy, dx) * 180) / Math.PI;
+          const next: BoardInstrument = { ...start, length: newLen, rotation: newRot };
+          setInstruments(prev => prev.map(i => i.id === next.id ? next : i));
+        } else {
+          // Protractor: handle rotation only (radius is fixed).
+          const dx = point.x - start.x;
+          const dy = point.y - start.y;
+          const newRot = (Math.atan2(dy, dx) * 180) / Math.PI;
+          const next: BoardInstrument = { ...start, rotation: newRot };
+          setInstruments(prev => prev.map(i => i.id === next.id ? next : i));
+        }
         return;
       }
       if (drag.mode === 'draw') setLiveStroke([...currentStrokeRef.current, screenToBoard(e.clientX, e.clientY)]);
@@ -1573,6 +2085,13 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
         setMarquee(null);
       }
       if (drag.mode === 'pan') emitView(view);
+      if ((drag.mode === 'instrument-translate' || drag.mode === 'instrument-handle') && drag.instrumentId) {
+        // Broadcast the final pose to peers.
+        const moved = instrumentsRef.current.find(i => i.id === drag.instrumentId);
+        if (moved && socket && isTeacher) {
+          socket.emit('whiteboard_update_instrument', { roomId, instrument: moved });
+        }
+      }
       setLiveStroke([]);
       erasedDuringDragRef.current = new Set();
       dragRef.current = null;
@@ -1633,6 +2152,7 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
       setObjects([]);
       setStrokes([]);
       setShapes([]);
+      setInstruments([]);
       setSelectedObjectId(null);
       setSelectedStrokeIndex(null);
       setSelectedShapeId(null);
@@ -1659,7 +2179,10 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
 
     if (!isActive) return null;
 
-    const tools: Array<{ id: BoardTool; label: string; icon: React.ReactNode }> = [
+    const rulerActive = instruments.some(i => i.kind === 'ruler');
+    const protractorActive = instruments.some(i => i.kind === 'protractor');
+
+    const tools: Array<{ id: BoardTool; label: string; icon: React.ReactNode; pressed?: boolean }> = [
       { id: 'select', label: 'Select', icon: <path d="M4 4l7 16 2-7 7-2L4 4z" /> },
       { id: 'pen', label: 'Pen', icon: <path d="M17 3a2.8 2.8 0 0 1 4 4L8 20l-5 1 1-5L17 3z" /> },
       // Highlighter — fades after a few seconds. Chunky marker icon.
@@ -1668,6 +2191,12 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
       { id: 'rect', label: 'Rectangle', icon: <rect x="4" y="6" width="16" height="12" /> },
       { id: 'circle', label: 'Circle', icon: <circle cx="12" cy="12" r="8" /> },
       { id: 'arrow', label: 'Arrow', icon: <><path d="M5 19L19 5" /><path d="M12 5h7v7" /></> },
+      // Compass — circle drawn from the centre, leaves a small dot at the centre point.
+      { id: 'compass', label: 'Compass', icon: <><circle cx="12" cy="12" r="8" /><circle cx="12" cy="12" r="1.5" fill="currentColor" /><path d="M12 4v3" /></> },
+      // Ruler — toggle: spawn / remove the ruler instrument on the board.
+      { id: 'ruler', label: 'Ruler', icon: <><path d="M3 14l11-11 7 7-11 11z" /><path d="M7 10l1 1M10 7l1 1M13 4l1 1M5 16l1 1" /></>, pressed: rulerActive },
+      // Protractor — toggle: spawn / remove the protractor instrument.
+      { id: 'protractor', label: 'Protractor', icon: <><path d="M3 14a9 9 0 0 1 18 0" /><path d="M3 14h18" /><path d="M12 14v-3" /></>, pressed: protractorActive },
       { id: 'eraser', label: 'Eraser', icon: <><path d="m7 21-4-4 11-11 4 4L7 21z" /><path d="M14 6l4-4 4 4-4 4" /><path d="M3 21h18" /></> },
       { id: 'pan', label: 'Hand', icon: <><path d="M18 11V6a2 2 0 0 0-4 0v5" /><path d="M14 10V4a2 2 0 0 0-4 0v8" /><path d="M10 12V6a2 2 0 0 0-4 0v7" /><path d="M6 13c-2 0-3 1-3 3 0 4 4 6 8 6h3c4 0 7-3 7-7v-4a2 2 0 0 0-4 0" /></> },
     ];
@@ -1680,10 +2209,13 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
       tool === 'rect' ? 'Draw rectangle — click and drag' :
       tool === 'circle' ? 'Draw circle — click and drag from centre' :
       tool === 'arrow' ? 'Draw arrow — click and drag from start to head' :
+      tool === 'compass' ? 'Compass — click and drag from centre to draw a circle with a centre mark' :
+      tool === 'ruler' ? 'Click to drop a ruler on the board' :
+      tool === 'protractor' ? 'Click to drop a protractor on the board' :
       tool === 'highlighter' ? 'Highlighter — fades away after a few seconds' :
       'Draw ink';
 
-    const showColorAndWidth = tool === 'pen' || isShapeTool(tool);
+    const showColorAndWidth = tool === 'pen' || (isShapeTool(tool) && tool !== 'ruler' && tool !== 'protractor');
 
     return (
       <div className="whiteboard-shell">
@@ -1695,9 +2227,10 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
               <button
                 key={item.id}
                 onClick={() => setTool(item.id)}
-                className={`whiteboard-tool ${tool === item.id ? 'active' : ''}`}
-                title={item.label}
+                className={`whiteboard-tool ${tool === item.id ? 'active' : ''} ${item.pressed ? 'pressed' : ''}`}
+                title={item.pressed ? `${item.label} on the board (click to remove)` : item.label}
                 aria-label={item.label}
+                aria-pressed={!!item.pressed}
               >
                 <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
                   {item.icon}
@@ -1717,6 +2250,25 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
 
         <div className="whiteboard-topbar">
           <div className="whiteboard-chip">{toolChip}</div>
+          {canEdit && isTeacher && (
+            <div className="whiteboard-control-group" role="group" aria-label="Grid style">
+              <button
+                onClick={() => setGridModeSynced('blank')}
+                className={`whiteboard-action ${gridMode === 'blank' ? 'active' : ''}`}
+                title="No grid — plain blank background"
+              >Blank</button>
+              <button
+                onClick={() => setGridModeSynced('grid')}
+                className={`whiteboard-action ${gridMode === 'grid' ? 'active' : ''}`}
+                title="Notebook-paper grid"
+              >Grid</button>
+              <button
+                onClick={() => setGridModeSynced('graph')}
+                className={`whiteboard-action ${gridMode === 'graph' ? 'active' : ''}`}
+                title="Graph paper with numbered axes through (0,0)"
+              >Graph</button>
+            </div>
+          )}
           {tool === 'eraser' && (
             <div className="whiteboard-control-group" role="group" aria-label="Eraser mode">
               <button
