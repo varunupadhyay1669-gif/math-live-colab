@@ -202,6 +202,46 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
       marqueeRef.current = marquee;
     }, [marquee]);
 
+    // ── Undo / Redo ──
+    // Each user action records a pair { undo, redo }. Both run the same kind of
+    // local-state update and emit the matching socket event so the change is
+    // reflected for peers too. This is per-user history (the stack lives in
+    // the local component), so undoing on the teacher does NOT pop strokes
+    // the student drew (and vice versa).
+    type UndoEntry = { undo: () => void; redo: () => void };
+    const undoStackRef = useRef<UndoEntry[]>([]);
+    const redoStackRef = useRef<UndoEntry[]>([]);
+    const [undoTick, setUndoTick] = useState(0); // re-render so toolbar buttons reflect enabled state
+    const HISTORY_CAP = 100;
+
+    const recordAction = useCallback((entry: UndoEntry) => {
+      undoStackRef.current.push(entry);
+      if (undoStackRef.current.length > HISTORY_CAP) undoStackRef.current.shift();
+      // Any new action invalidates the redo stack (standard convention).
+      redoStackRef.current = [];
+      setUndoTick(t => t + 1);
+    }, []);
+
+    const undo = useCallback(() => {
+      const entry = undoStackRef.current.pop();
+      if (!entry) return;
+      entry.undo();
+      redoStackRef.current.push(entry);
+      setUndoTick(t => t + 1);
+    }, []);
+
+    const redo = useCallback(() => {
+      const entry = redoStackRef.current.pop();
+      if (!entry) return;
+      entry.redo();
+      undoStackRef.current.push(entry);
+      setUndoTick(t => t + 1);
+    }, []);
+
+    const canUndo = undoStackRef.current.length > 0;
+    const canRedo = redoStackRef.current.length > 0;
+    void undoTick; // ref-driven; this keeps the lint quiet about the unused state
+
     const clearMultiSelection = useCallback(() => {
       setMultiObjectIds([]);
       setMultiShapeIds([]);
@@ -209,9 +249,16 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
     }, []);
 
     // Bulk-delete every item in the marquee multi-selection.
+    // Captures snapshots of every removed item so a single undo restores them all.
     const removeMultiSelection = useCallback(() => {
+      // Snapshot everything first so the undo entry sees the original state
+      const removedObjects: BoardImageObject[] = [];
+      const removedShapes: BoardShape[] = [];
+      const removedStrokes: DrawStroke[] = [];
+
       if (multiObjectIds.length > 0) {
         const ids = new Set(multiObjectIds);
+        objects.forEach(o => { if (ids.has(o.id)) removedObjects.push({ ...o }); });
         setObjects(prev => prev.filter(o => !ids.has(o.id)));
         multiObjectIds.forEach(id => {
           imageCacheRef.current.delete(id);
@@ -220,25 +267,90 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
       }
       if (multiShapeIds.length > 0) {
         const ids = new Set(multiShapeIds);
+        shapes.forEach(s => { if (ids.has(s.id)) removedShapes.push({ ...s }); });
         setShapes(prev => prev.filter(s => !ids.has(s.id)));
         multiShapeIds.forEach(id => {
           if (socket && isTeacher) socket.emit('whiteboard_remove_shape', { roomId, shapeId: id });
         });
       }
       if (multiStrokeIndices.length > 0) {
-        // deleteStrokeIndices already handles dedup, sort, and the socket emit.
         const indices = [...multiStrokeIndices];
-        // Use the imperative form to avoid stale closure.
         const unique = Array.from(new Set(indices))
           .filter(i => i >= 0 && i < strokesRef.current.length)
           .sort((a, b) => b - a);
         if (unique.length > 0) {
+          unique.forEach(i => { const s = strokesRef.current[i]; if (s) removedStrokes.push(s); });
           setStrokes(prev => prev.filter((_, idx) => !unique.includes(idx)));
           if (socket) socket.emit('whiteboard_delete_strokes', { roomId, strokeIndices: unique });
         }
       }
       clearMultiSelection();
-    }, [multiObjectIds, multiShapeIds, multiStrokeIndices, socket, isTeacher, roomId, clearMultiSelection]);
+
+      if (removedObjects.length === 0 && removedShapes.length === 0 && removedStrokes.length === 0) return;
+      recordAction({
+        undo: () => {
+          if (removedObjects.length > 0) {
+            setObjects(prev => {
+              const existing = new Set(prev.map(o => o.id));
+              const additions = removedObjects.filter(o => !existing.has(o.id));
+              return [...prev, ...additions];
+            });
+            removedObjects.forEach(o => {
+              loadImage(o);
+              if (socket && isTeacher) socket.emit('whiteboard_add_image', { roomId, object: o });
+            });
+          }
+          if (removedShapes.length > 0) {
+            setShapes(prev => {
+              const existing = new Set(prev.map(s => s.id));
+              const additions = removedShapes.filter(s => !existing.has(s.id));
+              return [...prev, ...additions];
+            });
+            removedShapes.forEach(s => {
+              if (socket && isTeacher) socket.emit('whiteboard_add_shape', { roomId, shape: s });
+            });
+          }
+          if (removedStrokes.length > 0) {
+            setStrokes(prev => {
+              const existing = new Set(prev.map(s => s.id));
+              const additions = removedStrokes.filter(s => !existing.has(s.id ?? ''));
+              return [...prev, ...additions];
+            });
+            removedStrokes.forEach(stroke => {
+              if (socket) socket.emit('whiteboard_draw', { roomId, stroke });
+            });
+          }
+        },
+        redo: () => {
+          if (removedObjects.length > 0) {
+            const ids = new Set(removedObjects.map(o => o.id));
+            setObjects(prev => prev.filter(o => !ids.has(o.id)));
+            removedObjects.forEach(o => {
+              imageCacheRef.current.delete(o.id);
+              if (socket && isTeacher) socket.emit('whiteboard_remove_object', { roomId, objectId: o.id });
+            });
+          }
+          if (removedShapes.length > 0) {
+            const ids = new Set(removedShapes.map(s => s.id));
+            setShapes(prev => prev.filter(s => !ids.has(s.id)));
+            removedShapes.forEach(s => {
+              if (socket && isTeacher) socket.emit('whiteboard_remove_shape', { roomId, shapeId: s.id });
+            });
+          }
+          if (removedStrokes.length > 0) {
+            // Re-find indices in current state and delete.
+            const idsToRemove = new Set(removedStrokes.map(s => s.id ?? ''));
+            const currentIndices: number[] = [];
+            strokesRef.current.forEach((s, idx) => { if (idsToRemove.has(s.id ?? '')) currentIndices.push(idx); });
+            const sorted = currentIndices.sort((a, b) => b - a);
+            if (sorted.length > 0) {
+              setStrokes(prev => prev.filter((_, idx) => !sorted.includes(idx)));
+              if (socket) socket.emit('whiteboard_delete_strokes', { roomId, strokeIndices: sorted });
+            }
+          }
+        },
+      });
+    }, [multiObjectIds, multiShapeIds, multiStrokeIndices, objects, shapes, socket, isTeacher, roomId, clearMultiSelection, recordAction, loadImage]);
 
     const selectedShape = selectedShapeId ? shapes.find(s => s.id === selectedShapeId) : null;
 
@@ -291,10 +403,23 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
     const removeSelectedShape = useCallback(() => {
       if (!selectedShapeId) return;
       const id = selectedShapeId;
+      const snapshot = shapes.find(s => s.id === id);
+      if (!snapshot) return;
+      const shapeSnapshot: BoardShape = { ...snapshot };
       setShapes(prev => prev.filter(s => s.id !== id));
       setSelectedShapeId(null);
       if (socket && isTeacher) socket.emit('whiteboard_remove_shape', { roomId, shapeId: id });
-    }, [selectedShapeId, socket, isTeacher, roomId]);
+      recordAction({
+        undo: () => {
+          setShapes(prev => prev.some(s => s.id === shapeSnapshot.id) ? prev : [...prev, shapeSnapshot]);
+          if (socket && isTeacher) socket.emit('whiteboard_add_shape', { roomId, shape: shapeSnapshot });
+        },
+        redo: () => {
+          setShapes(prev => prev.filter(s => s.id !== shapeSnapshot.id));
+          if (socket && isTeacher) socket.emit('whiteboard_remove_shape', { roomId, shapeId: shapeSnapshot.id });
+        },
+      });
+    }, [selectedShapeId, shapes, socket, isTeacher, roomId, recordAction]);
 
     const setLiveStroke = useCallback((points: DrawPoint[]) => {
       currentStrokeRef.current = points;
@@ -391,7 +516,19 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
       setTool('select');
       loadImage(object);
       if (socket && isTeacher) socket.emit('whiteboard_add_image', { roomId, object });
-    }, [screenToBoard, loadImage, socket, isTeacher, roomId]);
+      recordAction({
+        undo: () => {
+          setObjects(prev => prev.filter(o => o.id !== object.id));
+          imageCacheRef.current.delete(object.id);
+          if (socket && isTeacher) socket.emit('whiteboard_remove_object', { roomId, objectId: object.id });
+        },
+        redo: () => {
+          setObjects(prev => prev.some(o => o.id === object.id) ? prev : [...prev, object]);
+          loadImage(object);
+          if (socket && isTeacher) socket.emit('whiteboard_add_image', { roomId, object });
+        },
+      });
+    }, [screenToBoard, loadImage, socket, isTeacher, roomId, recordAction]);
 
     const updateObject = useCallback((object: BoardImageObject, broadcast = true) => {
       setObjects(prev => prev.map(obj => obj.id === object.id ? object : obj));
@@ -400,11 +537,26 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
 
     const removeSelectedObject = useCallback(() => {
       if (!selectedObjectId) return;
+      const target = objects.find(o => o.id === selectedObjectId);
+      if (!target) return;
+      const snapshot: BoardImageObject = { ...target };
       setObjects(prev => prev.filter(obj => obj.id !== selectedObjectId));
       imageCacheRef.current.delete(selectedObjectId);
       if (socket && isTeacher) socket.emit('whiteboard_remove_object', { roomId, objectId: selectedObjectId });
       setSelectedObjectId(null);
-    }, [selectedObjectId, socket, isTeacher, roomId]);
+      recordAction({
+        undo: () => {
+          setObjects(prev => prev.some(o => o.id === snapshot.id) ? prev : [...prev, snapshot]);
+          loadImage(snapshot);
+          if (socket && isTeacher) socket.emit('whiteboard_add_image', { roomId, object: snapshot });
+        },
+        redo: () => {
+          setObjects(prev => prev.filter(o => o.id !== snapshot.id));
+          imageCacheRef.current.delete(snapshot.id);
+          if (socket && isTeacher) socket.emit('whiteboard_remove_object', { roomId, objectId: snapshot.id });
+        },
+      });
+    }, [selectedObjectId, objects, socket, isTeacher, roomId, recordAction, loadImage]);
 
     // Where the resize / rotate handles sit in WORLD space — i.e. with the
     // image's rotation already applied around its centre. Hit-tests and the
@@ -509,10 +661,36 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
     const deleteStrokeIndices = useCallback((indices: number[]) => {
       const unique = Array.from(new Set(indices)).filter(index => index >= 0 && index < strokesRef.current.length).sort((a, b) => b - a);
       if (unique.length === 0) return;
+      // Capture full stroke data so undo can re-add (server stores by index, but
+      // we restore by appending the saved strokes back).
+      const removedStrokes = unique.map(i => strokesRef.current[i]).filter(Boolean) as DrawStroke[];
       setStrokes(prev => prev.filter((_, index) => !unique.includes(index)));
       setSelectedStrokeIndex(prev => (prev !== null && unique.includes(prev)) ? null : prev);
       if (socket) socket.emit('whiteboard_delete_strokes', { roomId, strokeIndices: unique });
-    }, [socket, roomId]);
+      recordAction({
+        undo: () => {
+          // Re-append all deleted strokes; emit them as new draws so peers also restore.
+          setStrokes(prev => {
+            const existingIds = new Set(prev.map(s => s.id));
+            const additions = removedStrokes.filter(s => !existingIds.has(s.id));
+            return [...prev, ...additions];
+          });
+          if (socket) {
+            removedStrokes.forEach(stroke => socket.emit('whiteboard_draw', { roomId, stroke }));
+          }
+        },
+        redo: () => {
+          // Re-find current indices for these strokes (positions may have shifted)
+          const idsToRemove = new Set(removedStrokes.map(s => s.id));
+          const currentIndices: number[] = [];
+          strokesRef.current.forEach((s, idx) => { if (idsToRemove.has(s.id ?? '')) currentIndices.push(idx); });
+          if (currentIndices.length === 0) return;
+          const sorted = currentIndices.sort((a, b) => b - a);
+          setStrokes(prev => prev.filter((_, idx) => !sorted.includes(idx)));
+          if (socket) socket.emit('whiteboard_delete_strokes', { roomId, strokeIndices: sorted });
+        },
+      });
+    }, [socket, roomId, recordAction]);
 
     const eraseAtPoint = useCallback((point: DrawPoint) => {
       const radius = Math.max(width * 2.4, 18 / view.boardScale);
@@ -875,6 +1053,23 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
           setSelectedStrokeIndex(null);
           clearMultiSelection();
         }
+        // Undo / Redo (ignore when typing into an input/textarea — none in
+        // this component today, but keeps it future-proof).
+        if (canEdit && (e.ctrlKey || e.metaKey)) {
+          const target = e.target as HTMLElement | null;
+          const isEditing = target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable);
+          if (!isEditing) {
+            // Ctrl+Z = undo. Ctrl+Shift+Z OR Ctrl+Y = redo.
+            const key = e.key.toLowerCase();
+            if (key === 'z' && !e.shiftKey) {
+              e.preventDefault();
+              undo();
+            } else if ((key === 'z' && e.shiftKey) || key === 'y') {
+              e.preventDefault();
+              redo();
+            }
+          }
+        }
       };
       const up = (e: KeyboardEvent) => {
         if (e.code === 'Space') setSpacePan(false);
@@ -885,7 +1080,7 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
         window.removeEventListener('keydown', down);
         window.removeEventListener('keyup', up);
       };
-    }, [isActive, canEdit, selectedObjectId, selectedStrokeIndex, selectedShapeId, removeSelectedObject, deleteStrokeIndices, removeSelectedShape, multiObjectIds.length, multiShapeIds.length, multiStrokeIndices.length, removeMultiSelection, clearMultiSelection]);
+    }, [isActive, canEdit, selectedObjectId, selectedStrokeIndex, selectedShapeId, removeSelectedObject, deleteStrokeIndices, removeSelectedShape, multiObjectIds.length, multiShapeIds.length, multiStrokeIndices.length, removeMultiSelection, clearMultiSelection, undo, redo]);
 
     useEffect(() => {
       if (!socket) return;
@@ -1129,14 +1324,55 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
         const stroke: DrawStroke = { id: newId('stroke'), points: currentStrokeRef.current, color, width, tool: 'pen' };
         setStrokes(prev => [...prev, stroke]);
         if (socket) socket.emit('whiteboard_draw', { roomId, stroke });
+        recordAction({
+          undo: () => {
+            const idx = strokesRef.current.findIndex(s => s.id === stroke.id);
+            if (idx < 0) return;
+            setStrokes(prev => prev.filter(s => s.id !== stroke.id));
+            if (socket) socket.emit('whiteboard_delete_strokes', { roomId, strokeIndices: [idx] });
+          },
+          redo: () => {
+            setStrokes(prev => prev.some(s => s.id === stroke.id) ? prev : [...prev, stroke]);
+            if (socket) socket.emit('whiteboard_draw', { roomId, stroke });
+          },
+        });
       }
       if (drag.mode === 'object' && drag.objectId) {
         const object = objects.find(obj => obj.id === drag.objectId);
-        if (object) updateObject(object);
+        if (object) {
+          updateObject(object);
+          // Record move for undo (image position only)
+          const before: BoardImageObject = { ...object, x: drag.objectStartX || 0, y: drag.objectStartY || 0 };
+          const after: BoardImageObject = { ...object };
+          recordAction({
+            undo: () => {
+              setObjects(prev => prev.map(o => o.id === before.id ? before : o));
+              if (socket && isTeacher) socket.emit('whiteboard_update_object', { roomId, object: before });
+            },
+            redo: () => {
+              setObjects(prev => prev.map(o => o.id === after.id ? after : o));
+              if (socket && isTeacher) socket.emit('whiteboard_update_object', { roomId, object: after });
+            },
+          });
+        }
       }
-      if ((drag.mode === 'object-resize' || drag.mode === 'object-rotate') && drag.objectId) {
+      if ((drag.mode === 'object-resize' || drag.mode === 'object-rotate') && drag.objectId && drag.objectStart) {
         const object = objects.find(obj => obj.id === drag.objectId);
-        if (object) updateObject(object);
+        if (object) {
+          updateObject(object);
+          const before: BoardImageObject = { ...drag.objectStart };
+          const after: BoardImageObject = { ...object };
+          recordAction({
+            undo: () => {
+              setObjects(prev => prev.map(o => o.id === before.id ? before : o));
+              if (socket && isTeacher) socket.emit('whiteboard_update_object', { roomId, object: before });
+            },
+            redo: () => {
+              setObjects(prev => prev.map(o => o.id === after.id ? after : o));
+              if (socket && isTeacher) socket.emit('whiteboard_update_object', { roomId, object: after });
+            },
+          });
+        }
       }
       if (drag.mode === 'shape-create' && draftShapeRef.current) {
         const finished = draftShapeRef.current;
@@ -1149,12 +1385,36 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
           if (socket && isTeacher) socket.emit('whiteboard_add_shape', { roomId, shape: finished });
           setSelectedShapeId(finished.id);
           setTool('select');
+          recordAction({
+            undo: () => {
+              setShapes(prev => prev.filter(s => s.id !== finished.id));
+              if (socket && isTeacher) socket.emit('whiteboard_remove_shape', { roomId, shapeId: finished.id });
+            },
+            redo: () => {
+              setShapes(prev => prev.some(s => s.id === finished.id) ? prev : [...prev, finished]);
+              if (socket && isTeacher) socket.emit('whiteboard_add_shape', { roomId, shape: finished });
+            },
+          });
         }
         setDraftShape(null);
       }
-      if (drag.mode === 'shape-move' && drag.shapeId) {
+      if (drag.mode === 'shape-move' && drag.shapeId && drag.shapeStart) {
         const moved = shapes.find(s => s.id === drag.shapeId);
-        if (moved && socket && isTeacher) socket.emit('whiteboard_update_shape', { roomId, shape: moved });
+        if (moved && socket && isTeacher) {
+          socket.emit('whiteboard_update_shape', { roomId, shape: moved });
+          const before: BoardShape = { ...moved, ...drag.shapeStart };
+          const after: BoardShape = { ...moved };
+          recordAction({
+            undo: () => {
+              setShapes(prev => prev.map(s => s.id === before.id ? before : s));
+              if (socket && isTeacher) socket.emit('whiteboard_update_shape', { roomId, shape: before });
+            },
+            redo: () => {
+              setShapes(prev => prev.map(s => s.id === after.id ? after : s));
+              if (socket && isTeacher) socket.emit('whiteboard_update_shape', { roomId, shape: after });
+            },
+          });
+        }
       }
       if (drag.mode === 'marquee') {
         const m = marqueeRef.current;
@@ -1265,7 +1525,10 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
       });
     };
 
+    // Legacy "undo just the most recent stroke" helper, kept only for any
+    // external caller. The toolbar now uses the proper undo/redo system.
     const undoLastStroke = () => deleteStrokeIndices([strokes.length - 1]);
+    void undoLastStroke;
 
     if (!isActive) return null;
 
@@ -1349,7 +1612,12 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
               Delete {multiObjectIds.length + multiShapeIds.length + multiStrokeIndices.length} items
             </button>
           )}
-          {canEdit && <button onClick={undoLastStroke} disabled={strokes.length === 0} className="whiteboard-action">Undo</button>}
+          {canEdit && (
+            <>
+              <button onClick={undo} disabled={!canUndo} className="whiteboard-action" title="Undo (Ctrl+Z)">↶ Undo</button>
+              <button onClick={redo} disabled={!canRedo} className="whiteboard-action" title="Redo (Ctrl+Shift+Z)">↷ Redo</button>
+            </>
+          )}
           <button onClick={() => zoomAt(1 / 1.2)} className="whiteboard-action">-</button>
           <button onClick={fitBoard} className="whiteboard-action">{Math.round(view.boardScale * 100)}%</button>
           <button onClick={() => zoomAt(1.2)} className="whiteboard-action">+</button>
