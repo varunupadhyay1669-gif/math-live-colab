@@ -16,12 +16,11 @@ interface WhiteboardProps {
     shapes?: BoardShape[];
     view?: BoardView | null;
   } | null;
-  // Whiteboard follow mode (Miro / Canva-style):
-  // when the teacher is following a student, the student's pan/zoom is
-  // mirrored to the teacher. When the teacher manually pans, the follow is
-  // auto-stopped via onStopFollow so the teacher doesn't fight the student.
-  followingStudentId?: string | null;
-  onStopFollow?: () => void;
+  // Whiteboard mutual sync (Miro/Canva "shared book" model). When true on
+  // both sides, every pan/zoom is mirrored to the other side in real time.
+  // When false locally, this user neither broadcasts nor receives view
+  // changes — they get an independent canvas. Default true.
+  whiteboardSyncEnabled?: boolean;
 }
 
 type ShapeKind = 'line' | 'rect' | 'circle' | 'arrow';
@@ -136,7 +135,7 @@ function rectsOverlap(a: AABB, b: AABB): boolean {
 }
 
 const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
-  ({ socket, roomId, isTeacher, interactive, isActive, initialState, followingStudentId, onStopFollow }, ref) => {
+  ({ socket, roomId, isTeacher, interactive, isActive, initialState, whiteboardSyncEnabled = true }, ref) => {
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const containerRef = useRef<HTMLDivElement>(null);
     const uploadInputRef = useRef<HTMLInputElement>(null);
@@ -304,18 +303,14 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
 
     const emitView = useCallback((nextView: BoardView) => {
       if (!socket) return;
-      // If the teacher is currently following a student, a manual pan/zoom by
-      // the teacher should auto-disengage the follow (Miro/Canva convention)
-      // before broadcasting — otherwise the next incoming followed-student
-      // view would immediately overwrite the teacher's intent, creating a
-      // tug-of-war.
-      if (isTeacher && followingStudentId && onStopFollow) onStopFollow();
-      // The server decides who actually receives this:
-      //   - Teacher emits → broadcast to all students.
-      //   - Student emits → relayed to teacher only IF that student is the
-      //     currently-followed one; otherwise dropped.
+      // Mutual-sync model. The server only relays this if the LOCAL user has
+      // sync enabled; we still gate here so we don't spam the wire when the
+      // user has explicitly opted out. Either side (teacher or student) can
+      // emit when their sync is on, and the relay reaches every other
+      // sync-on user in the room.
+      if (!whiteboardSyncEnabled) return;
       socket.emit('whiteboard_set_view', { roomId, view: nextView });
-    }, [socket, roomId, isTeacher, followingStudentId, onStopFollow]);
+    }, [socket, roomId, whiteboardSyncEnabled]);
 
     const screenToBoard = useCallback((clientX: number, clientY: number) => {
       const rect = canvasRef.current?.getBoundingClientRect();

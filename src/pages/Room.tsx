@@ -176,9 +176,14 @@ export default function Room() {
   // ── Student Interaction Mode ──
   const [studentInteractionAllowed, setStudentInteractionAllowed] = useState(false);
 
-  // ── Whiteboard Follow Mode (Miro/Canva-style) ──
-  const [followingStudentId, setFollowingStudentId] = useState<string | null>(null);
-  const [followingStudentName, setFollowingStudentName] = useState<string | null>(null);
+  // ── Whiteboard Mutual Sync (Miro/Canva "shared book" model) ──
+  // Default ON — both sides see each other's pan/zoom in real time. Toggle
+  // off to get an independent canvas for either side. `peerSyncEnabled`
+  // tracks whether the OTHER side currently has sync on (purely for the
+  // "Independent" badge; the local side is the one that drives this side's
+  // emit/receive behaviour).
+  const [whiteboardSyncEnabled, setWhiteboardSyncEnabled] = useState(true);
+  const [peerSyncEnabled, setPeerSyncEnabled] = useState(true);
 
   // ── Attention Check ──
   const [attentionAcks, setAttentionAcks] = useState<Array<{ studentName: string; timestamp: number }>>([]);
@@ -549,10 +554,17 @@ export default function Room() {
       setStudentInteractionAllowed(allowed);
     });
 
-    // ── Whiteboard Follow Mode ──
-    newSocket.on("follow_target_changed", ({ studentId, studentName }: { studentId: string | null; studentName: string | null }) => {
-      setFollowingStudentId(studentId);
-      setFollowingStudentName(studentName);
+    // ── Whiteboard Mutual Sync ──
+    newSocket.on("whiteboard_sync_changed", ({ userId, enabled }: { userId: string; userName: string; enabled: boolean }) => {
+      // Self-echo: keep local in lock-step with the canonical server value
+      // in case anyone reasons about it across reconnects.
+      if (userId === newSocket.id) {
+        setWhiteboardSyncEnabled(enabled);
+      } else {
+        // It's the other side. For 1-on-1 there's only one peer, so we
+        // overwrite directly.
+        setPeerSyncEnabled(enabled);
+      }
     });
 
     // ── Attention Check Acks ──
@@ -1037,15 +1049,12 @@ export default function Room() {
     showNotif(newEnabled ? '🔗 Scroll sync ON' : '🔓 Free scroll — everyone scrolls independently');
   };
 
-  const setFollowTarget = (studentId: string | null) => {
+  const toggleWhiteboardSync = () => {
     if (!socket) return;
-    socket.emit('set_follow_target', { roomId, studentId });
-    if (studentId) {
-      const target = users.find(u => u.id === studentId);
-      showNotif(`👁 Following ${target?.name || 'student'}'s whiteboard`);
-    } else {
-      showNotif('Stopped following');
-    }
+    const next = !whiteboardSyncEnabled;
+    setWhiteboardSyncEnabled(next);
+    socket.emit('set_whiteboard_sync', { roomId, enabled: next });
+    showNotif(next ? '📖 Shared view: pan and zoom mirror both sides' : '🔓 Independent view: your canvas moves only for you');
   };
 
   const toggleStudentInteraction = () => {
@@ -1697,58 +1706,58 @@ export default function Room() {
                     scrollY={whiteboardScrollY}
                     isActive={true}
                     initialState={whiteboardState}
-                    followingStudentId={followingStudentId}
-                    onStopFollow={() => setFollowTarget(null)}
+                    whiteboardSyncEnabled={whiteboardSyncEnabled}
                   />
-                  {/* Whiteboard follow picker (Miro/Canva-style). Only visible
-                      while the whiteboard is open. */}
-                  {users.some(u => u.role === 'student') && (
-                    <div
+                  {/* Whiteboard mutual-sync toggle (the "shared book" switch). */}
+                  <div
+                    style={{
+                      position: 'absolute',
+                      top: 12,
+                      right: 12,
+                      zIndex: 30,
+                      display: 'flex',
+                      flexDirection: 'column',
+                      alignItems: 'flex-end',
+                      gap: 6,
+                    }}
+                  >
+                    <button
+                      onClick={toggleWhiteboardSync}
+                      title={whiteboardSyncEnabled ? 'Pan/zoom mirrors both sides — click to go independent' : 'Independent view — click to share again'}
                       style={{
-                        position: 'absolute',
-                        top: 12,
-                        right: 12,
-                        zIndex: 30,
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: 8,
-                        padding: '6px 10px',
+                        display: 'flex', alignItems: 'center', gap: 8,
+                        padding: '6px 12px',
                         borderRadius: 10,
-                        background: followingStudentId ? 'rgba(37,99,235,0.95)' : 'rgba(255,255,255,0.95)',
-                        color: followingStudentId ? '#fff' : '#0F172A',
+                        background: whiteboardSyncEnabled ? 'rgba(37,99,235,0.95)' : 'rgba(255,255,255,0.95)',
+                        color: whiteboardSyncEnabled ? '#fff' : '#0F172A',
                         boxShadow: '0 6px 18px rgba(15,23,42,0.18), 0 0 0 1px rgba(15,23,42,0.08)',
-                        fontSize: 12.5,
-                        fontWeight: 600,
+                        fontSize: 12.5, fontWeight: 600,
+                        border: 'none', cursor: 'pointer',
                       }}
                     >
                       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                        <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
-                        <circle cx="12" cy="12" r="3" />
+                        {whiteboardSyncEnabled ? (
+                          <><path d="M2 7h11l-3-3" /><path d="M22 17H11l3 3" /></>
+                        ) : (
+                          <><circle cx="12" cy="12" r="9" /><path d="M5 5l14 14" /></>
+                        )}
                       </svg>
-                      {followingStudentId ? (
-                        <>
-                          <span>Following {followingStudentName || 'student'}</span>
-                          <button
-                            onClick={() => setFollowTarget(null)}
-                            style={{ background: 'rgba(255,255,255,0.18)', color: '#fff', border: 'none', padding: '3px 8px', borderRadius: 6, fontSize: 11, fontWeight: 700, cursor: 'pointer' }}
-                          >
-                            Stop
-                          </button>
-                        </>
-                      ) : (
-                        <select
-                          value=""
-                          onChange={(e) => { if (e.target.value) setFollowTarget(e.target.value); }}
-                          style={{ background: 'transparent', border: 'none', color: '#0F172A', fontSize: 12.5, fontWeight: 600, cursor: 'pointer', padding: 0, outline: 'none' }}
-                        >
-                          <option value="">Follow a student…</option>
-                          {users.filter(u => u.role === 'student').map(s => (
-                            <option key={s.id} value={s.id}>{s.name}</option>
-                          ))}
-                        </select>
-                      )}
-                    </div>
-                  )}
+                      {whiteboardSyncEnabled ? 'Shared view' : 'Independent view'}
+                    </button>
+                    {whiteboardSyncEnabled && !peerSyncEnabled && (
+                      <div style={{
+                        background: 'rgba(245, 158, 11, 0.95)',
+                        color: '#fff',
+                        padding: '4px 10px',
+                        borderRadius: 8,
+                        fontSize: 11,
+                        fontWeight: 600,
+                        boxShadow: '0 4px 12px rgba(15,23,42,0.18)',
+                      }}>
+                        Student is on independent view
+                      </div>
+                    )}
+                  </div>
                 </>
               ) : iframeUrl ? (
                 <div className="w-full h-full flex">
