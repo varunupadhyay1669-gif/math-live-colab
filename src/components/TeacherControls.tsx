@@ -44,6 +44,11 @@ interface TeacherControlsProps {
   // Whiteboard
   onToggleWhiteboard: () => void;
   whiteboardMode: boolean;
+  // Explanation HTML overlay
+  explanationActive: boolean;
+  explanationName: string | null;
+  onUploadExplanation: () => void; // opens the file picker
+  onExitExplanation: () => void;   // clears the temp content and returns to main
   // Follow student clicks
   followStudentClicks: boolean;
   onToggleFollowStudentClicks: () => void;
@@ -66,6 +71,7 @@ export default function TeacherControls({
   zoomLevel, onZoomIn, onZoomOut, onZoomReset,
   onHardReset, leaderboardCount, onToggleLeaderboard,
   onToggleWhiteboard, whiteboardMode,
+  explanationActive, explanationName, onUploadExplanation, onExitExplanation,
   followStudentClicks, onToggleFollowStudentClicks,
 }: TeacherControlsProps) {
   const [showTimerMenu, setShowTimerMenu] = useState(false);
@@ -246,6 +252,24 @@ export default function TeacherControls({
           </svg>
           <span className="tb-label-text">{whiteboardMode ? 'Exit whiteboard' : 'Whiteboard'}</span>
         </button>
+
+        {/* Explanation HTML — sister surface-switch. Hidden in whiteboard mode
+            since the explanation overlays the iframe, not the whiteboard. */}
+        {!whiteboardMode && (
+          <button
+            onClick={explanationActive ? onExitExplanation : onUploadExplanation}
+            className={`tb-btn-explanation ${explanationActive ? 'is-active' : ''}`}
+            data-tip={explanationActive ? `Showing: ${explanationName || 'explanation'} — click to exit` : 'Upload an explanation HTML to overlay'}
+            aria-pressed={explanationActive}
+          >
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              {/* book/explanation icon: open book with a bookmark */}
+              <path d="M4 4h6a3 3 0 013 3v13a2 2 0 00-2-2H4z" />
+              <path d="M20 4h-6a3 3 0 00-3 3v13a2 2 0 012-2h7z" />
+            </svg>
+            <span className="tb-label-text">{explanationActive ? 'Exit explanation' : 'Explanation'}</span>
+          </button>
+        )}
 
         {/* ── Follow Student Clicks ── */}
         <button

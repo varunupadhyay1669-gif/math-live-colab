@@ -1596,64 +1596,21 @@ export default function Room() {
               followStudentClicks={followStudentClicks}
               onToggleFollowStudentClicks={() => setFollowStudentClicks(v => !v)}
               whiteboardMode={whiteboardMode}
+              explanationActive={showTempContent && !!tempContent}
+              explanationName={tempContent?.name ?? null}
+              onUploadExplanation={() => tempFileInputRef.current?.click()}
+              onExitExplanation={clearTempContent}
             />
 
-            {/* Temporary Explanation Content Bar */}
-            {showTempContent && tempContent && (
-              <div className="px-4 py-2 flex items-center justify-between"
-                style={{ background: 'linear-gradient(135deg, rgba(245,158,11,0.12), rgba(251,191,36,0.12))', borderBottom: '1px solid rgba(245,158,11,0.25)' }}>
-                <div className="flex items-center gap-2">
-                  <span style={{ color: '#D97706' }}>📚</span>
-                  <span className="font-medium text-sm" style={{ color: '#92400E' }}>
-                    Showing explanation: {tempContent.name}
-                  </span>
-                </div>
-                <button
-                  onClick={clearTempContent}
-                  className="flex items-center gap-1 px-3 py-1 rounded-md text-sm font-medium transition-all"
-                  style={{
-                    background: 'rgba(245,158,11,0.2)',
-                    color: '#B45309',
-                    border: '1px solid rgba(245,158,11,0.3)'
-                  }}
-                >
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                    <path d="M3 12h18M3 12l6-6M3 12l6 6"/>
-                  </svg>
-                  Back to Content
-                </button>
-              </div>
-            )}
-
-            {/* Upload Explanation Button (when no temp content) */}
-            {!showTempContent && (
-              <div className="px-4 py-2">
-                <button
-                  onClick={() => tempFileInputRef.current?.click()}
-                  className="flex items-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium transition-all"
-                  style={{
-                    background: 'linear-gradient(135deg, rgba(99,102,241,0.12), rgba(139,92,246,0.12))',
-                    border: '1px solid rgba(99,102,241,0.25)',
-                    color: '#6366F1'
-                  }}
-                >
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
-                    <polyline points="14 2 14 8 20 8"/>
-                    <line x1="12" y1="18" x2="12" y2="12"/>
-                    <line x1="9" y1="15" x2="15" y2="15"/>
-                  </svg>
-                  Upload Explanation HTML
-                </button>
-                <input
-                  ref={tempFileInputRef}
-                  type="file"
-                  accept=".html,.htm"
-                  onChange={handleUploadExplanation}
-                  className="hidden"
-                />
-              </div>
-            )}
+            {/* Hidden file input for explanation upload — triggered by the
+                Explanation pill in TeacherControls (next to Whiteboard). */}
+            <input
+              ref={tempFileInputRef}
+              type="file"
+              accept=".html,.htm"
+              onChange={handleUploadExplanation}
+              className="hidden"
+            />
 
             {/* Step Controls */}
             <StepControls

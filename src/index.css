@@ -2335,6 +2335,49 @@ html, body, #root {
   .tb-btn-whiteboard { padding: 0 11px; }
 }
 
+/* ── Explanation HTML surface-switch (sister to .tb-btn-whiteboard) ──
+   Toggles a temporary explanation iframe over the main content. Same
+   prominent labelled-pill treatment as the whiteboard button so the
+   pair reads as "pick which surface you're showing right now". Amber
+   tint differentiates from the whiteboard's indigo. */
+.tb-btn-explanation {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 36px;
+  padding: 0 13px;
+  border-radius: 10px;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: -0.005em;
+  color: var(--accent-amber);
+  background: rgba(217, 119, 6, 0.08);
+  border: 1px solid rgba(217, 119, 6, 0.18);
+  cursor: pointer;
+  transition: background 140ms var(--ml-easing), border-color 140ms var(--ml-easing), color 140ms var(--ml-easing), box-shadow 200ms var(--ml-easing), transform 140ms var(--ml-easing);
+}
+.tb-btn-explanation:hover {
+  background: rgba(217, 119, 6, 0.13);
+  border-color: rgba(217, 119, 6, 0.26);
+  transform: translateY(-1px);
+  box-shadow: 0 6px 14px -8px rgba(217, 119, 6, 0.40);
+}
+.tb-btn-explanation:active { transform: translateY(0); }
+.tb-btn-explanation.is-active {
+  background: var(--accent-amber);
+  border-color: var(--accent-amber);
+  color: #FFFFFF;
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.18) inset, 0 6px 14px -6px rgba(217, 119, 6, 0.55);
+}
+.tb-btn-explanation.is-active:hover {
+  background: #B45309;
+  border-color: #B45309;
+}
+@media (max-width: 760px) {
+  .tb-btn-explanation span.tb-label-text { display: none; }
+  .tb-btn-explanation { padding: 0 11px; }
+}
+
 /* ── Reduce visual noise: lighter divider colors everywhere ── */
 hr,
 .divider {
