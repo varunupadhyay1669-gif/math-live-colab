@@ -1825,30 +1825,31 @@ body {
   padding: 80px 0 40px;
 }
 
-/* Headline */
+/* Headline — Cuberto-inspired bold two-tone display.
+   "Math" in warm cream, "Reimagined" in vibrant indigo→violet→pink
+   gradient, both stacked, tight tracking, very heavy weight. */
 .ml-dark-headline {
-  font-weight: 720;
-  font-size: clamp(48px, 7vw, 92px);
-  letter-spacing: -0.05em;
-  line-height: 1.0;
-  color: #FAFAFA;
-  max-width: 920px;
   margin: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  font-weight: 800;
+  font-size: clamp(64px, 11vw, 148px);
+  letter-spacing: -0.06em;
+  line-height: 0.92;
 }
-.ml-dark-headline .grad {
-  background: linear-gradient(135deg, #A5B4FC 0%, #C4B5FD 50%, #93C5FD 100%);
+.ml-dark-headline .word-cream {
+  color: #FAFAFA;
+}
+.ml-dark-headline .word-grad {
+  background: linear-gradient(135deg, #818CF8 0%, #C084FC 45%, #F472B6 100%);
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;
 }
-.ml-dark-sub {
-  font-size: 15px;
-  font-weight: 400;
-  color: #9CA3AF;
-  letter-spacing: 0.005em;
-  max-width: 520px;
-  line-height: 1.6;
-  margin: 0;
+/* Slight visual overlap between the two lines for the Cuberto feel */
+.ml-dark-headline .word-grad {
+  margin-top: -0.06em;
 }
 
 /* Mode toggle (initial two-button state) */

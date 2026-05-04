@@ -1,8 +1,7 @@
-import React, { useState, useEffect } from "react";
+import React, { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { v4 as uuidv4 } from "uuid";
 
-type RecentRoom = { id: string; name: string; date: string };
 type Mode = null | "teacher" | "student";
 
 export default function Home() {
@@ -10,26 +9,13 @@ export default function Home() {
   const [teacherName, setTeacherName] = useState(() => localStorage.getItem("mathslive_teacher_name") || "");
   const [studentName, setStudentName] = useState("");
   const [roomCode, setRoomCode] = useState("");
-  const [recentRooms, setRecentRooms] = useState<RecentRoom[]>([]);
   const [mode, setMode] = useState<Mode>(null);
-
-  useEffect(() => {
-    try {
-      const stored = localStorage.getItem("mathslive_recent_rooms");
-      if (stored) setRecentRooms(JSON.parse(stored));
-    } catch {}
-  }, []);
 
   const createRoom = () => {
     const name = teacherName.trim();
     if (!name) return;
     localStorage.setItem("mathslive_teacher_name", name);
     const newRoomId = uuidv4().slice(0, 8);
-    const updated: RecentRoom[] = [
-      { id: newRoomId, name, date: new Date().toLocaleString() },
-      ...recentRooms.filter(r => r.id !== newRoomId),
-    ].slice(0, 5);
-    localStorage.setItem("mathslive_recent_rooms", JSON.stringify(updated));
     navigate(`/room/${newRoomId}?name=${encodeURIComponent(name)}`);
   };
 
@@ -38,11 +24,6 @@ export default function Home() {
     const code = roomCode.trim();
     const name = studentName.trim();
     if (code && name) navigate(`/live/${code}?name=${encodeURIComponent(name)}`);
-  };
-
-  const joinRecent = (id: string) => {
-    const name = teacherName.trim() || "Teacher";
-    navigate(`/room/${id}?name=${encodeURIComponent(name)}`);
   };
 
   return (
@@ -69,9 +50,9 @@ export default function Home() {
         {/* Center */}
         <main className="ml-dark-center">
           <h1 className="ml-dark-headline">
-            Tutor math, <span className="grad">live</span>.
+            <span className="word-cream">Math</span>
+            <span className="word-grad">Reimagined</span>
           </h1>
-          <p className="ml-dark-sub">Built for 1-on-1.</p>
 
           {/* Initial mode picker */}
           {mode === null && (
@@ -171,24 +152,6 @@ export default function Home() {
             </form>
           )}
 
-          {/* Recent rooms (only when in idle mode) */}
-          {mode === null && recentRooms.length > 0 && (
-            <div className="ml-dark-recent">
-              <span className="ml-dark-recent-label">Recent</span>
-              <div className="ml-dark-recent-row">
-                {recentRooms.map(room => (
-                  <button
-                    key={room.id}
-                    onClick={() => joinRecent(room.id)}
-                    className="ml-dark-recent-pill"
-                    title={`${room.name} · ${room.date}`}
-                  >
-                    {room.id}
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
         </main>
 
         {/* Footer */}
