@@ -124,6 +124,11 @@ function rotatePoint(point: DrawPoint, origin: DrawPoint, degrees: number): Draw
   };
 }
 
+interface AABB { x: number; y: number; w: number; h: number; }
+function rectsOverlap(a: AABB, b: AABB): boolean {
+  return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+}
+
 const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
   ({ socket, roomId, isTeacher, interactive, isActive, initialState }, ref) => {
     const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -135,9 +140,10 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
     const erasedDuringDragRef = useRef<Set<number>>(new Set());
     const shapesRef = useRef<BoardShape[]>([]);
     const draftShapeRef = useRef<BoardShape | null>(null);
+    const marqueeRef = useRef<{ x1: number; y1: number; x2: number; y2: number } | null>(null);
     type ObjectHandle = 'tl' | 'tr' | 'bl' | 'br' | 'rotate';
     const dragRef = useRef<{
-      mode: 'draw' | 'erase' | 'pan' | 'object' | 'object-resize' | 'object-rotate' | 'shape-create' | 'shape-move' | null;
+      mode: 'draw' | 'erase' | 'pan' | 'object' | 'object-resize' | 'object-rotate' | 'shape-create' | 'shape-move' | 'marquee' | null;
       pointerId: number;
       startClientX: number;
       startClientY: number;
@@ -160,6 +166,12 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
     const [selectedObjectId, setSelectedObjectId] = useState<string | null>(null);
     const [selectedStrokeIndex, setSelectedStrokeIndex] = useState<number | null>(null);
     const [selectedShapeId, setSelectedShapeId] = useState<string | null>(null);
+    // Marquee multi-select: drag from empty space in the Select tool to lasso
+    // multiple items, then Delete removes them all together.
+    const [marquee, setMarquee] = useState<{ x1: number; y1: number; x2: number; y2: number } | null>(null);
+    const [multiObjectIds, setMultiObjectIds] = useState<string[]>([]);
+    const [multiShapeIds, setMultiShapeIds] = useState<string[]>([]);
+    const [multiStrokeIndices, setMultiStrokeIndices] = useState<number[]>([]);
     const [tool, setTool] = useState<BoardTool>('select');
     const [color, setColor] = useState('#111827');
     const [width, setWidth] = useState(4);
@@ -180,6 +192,48 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
     useEffect(() => {
       draftShapeRef.current = draftShape;
     }, [draftShape]);
+
+    useEffect(() => {
+      marqueeRef.current = marquee;
+    }, [marquee]);
+
+    const clearMultiSelection = useCallback(() => {
+      setMultiObjectIds([]);
+      setMultiShapeIds([]);
+      setMultiStrokeIndices([]);
+    }, []);
+
+    // Bulk-delete every item in the marquee multi-selection.
+    const removeMultiSelection = useCallback(() => {
+      if (multiObjectIds.length > 0) {
+        const ids = new Set(multiObjectIds);
+        setObjects(prev => prev.filter(o => !ids.has(o.id)));
+        multiObjectIds.forEach(id => {
+          imageCacheRef.current.delete(id);
+          if (socket && isTeacher) socket.emit('whiteboard_remove_object', { roomId, objectId: id });
+        });
+      }
+      if (multiShapeIds.length > 0) {
+        const ids = new Set(multiShapeIds);
+        setShapes(prev => prev.filter(s => !ids.has(s.id)));
+        multiShapeIds.forEach(id => {
+          if (socket && isTeacher) socket.emit('whiteboard_remove_shape', { roomId, shapeId: id });
+        });
+      }
+      if (multiStrokeIndices.length > 0) {
+        // deleteStrokeIndices already handles dedup, sort, and the socket emit.
+        const indices = [...multiStrokeIndices];
+        // Use the imperative form to avoid stale closure.
+        const unique = Array.from(new Set(indices))
+          .filter(i => i >= 0 && i < strokesRef.current.length)
+          .sort((a, b) => b - a);
+        if (unique.length > 0) {
+          setStrokes(prev => prev.filter((_, idx) => !unique.includes(idx)));
+          if (socket) socket.emit('whiteboard_delete_strokes', { roomId, strokeIndices: unique });
+        }
+      }
+      clearMultiSelection();
+    }, [multiObjectIds, multiShapeIds, multiStrokeIndices, socket, isTeacher, roomId, clearMultiSelection]);
 
     const selectedShape = selectedShapeId ? shapes.find(s => s.id === selectedShapeId) : null;
 
@@ -680,8 +734,51 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
           ctx.restore();
         }
       }
+
+      // ── Multi-select highlights (no individual handles, just dashed rects) ──
+      if (multiObjectIds.length > 0 || multiShapeIds.length > 0 || multiStrokeIndices.length > 0) {
+        ctx.save();
+        ctx.strokeStyle = '#2563eb';
+        ctx.lineWidth = 1.6 / view.boardScale;
+        ctx.setLineDash([8 / view.boardScale, 5 / view.boardScale]);
+        const objectIdSet = new Set(multiObjectIds);
+        objects.forEach(o => {
+          if (!objectIdSet.has(o.id)) return;
+          ctx.strokeRect(o.x, o.y, o.width * o.scale, o.height * o.scale);
+        });
+        const shapeIdSet = new Set(multiShapeIds);
+        shapes.forEach(s => {
+          if (!shapeIdSet.has(s.id)) return;
+          const b = shapeBounds(s);
+          ctx.strokeRect(b.x, b.y, b.w, b.h);
+        });
+        const strokeIdxSet = new Set(multiStrokeIndices);
+        strokes.forEach((s, idx) => {
+          if (!strokeIdxSet.has(idx)) return;
+          const b = strokeBounds(s);
+          if (b) ctx.strokeRect(b.x, b.y, b.w, b.h);
+        });
+        ctx.restore();
+      }
+
+      // ── Marquee rectangle (live during drag) ──
+      if (marquee) {
+        const minX = Math.min(marquee.x1, marquee.x2);
+        const minY = Math.min(marquee.y1, marquee.y2);
+        const maxX = Math.max(marquee.x1, marquee.x2);
+        const maxY = Math.max(marquee.y1, marquee.y2);
+        ctx.save();
+        ctx.fillStyle = 'rgba(37, 99, 235, 0.08)';
+        ctx.strokeStyle = '#2563eb';
+        ctx.lineWidth = 1.4 / view.boardScale;
+        ctx.setLineDash([6 / view.boardScale, 4 / view.boardScale]);
+        ctx.fillRect(minX, minY, maxX - minX, maxY - minY);
+        ctx.strokeRect(minX, minY, maxX - minX, maxY - minY);
+        ctx.restore();
+      }
+
       ctx.restore();
-    }, [objects, selectedObjectId, selectedStrokeIndex, strokeBounds, strokes, currentStroke, color, width, tool, view, shapes, draftShape, selectedShape, shapeBounds, getObjectHandlePositions]);
+    }, [objects, selectedObjectId, selectedStrokeIndex, strokeBounds, strokes, currentStroke, color, width, tool, view, shapes, draftShape, selectedShape, shapeBounds, getObjectHandlePositions, marquee, multiObjectIds, multiShapeIds, multiStrokeIndices]);
 
     const downloadBoard = useCallback(() => {
       const canvas = canvasRef.current;
@@ -756,6 +853,15 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
           if (selectedObjectId) removeSelectedObject();
           if (selectedStrokeIndex !== null) deleteStrokeIndices([selectedStrokeIndex]);
           if (selectedShapeId) removeSelectedShape();
+          if (multiObjectIds.length > 0 || multiShapeIds.length > 0 || multiStrokeIndices.length > 0) {
+            removeMultiSelection();
+          }
+        }
+        if (e.key === 'Escape') {
+          setSelectedObjectId(null);
+          setSelectedShapeId(null);
+          setSelectedStrokeIndex(null);
+          clearMultiSelection();
         }
       };
       const up = (e: KeyboardEvent) => {
@@ -767,7 +873,7 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
         window.removeEventListener('keydown', down);
         window.removeEventListener('keyup', up);
       };
-    }, [isActive, canEdit, selectedObjectId, selectedStrokeIndex, selectedShapeId, removeSelectedObject, deleteStrokeIndices, removeSelectedShape]);
+    }, [isActive, canEdit, selectedObjectId, selectedStrokeIndex, selectedShapeId, removeSelectedObject, deleteStrokeIndices, removeSelectedShape, multiObjectIds.length, multiShapeIds.length, multiStrokeIndices.length, removeMultiSelection, clearMultiSelection]);
 
     useEffect(() => {
       if (!socket) return;
@@ -915,9 +1021,20 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
           return;
         }
         const strokeIndex = findStrokeAtPoint(point);
+        if (strokeIndex !== -1) {
+          setSelectedObjectId(null);
+          setSelectedShapeId(null);
+          setSelectedStrokeIndex(strokeIndex);
+          clearMultiSelection();
+          return;
+        }
+        // Nothing under the cursor — start a marquee multi-select drag.
         setSelectedObjectId(null);
         setSelectedShapeId(null);
-        setSelectedStrokeIndex(strokeIndex === -1 ? null : strokeIndex);
+        setSelectedStrokeIndex(null);
+        clearMultiSelection();
+        setMarquee({ x1: point.x, y1: point.y, x2: point.x, y2: point.y });
+        dragRef.current = { mode: 'marquee', pointerId: e.pointerId, startClientX: e.clientX, startClientY: e.clientY, startOffsetX: view.boardOffsetX, startOffsetY: view.boardOffsetY };
         return;
       }
       if (isShapeTool(tool)) {
@@ -973,6 +1090,11 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
         setDraftShape(next);
         return;
       }
+      if (drag.mode === 'marquee') {
+        const point = screenToBoard(e.clientX, e.clientY);
+        setMarquee(m => m ? { ...m, x2: point.x, y2: point.y } : null);
+        return;
+      }
       if (drag.mode === 'shape-move' && drag.shapeId && drag.shapeStart) {
         const dx = (e.clientX - drag.startClientX) / view.boardScale;
         const dy = (e.clientY - drag.startClientY) / view.boardScale;
@@ -1021,6 +1143,35 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
       if (drag.mode === 'shape-move' && drag.shapeId) {
         const moved = shapes.find(s => s.id === drag.shapeId);
         if (moved && socket && isTeacher) socket.emit('whiteboard_update_shape', { roomId, shape: moved });
+      }
+      if (drag.mode === 'marquee') {
+        const m = marqueeRef.current;
+        if (m) {
+          const minX = Math.min(m.x1, m.x2);
+          const minY = Math.min(m.y1, m.y2);
+          const maxX = Math.max(m.x1, m.x2);
+          const maxY = Math.max(m.y1, m.y2);
+          // Treat anything below ~4px as a stray click; clear selection only.
+          const minDelta = 4 / view.boardScale;
+          if ((maxX - minX) > minDelta || (maxY - minY) > minDelta) {
+            const marqueeRect: AABB = { x: minX, y: minY, w: maxX - minX, h: maxY - minY };
+            const hitObjects = objects
+              .filter(o => rectsOverlap(marqueeRect, { x: o.x, y: o.y, w: o.width * o.scale, h: o.height * o.scale }))
+              .map(o => o.id);
+            const hitShapes = shapes
+              .filter(s => rectsOverlap(marqueeRect, shapeBounds(s)))
+              .map(s => s.id);
+            const hitStrokes: number[] = [];
+            strokes.forEach((s, i) => {
+              const b = strokeBounds(s);
+              if (b && rectsOverlap(marqueeRect, b)) hitStrokes.push(i);
+            });
+            setMultiObjectIds(hitObjects);
+            setMultiShapeIds(hitShapes);
+            setMultiStrokeIndices(hitStrokes);
+          }
+        }
+        setMarquee(null);
       }
       if (drag.mode === 'pan') emitView(view);
       setLiveStroke([]);
@@ -1181,6 +1332,11 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
           {canEdit && selectedObject && <button onClick={removeSelectedObject} className="whiteboard-action danger">Delete image</button>}
           {canEdit && selectedShape && <button onClick={removeSelectedShape} className="whiteboard-action danger">Delete shape</button>}
           {canEdit && selectedStrokeIndex !== null && <button onClick={() => deleteStrokeIndices([selectedStrokeIndex])} className="whiteboard-action danger">Delete stroke</button>}
+          {canEdit && (multiObjectIds.length + multiShapeIds.length + multiStrokeIndices.length) > 0 && (
+            <button onClick={removeMultiSelection} className="whiteboard-action danger">
+              Delete {multiObjectIds.length + multiShapeIds.length + multiStrokeIndices.length} items
+            </button>
+          )}
           {canEdit && <button onClick={undoLastStroke} disabled={strokes.length === 0} className="whiteboard-action">Undo</button>}
           <button onClick={() => zoomAt(1 / 1.2)} className="whiteboard-action">-</button>
           <button onClick={fitBoard} className="whiteboard-action">{Math.round(view.boardScale * 100)}%</button>
