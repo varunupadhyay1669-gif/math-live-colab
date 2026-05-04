@@ -80,33 +80,40 @@ export default function TeacherControls({
       {/* ═══ Main Toolbar ═══ */}
       <div className="teacher-toolbar shrink-0 overflow-x-auto scrollbar-hide">
 
-        {/* ── Tool Mode ── */}
-        <button onClick={() => { onSetDrawMode(false); onSetLaserMode(false); }}
-          className={`tb-btn ${isCursor ? 'active' : ''}`} data-tip="Cursor">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M3 3l7.07 16.97 2.51-7.39 7.39-2.51z"/>
-          </svg>
-        </button>
-        <button onClick={() => { onSetDrawMode(true); onSetPenType('transient'); onSetLaserMode(false); }}
-          className={`tb-btn ${isDraw ? 'active' : ''}`} data-tip="Draw (fades)">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M17 3a2.828 2.828 0 114 4L7.5 20.5 2 22l1.5-5.5z"/>
-          </svg>
-        </button>
-        <button onClick={() => { onSetDrawMode(true); onSetPenType('permanent'); onSetLaserMode(false); }}
-          className={`tb-btn ${isInk ? 'active' : ''}`} data-tip="Ink (permanent)">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M12 19l7-7 3 3-7 7-3-3z"/><path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z"/>
-          </svg>
-        </button>
-        <button onClick={() => { onSetLaserMode(true); onSetDrawMode(false); }}
-          className={`tb-btn ${laserMode ? 'active-rose' : ''}`} data-tip="Laser pointer">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <circle cx="12" cy="12" r="3"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/>
-          </svg>
-        </button>
+        {/* ── Tool Mode (annotation over the iframe simulation) ──
+            Hidden when the whiteboard is open: the whiteboard has its own
+            cursor / pen / shape / eraser tools in its left rail and these
+            iframe-overlay tools are irrelevant there. */}
+        {!whiteboardMode && (
+          <>
+            <button onClick={() => { onSetDrawMode(false); onSetLaserMode(false); }}
+              className={`tb-btn ${isCursor ? 'active' : ''}`} data-tip="Cursor">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M3 3l7.07 16.97 2.51-7.39 7.39-2.51z"/>
+              </svg>
+            </button>
+            <button onClick={() => { onSetDrawMode(true); onSetPenType('transient'); onSetLaserMode(false); }}
+              className={`tb-btn ${isDraw ? 'active' : ''}`} data-tip="Draw (fades)">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M17 3a2.828 2.828 0 114 4L7.5 20.5 2 22l1.5-5.5z"/>
+              </svg>
+            </button>
+            <button onClick={() => { onSetDrawMode(true); onSetPenType('permanent'); onSetLaserMode(false); }}
+              className={`tb-btn ${isInk ? 'active' : ''}`} data-tip="Ink (permanent)">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M12 19l7-7 3 3-7 7-3-3z"/><path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z"/>
+              </svg>
+            </button>
+            <button onClick={() => { onSetLaserMode(true); onSetDrawMode(false); }}
+              className={`tb-btn ${laserMode ? 'active-rose' : ''}`} data-tip="Laser pointer">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="12" cy="12" r="3"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/>
+              </svg>
+            </button>
 
-        <div className="toolbar-divider" />
+            <div className="toolbar-divider" />
+          </>
+        )}
 
         {/* ── Sync Controls ── */}
         <button onClick={onToggleScrollSync}

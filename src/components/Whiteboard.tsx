@@ -50,8 +50,13 @@ interface DrawStroke {
   // 'pen' = a normal coloured stroke. 'eraser-pixel' = an erase stroke,
   // rendered with destination-out compositing so it visually removes whatever
   // pen strokes / shapes / images sit beneath it (within the rendered frame).
-  // Stored as a stroke so it persists, syncs, and is undoable like any other.
-  tool: 'pen' | 'eraser-pixel';
+  // 'highlighter' = ephemeral translucent stroke that holds at full opacity
+  // briefly, then fades out and is auto-removed locally after HIGHLIGHTER_FADE_MS.
+  // Stored as a stroke so it persists, syncs, and is undoable like any other —
+  // except highlighter strokes are time-bound and disappear from each
+  // client's local state on the fade timer.
+  tool: 'pen' | 'eraser-pixel' | 'highlighter';
+  createdAt?: number; // wall-clock ms; used by highlighter for fade-out
 }
 
 interface BoardImageObject {
@@ -81,7 +86,7 @@ export interface WhiteboardRef {
   getCanvas: () => HTMLCanvasElement | null;
 }
 
-type BoardTool = 'select' | 'pen' | 'eraser' | 'pan' | 'line' | 'rect' | 'circle' | 'arrow';
+type BoardTool = 'select' | 'pen' | 'highlighter' | 'eraser' | 'pan' | 'line' | 'rect' | 'circle' | 'arrow';
 
 const SHAPE_TOOLS: BoardTool[] = ['line', 'rect', 'circle', 'arrow'];
 const isShapeTool = (t: BoardTool): t is ShapeKind => SHAPE_TOOLS.includes(t);
@@ -96,6 +101,17 @@ const PEN_CURSOR = (() => {
   const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><path d="M17 3a2.8 2.8 0 0 1 4 4L8 20l-5 1 1-5L17 3z" fill="white" stroke="black" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"/><path d="M14 6l4 4" stroke="black" stroke-width="1.4" stroke-linecap="round"/></svg>';
   return `url('data:image/svg+xml;utf8,${encodeURIComponent(svg)}') 3 21, crosshair`;
 })();
+
+// Hand-shaped cursor for the Hand (pan) tool. The browser default 'grab' is
+// often a thin white outline that disappears against a white whiteboard
+// background. This explicit white-fill / dark-outline hand stays readable on
+// both light and dark surfaces. Fallback to 'grab' if the data URL is refused.
+const HAND_CURSOR = (() => {
+  const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="26" height="26" viewBox="0 0 24 24"><path d="M18 11V6a2 2 0 0 0-4 0v5M14 10V4a2 2 0 0 0-4 0v8M10 12V6a2 2 0 0 0-4 0v7M6 13c-2 0-3 1-3 3 0 4 4 6 8 6h3c4 0 7-3 7-7v-4a2 2 0 0 0-4 0" fill="#ffffff" stroke="#0F172A" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+  return `url('data:image/svg+xml;utf8,${encodeURIComponent(svg)}') 13 13, grab`;
+})();
+const HIGHLIGHTER_FADE_MS = 4500; // total visible time for a highlighter stroke
+const HIGHLIGHTER_HOLD_MS = 1800; // hold at full opacity, then fade for the rest
 // The whiteboard is an infinite plane — no fixed page boundary. The grid is
 // rendered for whatever rectangle is currently visible, and pan can go in any
 // direction without limit. These constants are kept only as the initial-view
@@ -210,6 +226,31 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
     useEffect(() => {
       marqueeRef.current = marquee;
     }, [marquee]);
+
+    // Highlighter fade tick: while any highlighter stroke exists, drive a
+    // ~12fps timer that re-renders (so opacity recomputes) and prunes any
+    // stroke that has fully faded. The tick stops automatically when no
+    // highlighter strokes remain — costs nothing in steady state.
+    useEffect(() => {
+      const hasHighlighter = strokes.some(s => s.tool === 'highlighter');
+      if (!hasHighlighter) return;
+      const handle = setInterval(() => {
+        const now = Date.now();
+        setStrokes(prev => {
+          let changed = false;
+          const next = prev.filter(s => {
+            if (s.tool !== 'highlighter') return true;
+            const expired = (now - (s.createdAt ?? 0)) >= HIGHLIGHTER_FADE_MS;
+            if (expired) changed = true;
+            return !expired;
+          });
+          // Even when nothing is removed yet, forcing a new array every tick
+          // re-runs redrawCanvas and gives the fade visual continuity.
+          return changed ? next : [...prev];
+        });
+      }, 80);
+      return () => clearInterval(handle);
+    }, [strokes]);
 
     // ── Undo / Redo ──
     // Each user action records a pair { undo, redo }. Both run the same kind of
@@ -916,15 +957,30 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
         ctx.save();
         if (stroke.tool === 'eraser-pixel') {
           // Pixel eraser: cut a hole in everything currently on the canvas
-          // along this stroke path. The hole reveals the canvas background
-          // (and through that, the page below); on the next redraw it is
-          // re-cut, so it reads as a permanent erase.
+          // along this stroke path.
           ctx.globalCompositeOperation = 'destination-out';
-          ctx.strokeStyle = '#000'; // colour irrelevant under destination-out
+          ctx.strokeStyle = '#000';
+          ctx.lineWidth = stroke.width;
+        } else if (stroke.tool === 'highlighter') {
+          // Highlighter: chunky translucent stroke that holds full opacity for
+          // HIGHLIGHTER_HOLD_MS, then linearly fades over the rest of
+          // HIGHLIGHTER_FADE_MS, then is removed entirely by the cleanup tick.
+          const age = Date.now() - (stroke.createdAt ?? Date.now());
+          let alpha = 0.55;
+          if (age > HIGHLIGHTER_HOLD_MS) {
+            const fadeAge = age - HIGHLIGHTER_HOLD_MS;
+            const fadeDur = HIGHLIGHTER_FADE_MS - HIGHLIGHTER_HOLD_MS;
+            alpha = 0.55 * Math.max(0, 1 - fadeAge / fadeDur);
+          }
+          if (alpha <= 0) { ctx.restore(); return; }
+          ctx.globalAlpha = alpha;
+          ctx.globalCompositeOperation = 'multiply';
+          ctx.strokeStyle = stroke.color;
+          ctx.lineWidth = stroke.width;
         } else {
           ctx.strokeStyle = stroke.color;
+          ctx.lineWidth = stroke.width;
         }
-        ctx.lineWidth = stroke.width;
         ctx.lineCap = 'round';
         ctx.lineJoin = 'round';
         ctx.beginPath();
@@ -933,12 +989,21 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
         ctx.restore();
       };
       strokes.forEach(drawStroke);
-      // Live preview while drawing (pen or pixel-eraser)
+      // Live preview while drawing (pen / pixel-eraser / highlighter)
       if (currentStroke.length > 0) {
         if (tool === 'pen') {
           drawStroke({ id: 'current', points: currentStroke, color, width, tool: 'pen' });
         } else if (tool === 'eraser' && eraserMode === 'pixel') {
           drawStroke({ id: 'current', points: currentStroke, color, width, tool: 'eraser-pixel' });
+        } else if (tool === 'highlighter') {
+          drawStroke({
+            id: 'current',
+            points: currentStroke,
+            color: '#FACC15',
+            width: Math.max(width * 3, 14),
+            tool: 'highlighter',
+            createdAt: Date.now(),
+          });
         }
       }
       if (selectedStrokeIndex !== null && strokes[selectedStrokeIndex]) {
@@ -1359,22 +1424,36 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
       if (!drag || drag.pointerId !== e.pointerId) return;
       try { e.currentTarget.releasePointerCapture(e.pointerId); } catch {}
       if (drag.mode === 'draw' && currentStrokeRef.current.length > 1) {
-        const strokeTool: DrawStroke['tool'] = (tool === 'eraser' && eraserMode === 'pixel') ? 'eraser-pixel' : 'pen';
-        const stroke: DrawStroke = { id: newId('stroke'), points: currentStrokeRef.current, color, width, tool: strokeTool };
+        const strokeTool: DrawStroke['tool'] =
+          (tool === 'eraser' && eraserMode === 'pixel') ? 'eraser-pixel' :
+          tool === 'highlighter' ? 'highlighter' :
+          'pen';
+        const stroke: DrawStroke = {
+          id: newId('stroke'),
+          points: currentStrokeRef.current,
+          color: strokeTool === 'highlighter' ? '#FACC15' /* warm yellow highlighter */ : color,
+          width: strokeTool === 'highlighter' ? Math.max(width * 3, 14) /* chunky highlighter */ : width,
+          tool: strokeTool,
+          ...(strokeTool === 'highlighter' ? { createdAt: Date.now() } : {}),
+        };
         setStrokes(prev => [...prev, stroke]);
         if (socket) socket.emit('whiteboard_draw', { roomId, stroke });
-        recordAction({
-          undo: () => {
-            const idx = strokesRef.current.findIndex(s => s.id === stroke.id);
-            if (idx < 0) return;
-            setStrokes(prev => prev.filter(s => s.id !== stroke.id));
-            if (socket) socket.emit('whiteboard_delete_strokes', { roomId, strokeIndices: [idx] });
-          },
-          redo: () => {
-            setStrokes(prev => prev.some(s => s.id === stroke.id) ? prev : [...prev, stroke]);
-            if (socket) socket.emit('whiteboard_draw', { roomId, stroke });
-          },
-        });
+        // Highlighter strokes are ephemeral by design — don't put them on the
+        // undo stack (they auto-disappear), so undoing wouldn't make sense.
+        if (strokeTool !== 'highlighter') {
+          recordAction({
+            undo: () => {
+              const idx = strokesRef.current.findIndex(s => s.id === stroke.id);
+              if (idx < 0) return;
+              setStrokes(prev => prev.filter(s => s.id !== stroke.id));
+              if (socket) socket.emit('whiteboard_delete_strokes', { roomId, strokeIndices: [idx] });
+            },
+            redo: () => {
+              setStrokes(prev => prev.some(s => s.id === stroke.id) ? prev : [...prev, stroke]);
+              if (socket) socket.emit('whiteboard_draw', { roomId, stroke });
+            },
+          });
+        }
       }
       if (drag.mode === 'object' && drag.objectId) {
         const object = objects.find(obj => obj.id === drag.objectId);
@@ -1574,6 +1653,8 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
     const tools: Array<{ id: BoardTool; label: string; icon: React.ReactNode }> = [
       { id: 'select', label: 'Select', icon: <path d="M4 4l7 16 2-7 7-2L4 4z" /> },
       { id: 'pen', label: 'Pen', icon: <path d="M17 3a2.8 2.8 0 0 1 4 4L8 20l-5 1 1-5L17 3z" /> },
+      // Highlighter — fades after a few seconds. Chunky marker icon.
+      { id: 'highlighter', label: 'Highlighter', icon: <><path d="M9 11l-4 4v3h3l4-4" /><path d="M11 9l5-5 4 4-5 5z" /><path d="M14 6l4 4" /></> },
       { id: 'line', label: 'Line', icon: <path d="M5 19L19 5" /> },
       { id: 'rect', label: 'Rectangle', icon: <rect x="4" y="6" width="16" height="12" /> },
       { id: 'circle', label: 'Circle', icon: <circle cx="12" cy="12" r="8" /> },
@@ -1590,6 +1671,7 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
       tool === 'rect' ? 'Draw rectangle — click and drag' :
       tool === 'circle' ? 'Draw circle — click and drag from centre' :
       tool === 'arrow' ? 'Draw arrow — click and drag from start to head' :
+      tool === 'highlighter' ? 'Highlighter — fades away after a few seconds' :
       'Draw ink';
 
     const showColorAndWidth = tool === 'pen' || isShapeTool(tool);
@@ -1687,10 +1769,11 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
             style={{
               touchAction: 'none',
               cursor:
-                tool === 'pan' || spacePan ? 'grab' :
+                tool === 'pan' || spacePan ? HAND_CURSOR :
                 tool === 'select' ? 'default' :
                 tool === 'eraser' ? 'cell' :
                 tool === 'pen' ? PEN_CURSOR :
+                tool === 'highlighter' ? PEN_CURSOR :
                 'crosshair',
             }}
             onPointerDown={handlePointerDown}
