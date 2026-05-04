@@ -2393,18 +2393,26 @@ hr,
    premium cards (Whiteboard / HTML) that mirror the home page's
    design language so the in-app surface feels like the same
    product as the landing.
+
+   Implementation note:
+   - Uses absolute-fill (position:absolute + inset:0) instead of
+     width/height: 100% so it doesn't fight the parent's flex sizing
+     when the left panel mounts/unmounts (the previous version froze
+     the page during heavy repaint cascades when going from split
+     to preview-only mode — multi-layer radial gradients + percentage
+     sizing combined badly with React reconciliation).
+   - Single static background (no animated radial gradients on this
+     surface; the home page keeps the animated mesh).
    ═══════════════════════════════════════════════════════════════ */
 .ml-mode-picker-wrap {
-  height: 100%;
-  width: 100%;
+  position: absolute;
+  inset: 0;
   display: flex;
   align-items: center;
   justify-content: center;
   padding: 32px;
-  background:
-    radial-gradient(900px 500px at 50% 0%, rgba(79, 70, 229, 0.06), transparent 60%),
-    radial-gradient(700px 400px at 50% 100%, rgba(124, 58, 237, 0.05), transparent 60%),
-    var(--bg-primary);
+  background: var(--bg-primary);
+  overflow: auto;
 }
 .ml-mode-picker {
   width: 100%;
