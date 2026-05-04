@@ -52,6 +52,9 @@ interface TeacherControlsProps {
   // Annotation eraser (HTML-overlay drawings)
   eraserMode: 'off' | 'stroke' | 'pixel';
   onSetEraserMode: (mode: 'off' | 'stroke' | 'pixel') => void;
+  // Annotation shape tools (HTML-overlay drawings)
+  shapeTool: 'off' | 'line' | 'rect' | 'circle' | 'arrow';
+  onSetShapeTool: (tool: 'off' | 'line' | 'rect' | 'circle' | 'arrow') => void;
   // Follow student clicks
   followStudentClicks: boolean;
   onToggleFollowStudentClicks: () => void;
@@ -76,6 +79,7 @@ export default function TeacherControls({
   onToggleWhiteboard, whiteboardMode,
   explanationActive, explanationName, onUploadExplanation, onExitExplanation,
   eraserMode, onSetEraserMode,
+  shapeTool, onSetShapeTool,
   followStudentClicks, onToggleFollowStudentClicks,
 }: TeacherControlsProps) {
   const [showTimerMenu, setShowTimerMenu] = useState(false);
@@ -96,25 +100,25 @@ export default function TeacherControls({
             iframe-overlay tools are irrelevant there. */}
         {!whiteboardMode && (
           <>
-            <button onClick={() => { onSetDrawMode(false); onSetLaserMode(false); }}
-              className={`tb-btn ${isCursor ? 'active' : ''}`} data-tip="Cursor">
+            <button onClick={() => { onSetDrawMode(false); onSetLaserMode(false); onSetEraserMode('off'); onSetShapeTool('off'); }}
+              className={`tb-btn ${isCursor && eraserMode === 'off' && shapeTool === 'off' ? 'active' : ''}`} data-tip="Cursor">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M3 3l7.07 16.97 2.51-7.39 7.39-2.51z"/>
               </svg>
             </button>
-            <button onClick={() => { onSetDrawMode(true); onSetPenType('transient'); onSetLaserMode(false); }}
-              className={`tb-btn ${isDraw ? 'active' : ''}`} data-tip="Draw (fades)">
+            <button onClick={() => { onSetDrawMode(true); onSetPenType('transient'); onSetLaserMode(false); onSetEraserMode('off'); onSetShapeTool('off'); }}
+              className={`tb-btn ${isDraw && eraserMode === 'off' && shapeTool === 'off' ? 'active' : ''}`} data-tip="Draw (fades)">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M17 3a2.828 2.828 0 114 4L7.5 20.5 2 22l1.5-5.5z"/>
               </svg>
             </button>
-            <button onClick={() => { onSetDrawMode(true); onSetPenType('permanent'); onSetLaserMode(false); }}
-              className={`tb-btn ${isInk ? 'active' : ''}`} data-tip="Ink (permanent)">
+            <button onClick={() => { onSetDrawMode(true); onSetPenType('permanent'); onSetLaserMode(false); onSetEraserMode('off'); onSetShapeTool('off'); }}
+              className={`tb-btn ${isInk && eraserMode === 'off' && shapeTool === 'off' ? 'active' : ''}`} data-tip="Ink (permanent)">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M12 19l7-7 3 3-7 7-3-3z"/><path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z"/>
               </svg>
             </button>
-            <button onClick={() => { onSetLaserMode(true); onSetDrawMode(false); onSetEraserMode('off'); }}
+            <button onClick={() => { onSetLaserMode(true); onSetDrawMode(false); onSetEraserMode('off'); onSetShapeTool('off'); }}
               className={`tb-btn ${laserMode ? 'active-rose' : ''}`} data-tip="Laser pointer">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <circle cx="12" cy="12" r="3"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/>
@@ -130,6 +134,7 @@ export default function TeacherControls({
                 onSetEraserMode('stroke');
                 onSetDrawMode(false);
                 onSetLaserMode(false);
+                onSetShapeTool('off');
               }}
               className={`tb-btn ${eraserMode !== 'off' ? 'active' : ''}`}
               data-tip={eraserMode !== 'off' ? 'Eraser on — click to turn off' : 'Eraser'}
@@ -163,6 +168,34 @@ export default function TeacherControls({
                 </button>
               </>
             )}
+
+            {/* Shape tools — line / rectangle / circle / arrow.
+                Picking one disengages draw / laser / eraser. Clicking the
+                active shape again returns to cursor. */}
+            {([
+              { id: 'line',    tip: 'Line',      icon: <path d="M5 19L19 5" /> },
+              { id: 'rect',    tip: 'Rectangle', icon: <rect x="4" y="6" width="16" height="12" /> },
+              { id: 'circle',  tip: 'Circle',    icon: <circle cx="12" cy="12" r="8" /> },
+              { id: 'arrow',   tip: 'Arrow',     icon: <><path d="M5 19L19 5" /><path d="M12 5h7v7" /></> },
+            ] as const).map(s => (
+              <button
+                key={s.id}
+                onClick={() => {
+                  if (shapeTool === s.id) { onSetShapeTool('off'); return; }
+                  onSetShapeTool(s.id);
+                  onSetDrawMode(false);
+                  onSetLaserMode(false);
+                  onSetEraserMode('off');
+                }}
+                className={`tb-btn ${shapeTool === s.id ? 'active' : ''}`}
+                data-tip={s.tip}
+                aria-pressed={shapeTool === s.id}
+              >
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  {s.icon}
+                </svg>
+              </button>
+            ))}
 
             <div className="toolbar-divider" />
           </>

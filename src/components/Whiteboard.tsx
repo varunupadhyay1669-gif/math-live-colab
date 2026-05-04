@@ -110,6 +110,15 @@ const HAND_CURSOR = (() => {
   const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="26" height="26" viewBox="0 0 24 24"><path d="M18 11V6a2 2 0 0 0-4 0v5M14 10V4a2 2 0 0 0-4 0v8M10 12V6a2 2 0 0 0-4 0v7M6 13c-2 0-3 1-3 3 0 4 4 6 8 6h3c4 0 7-3 7-7v-4a2 2 0 0 0-4 0" fill="#ffffff" stroke="#0F172A" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>';
   return `url('data:image/svg+xml;utf8,${encodeURIComponent(svg)}') 13 13, grab`;
 })();
+
+// Eraser-shaped cursor (tilted rounded block, classic pencil-eraser silhouette).
+// The browser-default 'cell' cursor was reading as a "+" / crosshair on most
+// platforms and didn't match the tool. Hot-spot at the tip of the eraser so
+// "where the eraser actually erases" sits exactly under the cursor.
+const ERASER_CURSOR = (() => {
+  const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><path d="m7 21-4-4 11-11 4 4L7 21z" fill="#ffffff" stroke="#0F172A" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"/><path d="M14 6l4 4" stroke="#0F172A" stroke-width="1.6" stroke-linecap="round"/><path d="M3 21h18" stroke="#0F172A" stroke-width="1.6" stroke-linecap="round"/></svg>';
+  return `url('data:image/svg+xml;utf8,${encodeURIComponent(svg)}') 4 20, cell`;
+})();
 const HIGHLIGHTER_FADE_MS = 4500; // total visible time for a highlighter stroke
 const HIGHLIGHTER_HOLD_MS = 1800; // hold at full opacity, then fade for the rest
 // The whiteboard is an infinite plane — no fixed page boundary. The grid is
@@ -1771,7 +1780,7 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
               cursor:
                 tool === 'pan' || spacePan ? HAND_CURSOR :
                 tool === 'select' ? 'default' :
-                tool === 'eraser' ? 'cell' :
+                tool === 'eraser' ? ERASER_CURSOR :
                 tool === 'pen' ? PEN_CURSOR :
                 tool === 'highlighter' ? PEN_CURSOR :
                 'crosshair',

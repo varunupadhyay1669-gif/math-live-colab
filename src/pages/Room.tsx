@@ -115,6 +115,9 @@ export default function Room() {
   // Annotation eraser tool (overlay-on-iframe). 'off' by default; 'stroke'
   // deletes whole strokes by click; 'pixel' drags to cut.
   const [eraserMode, setEraserMode] = useState<'off' | 'stroke' | 'pixel'>('off');
+  // Annotation shape tool (overlay-on-iframe). 'off' by default; click and
+  // drag commits a vector shape using the current pen colour and width.
+  const [shapeTool, setShapeTool] = useState<'off' | 'line' | 'rect' | 'circle' | 'arrow'>('off');
   const [penType, setPenType] = useState<'transient' | 'permanent'>('transient');
   const [penColor, setPenColor] = useState('#6366F1');
   const [penWidth, setPenWidth] = useState(3);
@@ -1605,6 +1608,8 @@ export default function Room() {
               onExitExplanation={clearTempContent}
               eraserMode={eraserMode}
               onSetEraserMode={setEraserMode}
+              shapeTool={shapeTool}
+              onSetShapeTool={setShapeTool}
             />
 
             {/* Hidden file input for explanation upload — triggered by the
@@ -1768,6 +1773,7 @@ export default function Room() {
                 iframeRef={iframeRef} interactive={true}
                 eraserMode={eraserMode}
                 eraserWidth={Math.max(penWidth * 4, 18)}
+                shapeTool={shapeTool}
               />
 
               {/* Cursor Overlay */}
