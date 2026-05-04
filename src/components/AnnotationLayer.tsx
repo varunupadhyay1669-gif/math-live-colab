@@ -4,7 +4,7 @@ import { Socket } from 'socket.io-client';
 interface AnnotationLayerProps {
   socket: Socket | null;
   roomId: string;
-  // Mode control
+  // Mode control (existing)
   drawMode: boolean;
   laserMode: boolean;
   penType: 'transient' | 'permanent';
@@ -16,27 +16,63 @@ interface AnnotationLayerProps {
   interactive: boolean;
   // Laser pointer state for display
   laserPointer?: { x: number; y: number; active: boolean };
+  // ── Eraser tool (Phase 31)
+  // Off by default. When on, takes precedence over drawMode/laserMode.
+  // 'stroke' = click on a stroke to delete it (and drag to delete more);
+  // 'pixel'  = drag to "paint" an erase path that cuts through ink already
+  //            on the overlay (destination-out compositing).
+  eraserMode?: 'off' | 'stroke' | 'pixel';
+  // Eraser width — pixel eraser uses this directly; stroke eraser uses it
+  // as the click hit radius.
+  eraserWidth?: number;
 }
 
 interface StrokeData {
+  id?: string;
   points: Array<{ x: number; y: number }>;
   color: string;
   width: number;
   time: number;
   transient?: boolean;
+  // 'pen' (default) is a normal coloured stroke. 'eraser-pixel' is rendered
+  // with globalCompositeOperation = 'destination-out' so it visually cuts
+  // a hole in everything beneath it.
+  kind?: 'pen' | 'eraser-pixel';
+}
+
+const newStrokeId = () => `s-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+// Minimum perpendicular distance from a point to a line segment, in
+// canvas-pixel space. Used by the per-stroke eraser to decide which
+// stroke the click landed on.
+function distanceToSegment(
+  px: number, py: number,
+  ax: number, ay: number,
+  bx: number, by: number,
+): number {
+  const dx = bx - ax;
+  const dy = by - ay;
+  if (dx === 0 && dy === 0) return Math.hypot(px - ax, py - ay);
+  const t = Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / (dx * dx + dy * dy)));
+  return Math.hypot(px - (ax + t * dx), py - (ay + t * dy));
 }
 
 export default function AnnotationLayer({
   socket, roomId, drawMode, laserMode, penType, penColor, penWidth,
   iframeRef, interactive, laserPointer,
+  eraserMode = 'off', eraserWidth = 18,
 }: AnnotationLayerProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const currentStrokeRef = useRef<Array<{ x: number; y: number }>>([]);
   const strokesRef = useRef<StrokeData[]>([]);
   const isTransientRef = useRef(false);
+  const isErasingRef = useRef<false | 'stroke' | 'pixel'>(false);
+  const erasedDuringDragRef = useRef<Set<string>>(new Set());
   const isDrawingRef = useRef(false);
   const animFrameRef = useRef<number>();
   const localLaserRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
+
+  const eraserActive = interactive && eraserMode !== 'off';
 
   const getCanvasCoords = useCallback((e: React.PointerEvent<HTMLCanvasElement> | React.MouseEvent<HTMLCanvasElement>) => {
     const canvas = canvasRef.current;
@@ -80,12 +116,21 @@ export default function AnnotationLayer({
       }
 
       if (alpha <= 0) return;
+      ctx.save();
       ctx.globalAlpha = alpha;
-      ctx.strokeStyle = stroke.color;
+      if (stroke.kind === 'eraser-pixel') {
+        // Cut a hole in the overlay along this path. The hole reveals the
+        // iframe content underneath; on each redraw it is re-cut so it
+        // reads as permanent.
+        ctx.globalCompositeOperation = 'destination-out';
+        ctx.strokeStyle = '#000';
+      } else {
+        ctx.strokeStyle = stroke.color;
+      }
       ctx.lineWidth = stroke.width;
       ctx.lineCap = 'round';
       ctx.lineJoin = 'round';
-      if (stroke.transient) {
+      if (stroke.transient && stroke.kind !== 'eraser-pixel') {
         ctx.shadowColor = stroke.color;
         ctx.shadowBlur = blur;
       } else {
@@ -97,28 +142,35 @@ export default function AnnotationLayer({
         else ctx.lineTo(p.x * w, p.y * h);
       });
       ctx.stroke();
-      ctx.shadowBlur = 0;
+      ctx.restore();
     });
 
     // Current active stroke
     if (currentStrokeRef.current.length > 1) {
+      ctx.save();
       ctx.globalAlpha = 1;
-      ctx.strokeStyle = penColor;
-      ctx.lineWidth = penWidth;
+      const liveErasePixel = isErasingRef.current === 'pixel';
+      if (liveErasePixel) {
+        ctx.globalCompositeOperation = 'destination-out';
+        ctx.strokeStyle = '#000';
+        ctx.lineWidth = eraserWidth;
+      } else {
+        ctx.strokeStyle = penColor;
+        ctx.lineWidth = penWidth;
+        ctx.shadowColor = penColor;
+        ctx.shadowBlur = 14;
+      }
       ctx.lineCap = 'round';
       ctx.lineJoin = 'round';
-      ctx.shadowColor = penColor;
-      ctx.shadowBlur = 14;
       ctx.beginPath();
       currentStrokeRef.current.forEach((p, i) => {
         if (i === 0) ctx.moveTo(p.x * w, p.y * h);
         else ctx.lineTo(p.x * w, p.y * h);
       });
       ctx.stroke();
-      ctx.shadowBlur = 0;
+      ctx.restore();
     }
-    ctx.globalAlpha = 1;
-  }, [penColor, penWidth]);
+  }, [penColor, penWidth, eraserWidth]);
 
   // Animation loop
   useEffect(() => {
@@ -138,8 +190,20 @@ export default function AnnotationLayer({
   // Receive remote strokes
   useEffect(() => {
     if (!socket) return;
-    const handleStroke = (data: { points: Array<{ x: number; y: number }>; color: string; width: number; transient?: boolean }) => {
-      strokesRef.current.push({ ...data, time: Date.now() });
+    const handleStroke = (data: { id?: string; points: Array<{ x: number; y: number }>; color: string; width: number; transient?: boolean; kind?: 'pen' | 'eraser-pixel' }) => {
+      strokesRef.current.push({
+        id: data.id ?? newStrokeId(),
+        points: data.points,
+        color: data.color,
+        width: data.width,
+        transient: data.transient,
+        kind: data.kind,
+        time: Date.now(),
+      });
+      renderStrokes();
+    };
+    const handleDelete = (data: { strokeId: string }) => {
+      strokesRef.current = strokesRef.current.filter(s => s.id !== data.strokeId);
       renderStrokes();
     };
     const handleClear = () => {
@@ -147,23 +211,75 @@ export default function AnnotationLayer({
       renderStrokes();
     };
     socket.on('draw_stroke', handleStroke);
+    socket.on('draw_delete_stroke', handleDelete);
     socket.on('draw_clear', handleClear);
     return () => {
       socket.off('draw_stroke', handleStroke);
+      socket.off('draw_delete_stroke', handleDelete);
       socket.off('draw_clear', handleClear);
     };
   }, [socket, renderStrokes]);
 
+  // Per-stroke eraser hit-test. Returns the id of the stroke under the
+  // cursor (within tolerance), or null. Operates in canvas-pixel space so
+  // the tolerance feels consistent regardless of the canvas' rendered
+  // dimensions.
+  const hitStrokeAt = useCallback((nx: number, ny: number): string | null => {
+    const canvas = canvasRef.current;
+    if (!canvas) return null;
+    const rect = canvas.getBoundingClientRect();
+    const px = nx * rect.width;
+    const py = ny * rect.height;
+    const tol = Math.max(8, eraserWidth / 2);
+    // Check newest first so overlapping strokes prefer the top one.
+    for (let i = strokesRef.current.length - 1; i >= 0; i--) {
+      const stroke = strokesRef.current[i];
+      if (stroke.kind === 'eraser-pixel') continue; // can't erase the eraser
+      const half = stroke.width / 2 + tol;
+      for (let j = 0; j < stroke.points.length - 1; j++) {
+        const a = stroke.points[j];
+        const b = stroke.points[j + 1];
+        if (distanceToSegment(px, py, a.x * rect.width, a.y * rect.height, b.x * rect.width, b.y * rect.height) <= half) {
+          return stroke.id ?? null;
+        }
+      }
+    }
+    return null;
+  }, [eraserWidth]);
+
+  const eraseStrokeAt = useCallback((nx: number, ny: number) => {
+    const id = hitStrokeAt(nx, ny);
+    if (!id || erasedDuringDragRef.current.has(id)) return;
+    erasedDuringDragRef.current.add(id);
+    strokesRef.current = strokesRef.current.filter(s => s.id !== id);
+    if (socket) socket.emit('draw_delete_stroke', { roomId, strokeId: id });
+    renderStrokes();
+  }, [hitStrokeAt, socket, roomId, renderStrokes]);
+
   // ── Drawing handlers (Pointer Events — supports mouse, pen tablet, and touch) ──
   const startDraw = (e: React.PointerEvent<HTMLCanvasElement>) => {
     if (!interactive) return;
+
+    // Eraser branch (takes precedence over the pen / laser modes)
+    if (eraserMode !== 'off') {
+      try { (e.currentTarget as HTMLCanvasElement).setPointerCapture(e.pointerId); } catch {}
+      const pt = getCanvasCoords(e);
+      if (eraserMode === 'stroke') {
+        isErasingRef.current = 'stroke';
+        erasedDuringDragRef.current = new Set();
+        eraseStrokeAt(pt.x, pt.y);
+      } else {
+        // Pixel eraser: draw a stroke tagged 'eraser-pixel'
+        isErasingRef.current = 'pixel';
+        currentStrokeRef.current = [pt];
+      }
+      return;
+    }
+
     // Right-click = transient highlight (mouse only; pen tablets use barrel button which also maps to button 2)
     const isRightClick = e.button === 2;
     if (!drawMode && !laserMode) return;
     if (!drawMode && !isRightClick) return;
-    // Capture the pointer so we keep receiving events even if the pen moves
-    // outside the canvas bounds mid-stroke (crucial for pen tablets with
-    // mapped regions that don't match 1:1)
     try { (e.currentTarget as HTMLCanvasElement).setPointerCapture(e.pointerId); } catch {}
     isDrawingRef.current = true;
     const pt = getCanvasCoords(e);
@@ -172,6 +288,17 @@ export default function AnnotationLayer({
   };
 
   const moveDraw = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    if (isErasingRef.current === 'stroke') {
+      const pt = getCanvasCoords(e);
+      eraseStrokeAt(pt.x, pt.y);
+      return;
+    }
+    if (isErasingRef.current === 'pixel') {
+      const pt = getCanvasCoords(e);
+      currentStrokeRef.current.push(pt);
+      renderStrokes();
+      return;
+    }
     if (!isDrawingRef.current) return;
     const pt = getCanvasCoords(e);
     currentStrokeRef.current.push(pt);
@@ -182,13 +309,33 @@ export default function AnnotationLayer({
     if (e) {
       try { (e.currentTarget as HTMLCanvasElement).releasePointerCapture(e.pointerId); } catch {}
     }
+    if (isErasingRef.current === 'pixel') {
+      // Commit pixel-eraser stroke (and broadcast it)
+      const points = currentStrokeRef.current;
+      if (points.length > 1 && socket) {
+        const id = newStrokeId();
+        const stroke: StrokeData = { id, points, color: '#000', width: eraserWidth, time: Date.now(), kind: 'eraser-pixel' };
+        strokesRef.current.push(stroke);
+        socket.emit('draw_stroke', { roomId, id, points, color: '#000', width: eraserWidth, kind: 'eraser-pixel' });
+      }
+      currentStrokeRef.current = [];
+      isErasingRef.current = false;
+      erasedDuringDragRef.current = new Set();
+      return;
+    }
+    if (isErasingRef.current === 'stroke') {
+      isErasingRef.current = false;
+      erasedDuringDragRef.current = new Set();
+      return;
+    }
     if (!isDrawingRef.current) return;
     isDrawingRef.current = false;
     const points = currentStrokeRef.current;
     if (points.length > 1 && socket) {
-      const stroke: StrokeData = { points, color: penColor, width: penWidth, time: Date.now(), transient: isTransientRef.current };
+      const id = newStrokeId();
+      const stroke: StrokeData = { id, points, color: penColor, width: penWidth, time: Date.now(), transient: isTransientRef.current, kind: 'pen' };
       strokesRef.current.push(stroke);
-      socket.emit('draw_stroke', { roomId, points, color: penColor, width: penWidth, transient: isTransientRef.current });
+      socket.emit('draw_stroke', { roomId, id, points, color: penColor, width: penWidth, transient: isTransientRef.current, kind: 'pen' });
     }
     currentStrokeRef.current = [];
   };
@@ -196,6 +343,7 @@ export default function AnnotationLayer({
   const handlePointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
     moveDraw(e);
     if (!interactive || (!laserMode && !drawMode)) return;
+    if (eraserActive) return;
     const canvas = canvasRef.current;
     if (!canvas) return;
     const rect = canvas.getBoundingClientRect();
@@ -208,24 +356,12 @@ export default function AnnotationLayer({
   };
 
   const handlePointerLeave = (e: React.PointerEvent<HTMLCanvasElement>) => {
-    // Don't end stroke here — pointer capture keeps the stroke alive.
-    // Only clear the laser pointer broadcast (not while drawing).
-    if (!isDrawingRef.current && interactive && socket) {
+    if (!isDrawingRef.current && !isErasingRef.current && interactive && socket) {
       socket.emit('laser_pointer', { roomId, x: 0, y: 0, active: false });
     }
   };
 
-  // Expose clearDrawing via imperative method or just use strokesRef
-  // The parent will call socket.emit('draw_clear') directly
-  const clearStrokes = () => {
-    strokesRef.current = [];
-    renderStrokes();
-  };
-
-  // Listen for parent clear instruction via a custom approach
-  // Actually we already handle draw_clear from socket above
-
-  const showLaser = interactive ? laserMode : (laserPointer?.active ?? false);
+  const showLaser = interactive ? (laserMode && !eraserActive) : (laserPointer?.active ?? false);
   const laserPos = interactive ? localLaserRef.current : (laserPointer ?? { x: 0, y: 0 });
 
   return (
@@ -234,10 +370,10 @@ export default function AnnotationLayer({
         ref={canvasRef}
         className="absolute inset-0 w-full h-full"
         style={{
-          cursor: interactive ? (drawMode ? 'crosshair' : laserMode ? 'none' : 'default') : 'default',
-          pointerEvents: interactive && (drawMode || laserMode) ? 'auto' : 'none',
-          // Prevent the browser from handling the pointer for scroll/pinch/pan —
-          // required so pen tablets and touch screens deliver events to our handlers
+          cursor: interactive
+            ? (eraserActive ? 'cell' : drawMode ? 'crosshair' : laserMode ? 'none' : 'default')
+            : 'default',
+          pointerEvents: interactive && (drawMode || laserMode || eraserActive) ? 'auto' : 'none',
           touchAction: 'none',
           zIndex: 10,
         }}

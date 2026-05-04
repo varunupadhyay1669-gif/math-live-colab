@@ -49,6 +49,9 @@ interface TeacherControlsProps {
   explanationName: string | null;
   onUploadExplanation: () => void; // opens the file picker
   onExitExplanation: () => void;   // clears the temp content and returns to main
+  // Annotation eraser (HTML-overlay drawings)
+  eraserMode: 'off' | 'stroke' | 'pixel';
+  onSetEraserMode: (mode: 'off' | 'stroke' | 'pixel') => void;
   // Follow student clicks
   followStudentClicks: boolean;
   onToggleFollowStudentClicks: () => void;
@@ -72,6 +75,7 @@ export default function TeacherControls({
   onHardReset, leaderboardCount, onToggleLeaderboard,
   onToggleWhiteboard, whiteboardMode,
   explanationActive, explanationName, onUploadExplanation, onExitExplanation,
+  eraserMode, onSetEraserMode,
   followStudentClicks, onToggleFollowStudentClicks,
 }: TeacherControlsProps) {
   const [showTimerMenu, setShowTimerMenu] = useState(false);
@@ -110,12 +114,55 @@ export default function TeacherControls({
                 <path d="M12 19l7-7 3 3-7 7-3-3z"/><path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z"/>
               </svg>
             </button>
-            <button onClick={() => { onSetLaserMode(true); onSetDrawMode(false); }}
+            <button onClick={() => { onSetLaserMode(true); onSetDrawMode(false); onSetEraserMode('off'); }}
               className={`tb-btn ${laserMode ? 'active-rose' : ''}`} data-tip="Laser pointer">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <circle cx="12" cy="12" r="3"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/>
               </svg>
             </button>
+
+            {/* Eraser (annotation overlay) — toggles a stroke/pixel sub-mode.
+                Picking the eraser turns OFF draw + laser modes so only one
+                tool drives the canvas at a time. */}
+            <button
+              onClick={() => {
+                if (eraserMode !== 'off') { onSetEraserMode('off'); return; }
+                onSetEraserMode('stroke');
+                onSetDrawMode(false);
+                onSetLaserMode(false);
+              }}
+              className={`tb-btn ${eraserMode !== 'off' ? 'active' : ''}`}
+              data-tip={eraserMode !== 'off' ? 'Eraser on — click to turn off' : 'Eraser'}
+              aria-pressed={eraserMode !== 'off'}
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="m7 21-4-4 11-11 4 4L7 21z" />
+                <path d="M14 6l4-4 4 4-4 4" />
+                <path d="M3 21h18" />
+              </svg>
+            </button>
+
+            {/* Eraser sub-mode pills (only visible while eraser is on) */}
+            {eraserMode !== 'off' && (
+              <>
+                <button
+                  onClick={() => onSetEraserMode('stroke')}
+                  className={`tb-btn-label ${eraserMode === 'stroke' ? 'active' : ''}`}
+                  data-tip="Click on a stroke to delete the whole stroke"
+                  style={{ fontSize: 12 }}
+                >
+                  Stroke
+                </button>
+                <button
+                  onClick={() => onSetEraserMode('pixel')}
+                  className={`tb-btn-label ${eraserMode === 'pixel' ? 'active' : ''}`}
+                  data-tip="Drag to erase pixels (precise eraser)"
+                  style={{ fontSize: 12 }}
+                >
+                  Pixel
+                </button>
+              </>
+            )}
 
             <div className="toolbar-divider" />
           </>
