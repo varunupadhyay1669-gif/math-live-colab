@@ -1207,8 +1207,14 @@ export default function Room() {
   };
 
   const studentCount = users.filter(u => u.role === 'student').length;
-  const showLeftPanel = viewMode === 'split' || viewMode === 'code';
-  const showPreview = viewMode === 'split' || viewMode === 'preview';
+  // When the room is genuinely empty (no uploads, no iframe, no whiteboard) the
+  // left panel has nothing useful to show — its upload buttons were consolidated
+  // into the right-hand mode picker. Render only the picker, full-width, instead
+  // of leaving a blank 40% strip on the left. As soon as the teacher picks a
+  // surface, viewMode-driven layout takes over again.
+  const hasAnyContent = files.length > 0 || !!iframeUrl || whiteboardMode;
+  const showLeftPanel = (viewMode === 'split' || viewMode === 'code') && hasAnyContent;
+  const showPreview = (viewMode === 'split' || viewMode === 'preview') || !hasAnyContent;
   const activeFile = files.find(f => f.id === activeFileId);
 
   return (
