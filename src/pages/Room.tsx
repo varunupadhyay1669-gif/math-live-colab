@@ -1055,6 +1055,18 @@ export default function Room() {
     showNotif(newEnabled ? '🔗 Scroll sync ON' : '🔓 Free scroll — everyone scrolls independently');
   };
 
+  const toggleWhiteboardMode = () => {
+    const newMode = !whiteboardMode;
+    setWhiteboardMode(newMode);
+    if (socket) {
+      socket.emit('whiteboard_mode_toggle', { roomId, active: newMode });
+    }
+  };
+
+  const startWithWhiteboard = () => {
+    if (!whiteboardMode) toggleWhiteboardMode();
+  };
+
   const toggleWhiteboardSync = () => {
     if (!socket) return;
     const next = !whiteboardSyncEnabled;
@@ -1592,13 +1604,7 @@ export default function Room() {
               onHardReset={handleHardReset}
               leaderboardCount={leaderboard.length}
               onToggleLeaderboard={() => setShowLeaderboard(v => !v)}
-              onToggleWhiteboard={() => {
-                const newMode = !whiteboardMode;
-                setWhiteboardMode(newMode);
-                if (socket) {
-                  socket.emit('whiteboard_mode_toggle', { roomId, active: newMode });
-                }
-              }}
+              onToggleWhiteboard={toggleWhiteboardMode}
               followStudentClicks={followStudentClicks}
               onToggleFollowStudentClicks={() => setFollowStudentClicks(v => !v)}
               whiteboardMode={whiteboardMode}
@@ -1756,11 +1762,58 @@ export default function Room() {
                   )}
                 </div>
               ) : (
-                <div className="flex items-center justify-center h-full" style={{ background: 'var(--bg-surface)' }}>
-                  <div className="text-center">
-                    <div className="text-5xl mb-3 opacity-30">🎯</div>
-                    <h3 className="font-display text-lg font-bold" style={{ color: 'var(--text-muted)' }}>Preview</h3>
-                    <p className="text-sm mt-1" style={{ color: 'var(--text-muted)' }}>Upload or paste HTML to preview</p>
+                /* Empty room — let the teacher pick a starting surface.
+                   Whiteboard for a blank shared canvas; HTML to upload an
+                   interactive simulation. The teacher can switch any time
+                   from the toolbar pills (Whiteboard / Explanation). */
+                <div className="ml-mode-picker-wrap">
+                  <div className="ml-mode-picker">
+                    <span className="ml-eyebrow" style={{ color: 'var(--accent-indigo)', marginBottom: 6 }}>Pick a starting surface</span>
+                    <h2 className="ml-mode-picker-title">How are you teaching today?</h2>
+                    <p className="ml-mode-picker-sub">You can switch between Whiteboard and HTML any time from the toolbar.</p>
+
+                    <div className="ml-mode-picker-cards">
+                      <button onClick={startWithWhiteboard} className="ml-mode-card ml-mode-card-indigo">
+                        <span className="ml-mode-card-icon" aria-hidden="true">
+                          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                            <rect x="3" y="4" width="18" height="13" rx="1.6" />
+                            <path d="M8 21l4-4 4 4" />
+                            <path d="M7 12l3-3 3 2 4-4" />
+                          </svg>
+                        </span>
+                        <span className="ml-mode-card-title">Start with Whiteboard</span>
+                        <span className="ml-mode-card-body">A blank shared canvas. Pen, shapes, images, mutual sync — everything you'd expect.</span>
+                        <span className="ml-mode-card-cta">
+                          Open whiteboard
+                          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                            <path d="M5 12h14M13 6l6 6-6 6" />
+                          </svg>
+                        </span>
+                      </button>
+
+                      <button onClick={() => fileInputRef.current?.click()} className="ml-mode-card ml-mode-card-amber">
+                        <span className="ml-mode-card-icon" aria-hidden="true">
+                          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                            <polyline points="14 2 14 8 20 8"/>
+                            <line x1="9" y1="13" x2="15" y2="13"/>
+                            <line x1="9" y1="17" x2="13" y2="17"/>
+                          </svg>
+                        </span>
+                        <span className="ml-mode-card-title">Start with HTML</span>
+                        <span className="ml-mode-card-body">Upload an interactive HTML simulation, quiz, or worksheet. Pan/zoom mirrors both ways.</span>
+                        <span className="ml-mode-card-cta">
+                          Choose file
+                          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                            <path d="M5 12h14M13 6l6 6-6 6" />
+                          </svg>
+                        </span>
+                      </button>
+                    </div>
+
+                    <p className="ml-mode-picker-hint">
+                      Tip: you can also paste HTML straight from the left panel — useful for quick demos.
+                    </p>
                   </div>
                 </div>
               )}
