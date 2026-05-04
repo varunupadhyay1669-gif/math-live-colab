@@ -1207,14 +1207,15 @@ export default function Room() {
   };
 
   const studentCount = users.filter(u => u.role === 'student').length;
-  // When the room is genuinely empty (no uploads, no iframe, no whiteboard) the
-  // left panel has nothing useful to show — its upload buttons were consolidated
-  // into the right-hand mode picker. Render only the picker, full-width, instead
-  // of leaving a blank 40% strip on the left. As soon as the teacher picks a
-  // surface, viewMode-driven layout takes over again.
-  const hasAnyContent = files.length > 0 || !!iframeUrl || whiteboardMode;
-  const showLeftPanel = (viewMode === 'split' || viewMode === 'code') && hasAnyContent;
-  const showPreview = (viewMode === 'split' || viewMode === 'preview') || !hasAnyContent;
+  // The left panel is the HTML code-editor pane. It's only useful when the
+  // teacher is actually working with HTML files — not on a blank empty room
+  // (the upload buttons live in the right-hand mode picker now), and not in
+  // whiteboard mode (the whiteboard is canvas-only, no files to edit).
+  // Suppressing it in those two cases lets the right side fill the full width.
+  const hasFilesOrIframe = files.length > 0 || !!iframeUrl;
+  const leftPanelUseful = hasFilesOrIframe && !whiteboardMode;
+  const showLeftPanel = (viewMode === 'split' || viewMode === 'code') && leftPanelUseful;
+  const showPreview = (viewMode === 'split' || viewMode === 'preview') || !leftPanelUseful;
   const activeFile = files.find(f => f.id === activeFileId);
 
   return (
@@ -1481,7 +1482,6 @@ export default function Room() {
           }}>
             {/* Upload Bar */}
             <div className="flex items-center gap-3 px-4 py-3 shrink-0" style={{ borderBottom: '1px solid var(--border-subtle)' }}>
-              <input type="file" accept=".html,.htm" ref={fileInputRef} onChange={uploadFileFromInput} className="hidden" multiple />
               <button onClick={() => fileInputRef.current?.click()} className="btn-accent text-[12px]">
                 📤 Upload HTML
               </button>
@@ -1620,6 +1620,18 @@ export default function Room() {
               accept=".html,.htm"
               onChange={handleUploadExplanation}
               className="hidden"
+            />
+
+            {/* Hidden HTML upload input — must live outside the left panel so
+                the mode picker's "Browse files" button still works when the
+                room is empty (the left panel is suppressed in that state). */}
+            <input
+              type="file"
+              accept=".html,.htm"
+              ref={fileInputRef}
+              onChange={uploadFileFromInput}
+              className="hidden"
+              multiple
             />
 
             {/* Step Controls */}
