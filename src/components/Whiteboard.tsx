@@ -16,6 +16,11 @@ interface WhiteboardProps {
     shapes?: BoardShape[];
     view?: BoardView | null;
   } | null;
+  // Whiteboard mutual sync (Miro/Canva "shared book" model). When true on
+  // both sides, every pan/zoom is mirrored to the other side in real time.
+  // When false locally, this user neither broadcasts nor receives view
+  // changes — they get an independent canvas. Default true.
+  whiteboardSyncEnabled?: boolean;
 }
 
 type ShapeKind = 'line' | 'rect' | 'circle' | 'arrow';
@@ -130,7 +135,7 @@ function rectsOverlap(a: AABB, b: AABB): boolean {
 }
 
 const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
-  ({ socket, roomId, isTeacher, interactive, isActive, initialState }, ref) => {
+  ({ socket, roomId, isTeacher, interactive, isActive, initialState, whiteboardSyncEnabled = true }, ref) => {
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const containerRef = useRef<HTMLDivElement>(null);
     const uploadInputRef = useRef<HTMLInputElement>(null);
@@ -297,8 +302,15 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
     }, []);
 
     const emitView = useCallback((nextView: BoardView) => {
-      if (socket && isTeacher) socket.emit('whiteboard_set_view', { roomId, view: nextView });
-    }, [socket, roomId, isTeacher]);
+      if (!socket) return;
+      // Mutual-sync model. The server only relays this if the LOCAL user has
+      // sync enabled; we still gate here so we don't spam the wire when the
+      // user has explicitly opted out. Either side (teacher or student) can
+      // emit when their sync is on, and the relay reaches every other
+      // sync-on user in the room.
+      if (!whiteboardSyncEnabled) return;
+      socket.emit('whiteboard_set_view', { roomId, view: nextView });
+    }, [socket, roomId, whiteboardSyncEnabled]);
 
     const screenToBoard = useCallback((clientX: number, clientY: number) => {
       const rect = canvasRef.current?.getBoundingClientRect();

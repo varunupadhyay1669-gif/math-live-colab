@@ -16,7 +16,7 @@ interface RoomData {
   files: FileEntry[];
   activeFileId: string | null;
   lastRunHtml: string | null;
-  users: Map<string, { name: string; role: 'teacher' | 'student'; joinedAt: number }>;
+  users: Map<string, { name: string; role: 'teacher' | 'student'; joinedAt: number; whiteboardSync: boolean }>;
   isPaused: boolean;
   teacherSocketId: string | null;
   createdAt: number;
@@ -445,7 +445,7 @@ async function startServer() {
       }
 
       socket.join(roomId);
-      room.users.set(socket.id, { name: safeName, role, joinedAt: Date.now() });
+      room.users.set(socket.id, { name: safeName, role, joinedAt: Date.now(), whiteboardSync: true });
 
       // If a student just joined, clear the studentLeftAt timer
       if (role === 'student') {
@@ -869,9 +869,44 @@ async function startServer() {
 
     socket.on('whiteboard_set_view', ({ roomId, view }: any) => {
       const room = rooms.get(roomId);
-      if (!requireTeacher(room, socket.id)) return;
+      if (!isMember(room, socket.id)) return;
+      const sender = room.users.get(socket.id);
+      if (!sender) return;
+      // Treat missing/undefined whiteboardSync as ENABLED (default-on, opt-out).
+      // Only an explicit false suppresses the relay. This also makes the server
+      // forgiving toward any user object that might have been created before
+      // the field existed.
+      if (sender.whiteboardSync === false) return;
+      // Persist the canonical view so late-joining users start at the same
+      // place. Whoever moved last (with sync on) wins.
       room.whiteboard.view = view;
-      socket.to(roomId).emit('whiteboard_set_view', { view });
+      // Mutual sync: relay to every OTHER user whose whiteboardSync isn't
+      // explicitly off. The "shared book" model — pan/zoom happens for both
+      // sides at once.
+      let recipientCount = 0;
+      for (const [otherId, otherUser] of room.users.entries()) {
+        if (otherId === socket.id) continue;
+        if (otherUser.whiteboardSync === false) continue;
+        io.to(otherId).emit('whiteboard_set_view', { view });
+        recipientCount++;
+      }
+      // One-line diagnostic so it's obvious in the server log whether sync is
+      // flowing both ways. Safe to leave in; very low volume.
+      console.log(`🪟 whiteboard_set_view from ${sender.role} ${sender.name} → ${recipientCount} recipient(s)`);
+    });
+
+    // ─── WHITEBOARD: SYNC TOGGLE ───
+    socket.on('set_whiteboard_sync', ({ roomId, enabled }: { roomId: string; enabled: boolean }) => {
+      const room = rooms.get(roomId);
+      if (!isMember(room, socket.id)) return;
+      const user = room.users.get(socket.id);
+      if (!user) return;
+      user.whiteboardSync = !!enabled;
+      io.to(roomId).emit('whiteboard_sync_changed', {
+        userId: socket.id,
+        userName: user.name,
+        enabled: user.whiteboardSync,
+      });
     });
 
     // ─── WHITEBOARD: SHAPES ───
