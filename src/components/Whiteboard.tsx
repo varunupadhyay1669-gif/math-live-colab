@@ -47,7 +47,11 @@ interface DrawStroke {
   points: DrawPoint[];
   color: string;
   width: number;
-  tool: 'pen';
+  // 'pen' = a normal coloured stroke. 'eraser-pixel' = an erase stroke,
+  // rendered with destination-out compositing so it visually removes whatever
+  // pen strokes / shapes / images sit beneath it (within the rendered frame).
+  // Stored as a stroke so it persists, syncs, and is undoable like any other.
+  tool: 'pen' | 'eraser-pixel';
 }
 
 interface BoardImageObject {
@@ -178,6 +182,11 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
     const [multiShapeIds, setMultiShapeIds] = useState<string[]>([]);
     const [multiStrokeIndices, setMultiStrokeIndices] = useState<number[]>([]);
     const [tool, setTool] = useState<BoardTool>('select');
+    // When tool is 'eraser', this picks between two eraser flavours:
+    //   stroke = click on a stroke to delete the entire stroke (existing).
+    //   pixel  = drag to "paint" an erase path that removes whatever it
+    //            crosses (image / shape / pen ink), pixel-eraser style.
+    const [eraserMode, setEraserMode] = useState<'stroke' | 'pixel'>('stroke');
     const [color, setColor] = useState('#111827');
     const [width, setWidth] = useState(4);
     const [view, setView] = useState<BoardView>({ boardScale: 1, boardOffsetX: 0, boardOffsetY: 0 });
@@ -295,8 +304,9 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
               const additions = removedObjects.filter(o => !existing.has(o.id));
               return [...prev, ...additions];
             });
+            // No explicit loadImage — the existing `objects` useEffect re-runs
+            // when the array changes and calls loadImage for any new entry.
             removedObjects.forEach(o => {
-              loadImage(o);
               if (socket && isTeacher) socket.emit('whiteboard_add_image', { roomId, object: o });
             });
           }
@@ -350,7 +360,7 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
           }
         },
       });
-    }, [multiObjectIds, multiShapeIds, multiStrokeIndices, objects, shapes, socket, isTeacher, roomId, clearMultiSelection, recordAction, loadImage]);
+    }, [multiObjectIds, multiShapeIds, multiStrokeIndices, objects, shapes, socket, isTeacher, roomId, clearMultiSelection, recordAction]);
 
     const selectedShape = selectedShapeId ? shapes.find(s => s.id === selectedShapeId) : null;
 
@@ -903,16 +913,34 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
 
       const drawStroke = (stroke: DrawStroke) => {
         if (stroke.points.length === 0) return;
-        ctx.beginPath();
-        ctx.strokeStyle = stroke.color;
+        ctx.save();
+        if (stroke.tool === 'eraser-pixel') {
+          // Pixel eraser: cut a hole in everything currently on the canvas
+          // along this stroke path. The hole reveals the canvas background
+          // (and through that, the page below); on the next redraw it is
+          // re-cut, so it reads as a permanent erase.
+          ctx.globalCompositeOperation = 'destination-out';
+          ctx.strokeStyle = '#000'; // colour irrelevant under destination-out
+        } else {
+          ctx.strokeStyle = stroke.color;
+        }
         ctx.lineWidth = stroke.width;
         ctx.lineCap = 'round';
         ctx.lineJoin = 'round';
+        ctx.beginPath();
         stroke.points.forEach((point, index) => index === 0 ? ctx.moveTo(point.x, point.y) : ctx.lineTo(point.x, point.y));
         ctx.stroke();
+        ctx.restore();
       };
       strokes.forEach(drawStroke);
-      if (currentStroke.length > 0 && tool === 'pen') drawStroke({ id: 'current', points: currentStroke, color, width, tool: 'pen' });
+      // Live preview while drawing (pen or pixel-eraser)
+      if (currentStroke.length > 0) {
+        if (tool === 'pen') {
+          drawStroke({ id: 'current', points: currentStroke, color, width, tool: 'pen' });
+        } else if (tool === 'eraser' && eraserMode === 'pixel') {
+          drawStroke({ id: 'current', points: currentStroke, color, width, tool: 'eraser-pixel' });
+        }
+      }
       if (selectedStrokeIndex !== null && strokes[selectedStrokeIndex]) {
         const bounds = strokeBounds(strokes[selectedStrokeIndex]);
         if (bounds) {
@@ -968,7 +996,7 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
       }
 
       ctx.restore();
-    }, [objects, selectedObjectId, selectedStrokeIndex, strokeBounds, strokes, currentStroke, color, width, tool, view, shapes, draftShape, selectedShape, shapeBounds, getObjectHandlePositions, marquee, multiObjectIds, multiShapeIds, multiStrokeIndices]);
+    }, [objects, selectedObjectId, selectedStrokeIndex, strokeBounds, strokes, currentStroke, color, width, tool, view, shapes, draftShape, selectedShape, shapeBounds, getObjectHandlePositions, marquee, multiObjectIds, multiShapeIds, multiStrokeIndices, eraserMode]);
 
     const downloadBoard = useCallback(() => {
       const canvas = canvasRef.current;
@@ -1178,9 +1206,19 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
         return;
       }
       if (tool === 'eraser') {
-        erasedDuringDragRef.current = new Set();
-        dragRef.current = { mode: 'erase', pointerId: e.pointerId, startClientX: e.clientX, startClientY: e.clientY, startOffsetX: view.boardOffsetX, startOffsetY: view.boardOffsetY };
-        eraseAtPoint(point);
+        if (eraserMode === 'stroke') {
+          erasedDuringDragRef.current = new Set();
+          dragRef.current = { mode: 'erase', pointerId: e.pointerId, startClientX: e.clientX, startClientY: e.clientY, startOffsetX: view.boardOffsetX, startOffsetY: view.boardOffsetY };
+          eraseAtPoint(point);
+          return;
+        }
+        // Pixel-eraser: behave exactly like pen, but the resulting stroke is
+        // tagged 'eraser-pixel' so render-time uses destination-out compositing.
+        setSelectedObjectId(null);
+        setSelectedStrokeIndex(null);
+        setSelectedShapeId(null);
+        dragRef.current = { mode: 'draw', pointerId: e.pointerId, startClientX: e.clientX, startClientY: e.clientY, startOffsetX: view.boardOffsetX, startOffsetY: view.boardOffsetY };
+        setLiveStroke([point]);
         return;
       }
       if (tool === 'select') {
@@ -1321,7 +1359,8 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
       if (!drag || drag.pointerId !== e.pointerId) return;
       try { e.currentTarget.releasePointerCapture(e.pointerId); } catch {}
       if (drag.mode === 'draw' && currentStrokeRef.current.length > 1) {
-        const stroke: DrawStroke = { id: newId('stroke'), points: currentStrokeRef.current, color, width, tool: 'pen' };
+        const strokeTool: DrawStroke['tool'] = (tool === 'eraser' && eraserMode === 'pixel') ? 'eraser-pixel' : 'pen';
+        const stroke: DrawStroke = { id: newId('stroke'), points: currentStrokeRef.current, color, width, tool: strokeTool };
         setStrokes(prev => [...prev, stroke]);
         if (socket) socket.emit('whiteboard_draw', { roomId, stroke });
         recordAction({
@@ -1544,7 +1583,7 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
     ];
 
     const toolChip =
-      tool === 'eraser' ? 'Erase ink' :
+      tool === 'eraser' ? (eraserMode === 'pixel' ? 'Erase pixels — drag across content' : 'Erase whole stroke — click on a stroke') :
       tool === 'pan' ? 'Move board' :
       tool === 'select' ? 'Select and arrange' :
       tool === 'line' ? 'Draw line — click and drag' :
@@ -1587,6 +1626,20 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
 
         <div className="whiteboard-topbar">
           <div className="whiteboard-chip">{toolChip}</div>
+          {tool === 'eraser' && (
+            <div className="whiteboard-control-group" role="group" aria-label="Eraser mode">
+              <button
+                onClick={() => setEraserMode('stroke')}
+                className={`whiteboard-action ${eraserMode === 'stroke' ? 'active' : ''}`}
+                title="Click on a stroke to delete the whole stroke"
+              >Stroke</button>
+              <button
+                onClick={() => setEraserMode('pixel')}
+                className={`whiteboard-action ${eraserMode === 'pixel' ? 'active' : ''}`}
+                title="Drag across content to erase pixels (precise eraser)"
+              >Pixel</button>
+            </div>
+          )}
           {showColorAndWidth && (
             <div className="whiteboard-control-group">
               {COLORS.map(c => (
