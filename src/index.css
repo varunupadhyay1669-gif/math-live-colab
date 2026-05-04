@@ -2292,6 +2292,49 @@ html, body, #root {
   border-radius: 10px;
 }
 
+/* ── Whiteboard surface-switch button (prominent) ──
+   The Whiteboard / iframe toggle is a primary navigation action — picking
+   which canvas you're teaching on. It deserves to stand out vs the icon-
+   only utility buttons around it. Always shows a tinted indigo background
+   + label, even when inactive, so a new user spots it immediately. */
+.tb-btn-whiteboard {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 36px;
+  padding: 0 13px;
+  border-radius: 10px;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: -0.005em;
+  color: var(--accent-indigo);
+  background: rgba(79, 70, 229, 0.08);
+  border: 1px solid rgba(79, 70, 229, 0.16);
+  cursor: pointer;
+  transition: background 140ms var(--ml-easing), border-color 140ms var(--ml-easing), color 140ms var(--ml-easing), box-shadow 200ms var(--ml-easing), transform 140ms var(--ml-easing);
+}
+.tb-btn-whiteboard:hover {
+  background: rgba(79, 70, 229, 0.13);
+  border-color: rgba(79, 70, 229, 0.24);
+  transform: translateY(-1px);
+  box-shadow: 0 6px 14px -8px rgba(79, 70, 229, 0.40);
+}
+.tb-btn-whiteboard:active { transform: translateY(0); }
+.tb-btn-whiteboard.is-active {
+  background: var(--accent-indigo);
+  border-color: var(--accent-indigo);
+  color: #FFFFFF;
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.18) inset, 0 6px 14px -6px rgba(79, 70, 229, 0.55);
+}
+.tb-btn-whiteboard.is-active:hover {
+  background: var(--accent-indigo-hover);
+  border-color: var(--accent-indigo-hover);
+}
+@media (max-width: 760px) {
+  .tb-btn-whiteboard span.tb-label-text { display: none; }
+  .tb-btn-whiteboard { padding: 0 11px; }
+}
+
 /* ── Reduce visual noise: lighter divider colors everywhere ── */
 hr,
 .divider {
