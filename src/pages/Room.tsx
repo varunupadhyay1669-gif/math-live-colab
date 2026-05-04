@@ -112,6 +112,9 @@ export default function Room() {
   // ── Drawing & Annotation ──
   const [drawMode, setDrawMode] = useState(false);
   const [laserMode, setLaserMode] = useState(false);
+  // Annotation eraser tool (overlay-on-iframe). 'off' by default; 'stroke'
+  // deletes whole strokes by click; 'pixel' drags to cut.
+  const [eraserMode, setEraserMode] = useState<'off' | 'stroke' | 'pixel'>('off');
   const [penType, setPenType] = useState<'transient' | 'permanent'>('transient');
   const [penColor, setPenColor] = useState('#6366F1');
   const [penWidth, setPenWidth] = useState(3);
@@ -1600,6 +1603,8 @@ export default function Room() {
               explanationName={tempContent?.name ?? null}
               onUploadExplanation={() => tempFileInputRef.current?.click()}
               onExitExplanation={clearTempContent}
+              eraserMode={eraserMode}
+              onSetEraserMode={setEraserMode}
             />
 
             {/* Hidden file input for explanation upload — triggered by the
@@ -1761,6 +1766,8 @@ export default function Room() {
                 drawMode={drawMode} laserMode={laserMode}
                 penType={penType} penColor={penColor} penWidth={penWidth}
                 iframeRef={iframeRef} interactive={true}
+                eraserMode={eraserMode}
+                eraserWidth={Math.max(penWidth * 4, 18)}
               />
 
               {/* Cursor Overlay */}

@@ -818,9 +818,20 @@ async function startServer() {
       socket.to(roomId).emit('spotlight', { x, y, active, senderId: socket.id });
     });
 
-    // ─── DRAWING / ANNOTATION ───
-    socket.on('draw_stroke', ({ roomId, points, color, width, transient }: any) => {
-      socket.to(roomId).emit('draw_stroke', { points, color, width, transient, senderId: socket.id });
+    // ─── DRAWING / ANNOTATION (overlay over the iframe simulation) ───
+    // The payload now flows through unchanged so future fields (id, tool
+    // variants, shape kinds) reach the other clients automatically.
+    socket.on('draw_stroke', ({ roomId, ...rest }: any) => {
+      socket.to(roomId).emit('draw_stroke', { ...rest, senderId: socket.id });
+    });
+
+    // Delete a single annotation stroke by id (used by the per-stroke
+    // eraser; pixel-eraser strokes are drawn with destination-out and use
+    // the regular draw_stroke path).
+    socket.on('draw_delete_stroke', ({ roomId, strokeId }: { roomId: string; strokeId: string }) => {
+      if (!isMember(rooms.get(roomId), socket.id)) return;
+      if (typeof strokeId !== 'string') return;
+      socket.to(roomId).emit('draw_delete_stroke', { strokeId });
     });
 
     socket.on('draw_clear', ({ roomId }: { roomId: string }) => {
