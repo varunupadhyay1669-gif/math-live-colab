@@ -2038,3 +2038,266 @@ body {
   .ml-dark-center { gap: 20px; padding: 40px 0 20px; }
   .ml-dark-btn { height: 46px; padding: 0 22px; }
 }
+
+/* ═══════════════════════════════════════════════════════════════
+   CHROME v4.2 POLISH
+   Refines the Room + StudentView surfaces (header, toolbar, preview
+   frame, side panels, badges, pills, status indicators, modals) so
+   the inside-the-app chrome reads as visually cohesive with the
+   premium dark landing. CSS-only — no JSX changes — so the layouts
+   that already work stay intact.
+
+   Goals:
+   - Less visual noise per pixel (softer borders, gentler shadows).
+   - Cleaner type rhythm (badges + pills tighter, header more
+     confident).
+   - The simulation/whiteboard "stage" reads as the visual hero
+     (slightly darker frame around it, restrained chrome around).
+   - Deeper indigo accent everywhere a v3 leftover used the lighter
+     #5B5FE6.
+   ═══════════════════════════════════════════════════════════════ */
+
+/* ── App shell background: subtle warm tint (was a flat var) ── */
+html, body, #root {
+  background: var(--bg-primary);
+}
+
+/* ── Header: refined glass surface ── */
+.app-header {
+  height: 56px;
+  padding: 0 20px;
+  background: rgba(255, 255, 255, 0.78);
+  border-bottom: 1px solid rgba(15, 17, 23, 0.06);
+  box-shadow: 0 1px 0 rgba(15, 17, 23, 0.02), 0 8px 24px -24px rgba(15, 17, 23, 0.30);
+  backdrop-filter: blur(20px) saturate(160%);
+  -webkit-backdrop-filter: blur(20px) saturate(160%);
+}
+.header-section { gap: 10px; min-width: 0; }
+.header-divider {
+  width: 1px;
+  height: 20px;
+  background: rgba(15, 17, 23, 0.08);
+  margin: 0 6px;
+}
+
+/* ── Teacher toolbar: airier, softer ── */
+.teacher-toolbar {
+  gap: 4px;
+  padding: 9px 12px;
+  background: rgba(255, 255, 255, 0.82);
+  border-bottom: 1px solid rgba(15, 17, 23, 0.05);
+  box-shadow: 0 1px 0 rgba(15, 17, 23, 0.02);
+  backdrop-filter: blur(20px) saturate(160%);
+  -webkit-backdrop-filter: blur(20px) saturate(160%);
+}
+
+.toolbar-divider {
+  height: 22px;
+  background: rgba(15, 17, 23, 0.08);
+  margin: 0 8px;
+  border-radius: 1px;
+}
+
+/* ── Toolbar buttons: cleaner shapes, premium hover, indigo active ── */
+.tb-btn,
+.tb-btn-label,
+.btn,
+.btn-icon {
+  border: 1px solid transparent;
+  border-radius: 10px;
+  transition: background 140ms var(--ml-easing), border-color 140ms var(--ml-easing), color 140ms var(--ml-easing), transform 120ms var(--ml-easing), box-shadow 160ms var(--ml-easing);
+}
+.tb-btn { width: 36px; height: 36px; }
+.tb-btn-label { height: 36px; padding: 0 12px; }
+
+.tb-btn:hover,
+.tb-btn-label:hover,
+.btn:hover,
+.btn-icon:hover {
+  background: rgba(15, 17, 23, 0.05);
+  border-color: rgba(15, 17, 23, 0.06);
+  color: var(--text-primary);
+}
+
+.tb-btn.active,
+.tb-btn-label.active,
+.btn-icon.active,
+.ml-icon-btn[aria-pressed="true"] {
+  background: linear-gradient(180deg, rgba(79, 70, 229, 0.12), rgba(79, 70, 229, 0.06));
+  border-color: rgba(79, 70, 229, 0.22);
+  color: var(--accent-indigo);
+  box-shadow: 0 4px 12px -8px rgba(79, 70, 229, 0.40);
+}
+
+.tb-btn.active-emerald,
+.tb-btn-label.active-emerald {
+  background: linear-gradient(180deg, rgba(5, 150, 105, 0.12), rgba(5, 150, 105, 0.06));
+  border-color: rgba(5, 150, 105, 0.22);
+  color: var(--accent-emerald);
+}
+.tb-btn.active-rose,
+.tb-btn-label.active-rose {
+  background: linear-gradient(180deg, rgba(220, 38, 38, 0.12), rgba(220, 38, 38, 0.06));
+  border-color: rgba(220, 38, 38, 0.22);
+  color: var(--accent-rose);
+}
+
+/* ── Preview frame: premium "stage" treatment ── */
+.preview-frame,
+.ml-surface,
+.ml-surface-elevated,
+.panel {
+  border-color: rgba(15, 17, 23, 0.06);
+}
+.preview-frame {
+  border-radius: 16px;
+  background: #FFFFFF;
+  box-shadow:
+    0 1px 2px rgba(15, 17, 23, 0.04),
+    0 18px 44px -28px rgba(15, 17, 23, 0.30),
+    0 0 0 1px rgba(15, 17, 23, 0.04);
+  overflow: hidden;
+  position: relative;
+}
+.preview-frame::after {
+  /* Subtle indigo glow to make the stage pop without competing */
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  box-shadow: 0 0 0 1px rgba(79, 70, 229, 0.04) inset;
+}
+
+/* ── Badges: refined v4 ── */
+.ml-badge,
+.badge,
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 9999px;
+  background: rgba(15, 17, 23, 0.04);
+  border: 1px solid rgba(15, 17, 23, 0.06);
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  color: var(--text-secondary);
+  line-height: 1;
+}
+.ml-badge-indigo {
+  background: rgba(79, 70, 229, 0.08);
+  border-color: rgba(79, 70, 229, 0.16);
+  color: var(--accent-indigo);
+}
+.ml-badge-emerald {
+  background: rgba(5, 150, 105, 0.08);
+  border-color: rgba(5, 150, 105, 0.16);
+  color: var(--accent-emerald);
+}
+.ml-badge-rose {
+  background: rgba(220, 38, 38, 0.08);
+  border-color: rgba(220, 38, 38, 0.16);
+  color: var(--accent-rose);
+}
+.ml-badge-amber {
+  background: rgba(217, 119, 6, 0.08);
+  border-color: rgba(217, 119, 6, 0.16);
+  color: var(--accent-amber);
+}
+.ml-badge-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 9999px;
+  background: currentColor;
+  box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.10), 0 0 6px rgba(79, 70, 229, 0.30);
+}
+
+/* ── Side panels (Chat, UserList, etc.) ── */
+.panel,
+.ml-surface {
+  background: #FFFFFF;
+  border-radius: 14px;
+  box-shadow:
+    0 1px 2px rgba(15, 17, 23, 0.04),
+    0 12px 28px -16px rgba(15, 17, 23, 0.14),
+    0 0 0 1px rgba(15, 17, 23, 0.04);
+}
+
+/* ── Modal / popover surfaces ── */
+.dropdown-menu,
+.ml-share-popover {
+  border-radius: 14px;
+  background: #FFFFFF;
+  border: 1px solid rgba(15, 17, 23, 0.06);
+  box-shadow:
+    0 1px 2px rgba(15, 17, 23, 0.04),
+    0 24px 56px -20px rgba(15, 17, 23, 0.32),
+    0 0 0 1px rgba(15, 17, 23, 0.04);
+}
+
+/* ── Subtle "live" dot animation for status pills ── */
+@keyframes ml-pulse-dot {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(5, 150, 105, 0.50); }
+  50%      { box-shadow: 0 0 0 6px rgba(5, 150, 105, 0); }
+}
+.ml-badge-emerald .ml-badge-dot,
+.status-pill[data-live="true"] .ml-badge-dot {
+  background: var(--accent-emerald);
+  animation: ml-pulse-dot 2.4s ease-out infinite;
+}
+
+/* ── Inputs across the app ── */
+.ml-input,
+.input-field {
+  background: #FCFCFB;
+  border: 1px solid rgba(15, 17, 23, 0.10);
+  color: var(--text-primary);
+  border-radius: 10px;
+  font-weight: 500;
+  transition: border-color 140ms var(--ml-easing), background 140ms var(--ml-easing), box-shadow 140ms var(--ml-easing);
+}
+.ml-input:hover,
+.input-field:hover { border-color: rgba(15, 17, 23, 0.16); }
+.ml-input:focus,
+.input-field:focus {
+  outline: none;
+  border-color: rgba(79, 70, 229, 0.55);
+  background: #FFFFFF;
+  box-shadow: 0 0 0 4px rgba(79, 70, 229, 0.10);
+}
+
+/* ── Subtle pulse for the room-code chip in header ── */
+.header-room-code {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 8px;
+  background: rgba(79, 70, 229, 0.06);
+  border: 1px solid rgba(79, 70, 229, 0.14);
+  color: var(--accent-indigo);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+/* ── Refined hover for any header action button ── */
+.app-header .btn,
+.app-header .btn-icon,
+.app-header .ml-btn,
+.app-header .ml-icon-btn {
+  border-radius: 10px;
+}
+
+/* ── Reduce visual noise: lighter divider colors everywhere ── */
+hr,
+.divider {
+  border: none;
+  height: 1px;
+  background: rgba(15, 17, 23, 0.06);
+  margin: 0;
+}
+
