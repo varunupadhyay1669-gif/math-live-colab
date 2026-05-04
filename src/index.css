@@ -2537,3 +2537,57 @@ hr,
   color: var(--text-muted);
 }
 
+/* Static-card variant: container that doesn't itself act as a button.
+   Used for the HTML card now that its sub-actions (Browse files / Paste
+   snippet) are real buttons inside the card. Keeps the visual affordance
+   without making the whole card clickable. */
+.ml-mode-card-static {
+  cursor: default;
+}
+.ml-mode-card-static:hover {
+  transform: none;
+}
+
+/* Sub-actions row inside a card */
+.ml-mode-card-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
+  flex-wrap: wrap;
+}
+.ml-mode-card-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 36px;
+  padding: 0 14px;
+  border-radius: 9px;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: -0.005em;
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: background 140ms var(--ml-easing), border-color 140ms var(--ml-easing), transform 120ms var(--ml-easing), box-shadow 200ms var(--ml-easing);
+}
+.ml-mode-card-action:active { transform: translateY(0); }
+.ml-mode-card-action-primary {
+  background: var(--accent-amber);
+  color: #FFFFFF;
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.18) inset, 0 6px 14px -8px rgba(217, 119, 6, 0.50);
+}
+.ml-mode-card-action-primary:hover {
+  background: #B45309;
+  transform: translateY(-1px);
+}
+.ml-mode-card-action-ghost {
+  background: rgba(217, 119, 6, 0.06);
+  border-color: rgba(217, 119, 6, 0.18);
+  color: var(--accent-amber);
+}
+.ml-mode-card-action-ghost:hover {
+  background: rgba(217, 119, 6, 0.12);
+  border-color: rgba(217, 119, 6, 0.30);
+  transform: translateY(-1px);
+}
+

@@ -1510,24 +1510,12 @@ export default function Room() {
             {/* Code Area */}
             <div className="flex-1 flex flex-col overflow-hidden relative min-h-0">
               {files.length === 0 ? (
-                <div className="absolute inset-0 flex items-center justify-center p-8">
-                  <div className="text-center max-w-sm p-10 rounded-2xl animate-slide-up"
-                    style={{ background: 'var(--bg-surface)', border: '1px solid var(--border-subtle)' }}>
-                    <div className="text-5xl mb-5 animate-gentle-bounce">📄</div>
-                    <h3 className="font-display text-xl font-bold mb-3" style={{ color: 'var(--text-primary)' }}>Empty Canvas</h3>
-                    <p className="text-sm mb-8" style={{ color: 'var(--text-muted)', lineHeight: '1.6' }}>
-                      Upload an HTML file or paste a code snippet to get started.
-                    </p>
-                    <div className="flex flex-col gap-3">
-                      <button onClick={() => fileInputRef.current?.click()} className="btn-primary justify-center text-sm">
-                        Browse Files
-                      </button>
-                      <button onClick={() => setShowPasteModal(true)} className="btn-secondary justify-center text-sm">
-                        Paste Snippet
-                      </button>
-                    </div>
-                  </div>
-                </div>
+                /* Empty left panel — the right-hand mode picker is now the
+                   single source of upload actions (Choose file + Paste
+                   snippet, both rendered inside the "Start with HTML" card).
+                   We deliberately render nothing here so the user has one
+                   clear path instead of two duplicate empty states. */
+                null
               ) : (
                 <>
                   {/* Editor header */}
@@ -1791,7 +1779,7 @@ export default function Room() {
                         </span>
                       </button>
 
-                      <button onClick={() => fileInputRef.current?.click()} className="ml-mode-card ml-mode-card-amber">
+                      <div className="ml-mode-card ml-mode-card-amber ml-mode-card-static">
                         <span className="ml-mode-card-icon" aria-hidden="true">
                           <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
                             <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
@@ -1802,18 +1790,27 @@ export default function Room() {
                         </span>
                         <span className="ml-mode-card-title">Start with HTML</span>
                         <span className="ml-mode-card-body">Upload an interactive HTML simulation, quiz, or worksheet. Pan/zoom mirrors both ways.</span>
-                        <span className="ml-mode-card-cta">
-                          Choose file
-                          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                            <path d="M5 12h14M13 6l6 6-6 6" />
-                          </svg>
-                        </span>
-                      </button>
+                        <div className="ml-mode-card-actions">
+                          <button onClick={() => fileInputRef.current?.click()} className="ml-mode-card-action ml-mode-card-action-primary">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                              <polyline points="14 2 14 8 20 8" />
+                            </svg>
+                            Browse files
+                          </button>
+                          <button onClick={() => setShowPasteModal(true)} className="ml-mode-card-action ml-mode-card-action-ghost">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                              <rect x="9" y="2" width="6" height="4" rx="1" />
+                              <path d="M9 4H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2h-2" />
+                            </svg>
+                            Paste snippet
+                          </button>
+                        </div>
+                      </div>
                     </div>
 
-                    <p className="ml-mode-picker-hint">
-                      Tip: you can also paste HTML straight from the left panel — useful for quick demos.
-                    </p>
+                    {/* No "Tip" hint any more — both upload paths now live
+                        directly under the Start with HTML card above. */}
                   </div>
                 </div>
               )}
