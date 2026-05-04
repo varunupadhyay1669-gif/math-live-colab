@@ -79,6 +79,14 @@ const isShapeTool = (t: BoardTool): t is ShapeKind => SHAPE_TOOLS.includes(t);
 
 const COLORS = ['#111827', '#EF4444', '#10B981', '#2563EB', '#F59E0B', '#7C3AED', '#FFFFFF'];
 const WIDTHS = [2, 4, 6, 10, 16, 24];
+
+// Pen-shaped cursor (hot-spot at the nib, bottom-left of a 24x24 SVG so the tip
+// of the pen sits on the actual draw point). Crosshair is the fallback if the
+// browser refuses the data-URL cursor.
+const PEN_CURSOR = (() => {
+  const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><path d="M17 3a2.8 2.8 0 0 1 4 4L8 20l-5 1 1-5L17 3z" fill="white" stroke="black" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"/><path d="M14 6l4 4" stroke="black" stroke-width="1.4" stroke-linecap="round"/></svg>';
+  return `url('data:image/svg+xml;utf8,${encodeURIComponent(svg)}') 3 21, crosshair`;
+})();
 const BOARD_WIDTH = 3200;
 const BOARD_HEIGHT = 2200;
 const MIN_SCALE = 0.15;
@@ -106,8 +114,9 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
     const erasedDuringDragRef = useRef<Set<number>>(new Set());
     const shapesRef = useRef<BoardShape[]>([]);
     const draftShapeRef = useRef<BoardShape | null>(null);
+    type ObjectHandle = 'tl' | 'tr' | 'bl' | 'br' | 'rotate';
     const dragRef = useRef<{
-      mode: 'draw' | 'erase' | 'pan' | 'object' | 'shape-create' | 'shape-move' | null;
+      mode: 'draw' | 'erase' | 'pan' | 'object' | 'object-resize' | 'object-rotate' | 'shape-create' | 'shape-move' | null;
       pointerId: number;
       startClientX: number;
       startClientY: number;
@@ -116,6 +125,8 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
       objectId?: string;
       objectStartX?: number;
       objectStartY?: number;
+      objectStart?: BoardImageObject; // full snapshot used by resize / rotate
+      handle?: ObjectHandle;
       shapeId?: string;
       shapeStart?: { x1: number; y1: number; x2: number; y2: number };
     } | null>(null);
@@ -308,6 +319,69 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
       setSelectedObjectId(null);
     }, [selectedObjectId, socket, isTeacher, roomId]);
 
+    // Where the resize / rotate handles sit relative to a selected image (board space).
+    const getObjectHandlePositions = useCallback((object: BoardImageObject) => {
+      const w = object.width * object.scale;
+      const h = object.height * object.scale;
+      const ROT_OFFSET = 32 / view.boardScale;
+      return {
+        tl: { x: object.x,         y: object.y         },
+        tr: { x: object.x + w,     y: object.y         },
+        bl: { x: object.x,         y: object.y + h     },
+        br: { x: object.x + w,     y: object.y + h     },
+        rotate: { x: object.x + w / 2, y: object.y - ROT_OFFSET },
+      };
+    }, [view.boardScale]);
+
+    const findObjectHandle = useCallback((point: DrawPoint, object: BoardImageObject): ObjectHandle | null => {
+      const HIT = 14 / view.boardScale; // generous touch target
+      const handles = getObjectHandlePositions(object);
+      const order: ObjectHandle[] = ['rotate', 'tl', 'tr', 'bl', 'br'];
+      for (const id of order) {
+        const h = handles[id];
+        if (Math.abs(point.x - h.x) <= HIT && Math.abs(point.y - h.y) <= HIT) return id;
+      }
+      return null;
+    }, [view.boardScale, getObjectHandlePositions]);
+
+    // Compute the new object after a resize drag from one of the corner handles.
+    // Aspect ratio is preserved by scaling on the diagonal distance from the
+    // opposite (anchor) corner to the current pointer.
+    const applyObjectResize = useCallback((start: BoardImageObject, handle: ObjectHandle, point: DrawPoint): BoardImageObject => {
+      if (handle === 'rotate') return start;
+      const w = start.width * start.scale;
+      const h = start.height * start.scale;
+      // Anchor = the corner OPPOSITE to the dragged handle; it stays fixed.
+      const anchor =
+        handle === 'tl' ? { x: start.x + w, y: start.y + h } :
+        handle === 'tr' ? { x: start.x,     y: start.y + h } :
+        handle === 'bl' ? { x: start.x + w, y: start.y     } :
+        /* br */          { x: start.x,     y: start.y     };
+      const baseDiag = Math.hypot(start.width, start.height);
+      const newDiag  = Math.hypot(point.x - anchor.x, point.y - anchor.y);
+      const newScale = Math.max(newDiag / baseDiag, 0.05); // min 5% so it can't disappear
+      const newW = start.width * newScale;
+      const newH = start.height * newScale;
+      const newX =
+        handle === 'tl' || handle === 'bl' ? anchor.x - newW : anchor.x;
+      const newY =
+        handle === 'tl' || handle === 'tr' ? anchor.y - newH : anchor.y;
+      return { ...start, x: newX, y: newY, scale: newScale };
+    }, []);
+
+    // Compute the new rotation in degrees from a rotation-handle drag.
+    const applyObjectRotate = useCallback((start: BoardImageObject, point: DrawPoint): BoardImageObject => {
+      const w = start.width * start.scale;
+      const h = start.height * start.scale;
+      const cx = start.x + w / 2;
+      const cy = start.y + h / 2;
+      // The handle starts directly above the centre, which by convention means
+      // rotation = 0. atan2 of (handle - centre) when handle is "up" is -PI/2,
+      // so add PI/2 to get a 0-aligned rotation.
+      const angle = Math.atan2(point.y - cy, point.x - cx) + Math.PI / 2;
+      return { ...start, rotation: (angle * 180) / Math.PI };
+    }, []);
+
     const deleteStrokeIndices = useCallback((indices: number[]) => {
       const unique = Array.from(new Set(indices)).filter(index => index >= 0 && index < strokesRef.current.length).sort((a, b) => b - a);
       if (unique.length === 0) return;
@@ -420,6 +494,33 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
           ctx.setLineDash([10 / view.boardScale, 7 / view.boardScale]);
           ctx.strokeRect(object.x, object.y, object.width * object.scale, object.height * object.scale);
           ctx.restore();
+
+          // Resize + rotate handles for the selected image only
+          ctx.save();
+          ctx.setLineDash([]);
+          const handles = getObjectHandlePositions(object);
+          const HANDLE = 11 / view.boardScale;
+          const HALF = HANDLE / 2;
+          ctx.fillStyle = '#ffffff';
+          ctx.strokeStyle = '#2563eb';
+          ctx.lineWidth = 1.5 / view.boardScale;
+          // Connector line to the rotation handle
+          ctx.beginPath();
+          ctx.moveTo(handles.tl.x + (handles.tr.x - handles.tl.x) / 2, handles.tl.y);
+          ctx.lineTo(handles.rotate.x, handles.rotate.y);
+          ctx.stroke();
+          // Corner squares
+          (['tl', 'tr', 'bl', 'br'] as const).forEach(id => {
+            const h = handles[id];
+            ctx.fillRect(h.x - HALF, h.y - HALF, HANDLE, HANDLE);
+            ctx.strokeRect(h.x - HALF, h.y - HALF, HANDLE, HANDLE);
+          });
+          // Rotation handle (circle)
+          ctx.beginPath();
+          ctx.arc(handles.rotate.x, handles.rotate.y, HALF, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.stroke();
+          ctx.restore();
         }
       });
 
@@ -497,7 +598,7 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
         }
       }
       ctx.restore();
-    }, [objects, selectedObjectId, selectedStrokeIndex, strokeBounds, strokes, currentStroke, color, width, tool, view, shapes, draftShape, selectedShape, shapeBounds]);
+    }, [objects, selectedObjectId, selectedStrokeIndex, strokeBounds, strokes, currentStroke, color, width, tool, view, shapes, draftShape, selectedShape, shapeBounds, getObjectHandlePositions]);
 
     const downloadBoard = useCallback(() => {
       const canvas = canvasRef.current;
@@ -687,6 +788,26 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
         return;
       }
       if (tool === 'select') {
+        // Handle hit-test first — if an image is already selected, the user
+        // may be grabbing a corner/rotate handle rather than the body.
+        if (selectedObjectId) {
+          const sel = objects.find(o => o.id === selectedObjectId);
+          if (sel) {
+            const handle = findObjectHandle(point, sel);
+            if (handle) {
+              dragRef.current = {
+                mode: handle === 'rotate' ? 'object-rotate' : 'object-resize',
+                pointerId: e.pointerId,
+                startClientX: e.clientX, startClientY: e.clientY,
+                startOffsetX: view.boardOffsetX, startOffsetY: view.boardOffsetY,
+                objectId: sel.id,
+                objectStart: { ...sel },
+                handle,
+              };
+              return;
+            }
+          }
+        }
         const hitObject = findObjectAt(point);
         if (hitObject) {
           setSelectedObjectId(hitObject.id);
@@ -751,6 +872,18 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
         setObjects(prev => prev.map(obj => obj.id === drag.objectId ? { ...obj, x: (drag.objectStartX || 0) + dx, y: (drag.objectStartY || 0) + dy } : obj));
         return;
       }
+      if (drag.mode === 'object-resize' && drag.objectStart && drag.handle) {
+        const point = screenToBoard(e.clientX, e.clientY);
+        const next = applyObjectResize(drag.objectStart, drag.handle, point);
+        setObjects(prev => prev.map(obj => obj.id === drag.objectId ? next : obj));
+        return;
+      }
+      if (drag.mode === 'object-rotate' && drag.objectStart) {
+        const point = screenToBoard(e.clientX, e.clientY);
+        const next = applyObjectRotate(drag.objectStart, point);
+        setObjects(prev => prev.map(obj => obj.id === drag.objectId ? next : obj));
+        return;
+      }
       if (drag.mode === 'shape-create' && draftShapeRef.current) {
         const point = screenToBoard(e.clientX, e.clientY);
         const next = { ...draftShapeRef.current, x2: point.x, y2: point.y };
@@ -781,6 +914,10 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
         if (socket) socket.emit('whiteboard_draw', { roomId, stroke });
       }
       if (drag.mode === 'object' && drag.objectId) {
+        const object = objects.find(obj => obj.id === drag.objectId);
+        if (object) updateObject(object);
+      }
+      if ((drag.mode === 'object-resize' || drag.mode === 'object-rotate') && drag.objectId) {
         const object = objects.find(obj => obj.id === drag.objectId);
         if (object) updateObject(object);
       }
@@ -981,6 +1118,7 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
                 tool === 'pan' || spacePan ? 'grab' :
                 tool === 'select' ? 'default' :
                 tool === 'eraser' ? 'cell' :
+                tool === 'pen' ? PEN_CURSOR :
                 'crosshair',
             }}
             onPointerDown={handlePointerDown}
