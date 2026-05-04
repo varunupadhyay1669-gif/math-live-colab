@@ -87,10 +87,16 @@ const PEN_CURSOR = (() => {
   const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><path d="M17 3a2.8 2.8 0 0 1 4 4L8 20l-5 1 1-5L17 3z" fill="white" stroke="black" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"/><path d="M14 6l4 4" stroke="black" stroke-width="1.4" stroke-linecap="round"/></svg>';
   return `url('data:image/svg+xml;utf8,${encodeURIComponent(svg)}') 3 21, crosshair`;
 })();
+// The whiteboard is an infinite plane — no fixed page boundary. The grid is
+// rendered for whatever rectangle is currently visible, and pan can go in any
+// direction without limit. These constants are kept only as the initial-view
+// "page" reference (centred on screen at first load) and as the area used by
+// the "fit" button when there's no content yet.
 const BOARD_WIDTH = 3200;
 const BOARD_HEIGHT = 2200;
-const MIN_SCALE = 0.15;
-const MAX_SCALE = 5;
+const GRID_STEP = 80;
+const MIN_SCALE = 0.05;
+const MAX_SCALE = 6;
 
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
 const newId = (prefix: string) => `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -101,6 +107,21 @@ function distanceToSegment(point: DrawPoint, a: DrawPoint, b: DrawPoint) {
   if (dx === 0 && dy === 0) return Math.hypot(point.x - a.x, point.y - a.y);
   const t = clamp(((point.x - a.x) * dx + (point.y - a.y) * dy) / (dx * dx + dy * dy), 0, 1);
   return Math.hypot(point.x - (a.x + t * dx), point.y - (a.y + t * dy));
+}
+
+// Rotate a point by `degrees` around an origin. Used to map an image's
+// axis-aligned local coordinates into world space when the image has rotation.
+function rotatePoint(point: DrawPoint, origin: DrawPoint, degrees: number): DrawPoint {
+  if (!degrees) return point;
+  const rad = (degrees * Math.PI) / 180;
+  const cos = Math.cos(rad);
+  const sin = Math.sin(rad);
+  const dx = point.x - origin.x;
+  const dy = point.y - origin.y;
+  return {
+    x: origin.x + dx * cos - dy * sin,
+    y: origin.y + dx * sin + dy * cos,
+  };
 }
 
 const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
@@ -319,17 +340,30 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
       setSelectedObjectId(null);
     }, [selectedObjectId, socket, isTeacher, roomId]);
 
-    // Where the resize / rotate handles sit relative to a selected image (board space).
+    // Where the resize / rotate handles sit in WORLD space — i.e. with the
+    // image's rotation already applied around its centre. Hit-tests and the
+    // canvas drawing both use these.
     const getObjectHandlePositions = useCallback((object: BoardImageObject) => {
       const w = object.width * object.scale;
       const h = object.height * object.scale;
+      const cx = object.x + w / 2;
+      const cy = object.y + h / 2;
+      const center = { x: cx, y: cy };
       const ROT_OFFSET = 32 / view.boardScale;
-      return {
-        tl: { x: object.x,         y: object.y         },
-        tr: { x: object.x + w,     y: object.y         },
-        bl: { x: object.x,         y: object.y + h     },
-        br: { x: object.x + w,     y: object.y + h     },
+      const localHandles = {
+        tl:     { x: object.x,         y: object.y         },
+        tr:     { x: object.x + w,     y: object.y         },
+        bl:     { x: object.x,         y: object.y + h     },
+        br:     { x: object.x + w,     y: object.y + h     },
         rotate: { x: object.x + w / 2, y: object.y - ROT_OFFSET },
+      };
+      return {
+        tl:     rotatePoint(localHandles.tl,     center, object.rotation),
+        tr:     rotatePoint(localHandles.tr,     center, object.rotation),
+        bl:     rotatePoint(localHandles.bl,     center, object.rotation),
+        br:     rotatePoint(localHandles.br,     center, object.rotation),
+        rotate: rotatePoint(localHandles.rotate, center, object.rotation),
+        center,
       };
     }, [view.boardScale]);
 
@@ -346,27 +380,51 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
 
     // Compute the new object after a resize drag from one of the corner handles.
     // Aspect ratio is preserved by scaling on the diagonal distance from the
-    // opposite (anchor) corner to the current pointer.
+    // opposite (anchor) corner to the current pointer. Works correctly when
+    // the image is rotated: the anchor corner is computed in world space
+    // (rotated), and the new (x, y) is back-solved so that the anchor stays
+    // exactly in place after the resize.
     const applyObjectResize = useCallback((start: BoardImageObject, handle: ObjectHandle, point: DrawPoint): BoardImageObject => {
       if (handle === 'rotate') return start;
       const w = start.width * start.scale;
       const h = start.height * start.scale;
-      // Anchor = the corner OPPOSITE to the dragged handle; it stays fixed.
-      const anchor =
+      const cx = start.x + w / 2;
+      const cy = start.y + h / 2;
+      const center = { x: cx, y: cy };
+      // Anchor in image-local axis-aligned coords, then rotate into world space.
+      const localAnchor =
         handle === 'tl' ? { x: start.x + w, y: start.y + h } :
         handle === 'tr' ? { x: start.x,     y: start.y + h } :
         handle === 'bl' ? { x: start.x + w, y: start.y     } :
         /* br */          { x: start.x,     y: start.y     };
+      const anchorWorld = rotatePoint(localAnchor, center, start.rotation);
+
+      // newScale from diagonal length (rotation preserves distances, so the
+      // ratio is unchanged whether you compute in local or world space).
       const baseDiag = Math.hypot(start.width, start.height);
-      const newDiag  = Math.hypot(point.x - anchor.x, point.y - anchor.y);
-      const newScale = Math.max(newDiag / baseDiag, 0.05); // min 5% so it can't disappear
+      const newDiag  = Math.hypot(point.x - anchorWorld.x, point.y - anchorWorld.y);
+      const newScale = Math.max(newDiag / baseDiag, 0.05); // min 5%
       const newW = start.width * newScale;
       const newH = start.height * newScale;
-      const newX =
-        handle === 'tl' || handle === 'bl' ? anchor.x - newW : anchor.x;
-      const newY =
-        handle === 'tl' || handle === 'tr' ? anchor.y - newH : anchor.y;
-      return { ...start, x: newX, y: newY, scale: newScale };
+
+      // After resize, the new image's local-anchor offset (relative to the new
+      // centre) is at the same fractional corner. Rotate that offset into world
+      // space, subtract from anchorWorld → that's the new world centre. Then
+      // image-local top-left = newCentre - (newW/2, newH/2).
+      const newLocalAnchorOffset =
+        handle === 'tl' ? { x:  newW / 2, y:  newH / 2 } :
+        handle === 'tr' ? { x: -newW / 2, y:  newH / 2 } :
+        handle === 'bl' ? { x:  newW / 2, y: -newH / 2 } :
+        /* br */          { x: -newW / 2, y: -newH / 2 };
+      const rotatedOffset = rotatePoint(newLocalAnchorOffset, { x: 0, y: 0 }, start.rotation);
+      const newCentre = { x: anchorWorld.x - rotatedOffset.x, y: anchorWorld.y - rotatedOffset.y };
+
+      return {
+        ...start,
+        x: newCentre.x - newW / 2,
+        y: newCentre.y - newH / 2,
+        scale: newScale,
+      };
     }, []);
 
     // Compute the new rotation in degrees from a rotation-handle drag.
@@ -456,25 +514,35 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
       if (!ctx) return;
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.clearRect(0, 0, widthPx, heightPx);
-      ctx.fillStyle = '#e8edf5';
+      // Infinite canvas: fill the entire visible area with white (no fixed
+      // page background), then draw grid lines for whatever board-space
+      // rectangle is currently visible. Pan and zoom are unbounded.
+      ctx.fillStyle = '#ffffff';
       ctx.fillRect(0, 0, widthPx, heightPx);
       ctx.save();
       ctx.translate(view.boardOffsetX, view.boardOffsetY);
       ctx.scale(view.boardScale, view.boardScale);
-      ctx.fillStyle = '#ffffff';
-      ctx.fillRect(0, 0, BOARD_WIDTH, BOARD_HEIGHT);
+
+      const visMinX = -view.boardOffsetX / view.boardScale;
+      const visMaxX = (widthPx - view.boardOffsetX) / view.boardScale;
+      const visMinY = -view.boardOffsetY / view.boardScale;
+      const visMaxY = (heightPx - view.boardOffsetY) / view.boardScale;
       ctx.strokeStyle = '#e5e7eb';
       ctx.lineWidth = 1 / view.boardScale;
-      for (let x = 0; x <= BOARD_WIDTH; x += 80) {
+      const gridStartX = Math.floor(visMinX / GRID_STEP) * GRID_STEP;
+      const gridEndX   = Math.ceil(visMaxX  / GRID_STEP) * GRID_STEP;
+      const gridStartY = Math.floor(visMinY / GRID_STEP) * GRID_STEP;
+      const gridEndY   = Math.ceil(visMaxY  / GRID_STEP) * GRID_STEP;
+      for (let x = gridStartX; x <= gridEndX; x += GRID_STEP) {
         ctx.beginPath();
-        ctx.moveTo(x, 0);
-        ctx.lineTo(x, BOARD_HEIGHT);
+        ctx.moveTo(x, gridStartY);
+        ctx.lineTo(x, gridEndY);
         ctx.stroke();
       }
-      for (let y = 0; y <= BOARD_HEIGHT; y += 80) {
+      for (let y = gridStartY; y <= gridEndY; y += GRID_STEP) {
         ctx.beginPath();
-        ctx.moveTo(0, y);
-        ctx.lineTo(BOARD_WIDTH, y);
+        ctx.moveTo(gridStartX, y);
+        ctx.lineTo(gridEndX, y);
         ctx.stroke();
       }
 
@@ -488,14 +556,23 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
           ctx.restore();
         }
         if (object.id === selectedObjectId) {
+          const w = object.width * object.scale;
+          const h = object.height * object.scale;
+          const cx = object.x + w / 2;
+          const cy = object.y + h / 2;
+          // Dashed selection rectangle — rotated with the image.
           ctx.save();
+          ctx.translate(cx, cy);
+          ctx.rotate((object.rotation * Math.PI) / 180);
           ctx.strokeStyle = '#2563eb';
           ctx.lineWidth = 2 / view.boardScale;
           ctx.setLineDash([10 / view.boardScale, 7 / view.boardScale]);
-          ctx.strokeRect(object.x, object.y, object.width * object.scale, object.height * object.scale);
+          ctx.strokeRect(-w / 2, -h / 2, w, h);
           ctx.restore();
 
-          // Resize + rotate handles for the selected image only
+          // Resize + rotate handles. Positions are already rotated into world
+          // space by getObjectHandlePositions; the corner squares themselves
+          // are also drawn rotated so they look square against the image.
           ctx.save();
           ctx.setLineDash([]);
           const handles = getObjectHandlePositions(object);
@@ -504,18 +581,24 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
           ctx.fillStyle = '#ffffff';
           ctx.strokeStyle = '#2563eb';
           ctx.lineWidth = 1.5 / view.boardScale;
-          // Connector line to the rotation handle
+          // Connector line from the (rotated) top-edge midpoint to the rotation handle
+          const topMidLocal = { x: object.x + w / 2, y: object.y };
+          const topMid = rotatePoint(topMidLocal, { x: cx, y: cy }, object.rotation);
           ctx.beginPath();
-          ctx.moveTo(handles.tl.x + (handles.tr.x - handles.tl.x) / 2, handles.tl.y);
+          ctx.moveTo(topMid.x, topMid.y);
           ctx.lineTo(handles.rotate.x, handles.rotate.y);
           ctx.stroke();
-          // Corner squares
+          // Corner squares — rotated with the image so they don't look skewed
           (['tl', 'tr', 'bl', 'br'] as const).forEach(id => {
-            const h = handles[id];
-            ctx.fillRect(h.x - HALF, h.y - HALF, HANDLE, HANDLE);
-            ctx.strokeRect(h.x - HALF, h.y - HALF, HANDLE, HANDLE);
+            const p = handles[id];
+            ctx.save();
+            ctx.translate(p.x, p.y);
+            ctx.rotate((object.rotation * Math.PI) / 180);
+            ctx.fillRect(-HALF, -HALF, HANDLE, HANDLE);
+            ctx.strokeRect(-HALF, -HALF, HANDLE, HANDLE);
+            ctx.restore();
           });
-          // Rotation handle (circle)
+          // Rotation handle (circle — rotation-invariant, no extra transform)
           ctx.beginPath();
           ctx.arc(handles.rotate.x, handles.rotate.y, HALF, 0, Math.PI * 2);
           ctx.fill();
