@@ -49,6 +49,10 @@ interface RoomData {
   };
   lastTeacherScroll: any | null;
   zoomLevel: number;
+  // Whiteboard follow mode (Miro / Canva-style "Present along"):
+  // when set, the listed student's whiteboard pan/zoom is mirrored to the
+  // teacher. Teacher's own pan auto-disengages it (handled client-side).
+  teacherFollowingStudentId: string | null;
 }
 
 interface SessionStatePayload {
@@ -180,6 +184,7 @@ async function startServer() {
       whiteboard: { objects: [], strokes: [], shapes: [], view: null },
       lastTeacherScroll: null,
       zoomLevel: 1,
+      teacherFollowingStudentId: null,
     };
   }
 
@@ -869,9 +874,37 @@ async function startServer() {
 
     socket.on('whiteboard_set_view', ({ roomId, view }: any) => {
       const room = rooms.get(roomId);
+      if (!isMember(room, socket.id)) return;
+      const user = room.users.get(socket.id);
+      if (!user) return;
+      if (user.role === 'teacher') {
+        // Teacher view broadcasts to every student (existing behaviour).
+        room.whiteboard.view = view;
+        socket.to(roomId).emit('whiteboard_set_view', { view });
+      } else if (user.role === 'student' && room.teacherFollowingStudentId === socket.id) {
+        // Student is currently being followed by the teacher: relay this
+        // student's view ONLY to the teacher socket. Other students don't
+        // need it (they continue to follow the teacher implicitly).
+        if (room.teacherSocketId) {
+          io.to(room.teacherSocketId).emit('whiteboard_set_view', { view });
+        }
+      }
+      // All other student view changes are ignored at the relay (they still
+      // pan their own canvas locally).
+    });
+
+    // ─── WHITEBOARD: FOLLOW MODE ───
+    socket.on('set_follow_target', ({ roomId, studentId }: { roomId: string; studentId: string | null }) => {
+      const room = rooms.get(roomId);
       if (!requireTeacher(room, socket.id)) return;
-      room.whiteboard.view = view;
-      socket.to(roomId).emit('whiteboard_set_view', { view });
+      if (studentId !== null) {
+        const target = room.users.get(studentId);
+        if (!target || target.role !== 'student') return; // must follow a present student
+      }
+      room.teacherFollowingStudentId = studentId;
+      const studentName = studentId ? room.users.get(studentId)?.name ?? null : null;
+      io.to(roomId).emit('follow_target_changed', { studentId, studentName });
+      console.log(`👁  Room ${roomId}: Teacher ${studentId ? `now following ${studentName}` : 'stopped following'}`);
     });
 
     // ─── WHITEBOARD: SHAPES ───
@@ -1185,6 +1218,11 @@ async function startServer() {
             room.teacherSocketId = null;
             // Notify students that teacher disconnected
             io.to(roomId).emit('teacher_disconnected');
+            // Teacher gone → can't be following anyone any more.
+            if (room.teacherFollowingStudentId) {
+              room.teacherFollowingStudentId = null;
+              io.to(roomId).emit('follow_target_changed', { studentId: null, studentName: null });
+            }
           }
 
           // Check if any students remain — if not, start the 2hr expiry countdown
@@ -1193,6 +1231,11 @@ async function startServer() {
             if (!hasStudents) {
               room.studentLeftAt = Date.now();
               console.log(`⏰ Room ${roomId}: Last student left. 2hr expiry countdown started.`);
+            }
+            // If the followed student left, drop the follow target and notify.
+            if (room.teacherFollowingStudentId === socket.id) {
+              room.teacherFollowingStudentId = null;
+              io.to(roomId).emit('follow_target_changed', { studentId: null, studentName: null });
             }
           }
 

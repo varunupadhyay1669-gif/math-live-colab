@@ -64,6 +64,10 @@ export default function StudentView() {
   const [currentFileName, setCurrentFileName] = useState("");
   const [isPaused, setIsPaused] = useState(false);
   const [cursors, setCursors] = useState<Record<string, Cursor>>({});
+  // Whiteboard follow mode: true when the teacher is currently mirroring this
+  // student's whiteboard view. Used purely to surface a small badge so the
+  // student knows the teacher is watching their pan/zoom.
+  const [beingFollowed, setBeingFollowed] = useState(false);
 
   // ── Chat ──
   const [chatOpen, setChatOpen] = useState(false);
@@ -473,6 +477,13 @@ export default function StudentView() {
     newSocket.on("student_interaction_changed", ({ allowed }: { allowed: boolean }) => {
       setInteractionAllowed(allowed);
       showNotification(allowed ? '🖐️ You can now interact with the simulation' : '👁️ View-only mode — teacher is presenting');
+    });
+
+    // ── Whiteboard Follow Mode ──
+    newSocket.on("follow_target_changed", ({ studentId }: { studentId: string | null }) => {
+      const isMe = studentId === newSocket.id;
+      setBeingFollowed(isMe);
+      if (isMe) showNotification('👁 Teacher is following your whiteboard');
     });
 
     // ── Whiteboard Mode ──
@@ -928,18 +939,46 @@ export default function StudentView() {
               sandbox="allow-scripts allow-same-origin allow-forms allow-modals allow-popups allow-pointer-lock"
             />
           ) : whiteboardMode ? (
-            <Whiteboard
-              ref={whiteboardRef}
-              socket={socket}
-              roomId={roomId!}
-              isTeacher={false}
-              interactive={interactionAllowed}
-              zoomLevel={zoomLevel}
-              scrollX={whiteboardScrollX}
-              scrollY={whiteboardScrollY}
-              isActive={true}
-              initialState={whiteboardState}
-            />
+            <>
+              <Whiteboard
+                ref={whiteboardRef}
+                socket={socket}
+                roomId={roomId!}
+                isTeacher={false}
+                interactive={interactionAllowed}
+                zoomLevel={zoomLevel}
+                scrollX={whiteboardScrollX}
+                scrollY={whiteboardScrollY}
+                isActive={true}
+                initialState={whiteboardState}
+              />
+              {beingFollowed && (
+                <div
+                  style={{
+                    position: 'absolute',
+                    top: 12,
+                    right: 12,
+                    zIndex: 30,
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 6,
+                    padding: '6px 10px',
+                    borderRadius: 10,
+                    background: 'rgba(37,99,235,0.95)',
+                    color: '#fff',
+                    boxShadow: '0 6px 18px rgba(15,23,42,0.18)',
+                    fontSize: 12.5,
+                    fontWeight: 600,
+                  }}
+                >
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+                    <circle cx="12" cy="12" r="3" />
+                  </svg>
+                  Teacher is following your whiteboard
+                </div>
+              )}
+            </>
           ) : iframeUrl ? (
             <>
               <iframe

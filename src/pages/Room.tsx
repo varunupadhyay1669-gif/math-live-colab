@@ -176,6 +176,10 @@ export default function Room() {
   // ── Student Interaction Mode ──
   const [studentInteractionAllowed, setStudentInteractionAllowed] = useState(false);
 
+  // ── Whiteboard Follow Mode (Miro/Canva-style) ──
+  const [followingStudentId, setFollowingStudentId] = useState<string | null>(null);
+  const [followingStudentName, setFollowingStudentName] = useState<string | null>(null);
+
   // ── Attention Check ──
   const [attentionAcks, setAttentionAcks] = useState<Array<{ studentName: string; timestamp: number }>>([]);
   const [attentionCheckActive, setAttentionCheckActive] = useState(false);
@@ -543,6 +547,12 @@ export default function Room() {
     // ── Student Interaction Mode ──
     newSocket.on("student_interaction_changed", ({ allowed }: { allowed: boolean }) => {
       setStudentInteractionAllowed(allowed);
+    });
+
+    // ── Whiteboard Follow Mode ──
+    newSocket.on("follow_target_changed", ({ studentId, studentName }: { studentId: string | null; studentName: string | null }) => {
+      setFollowingStudentId(studentId);
+      setFollowingStudentName(studentName);
     });
 
     // ── Attention Check Acks ──
@@ -1025,6 +1035,17 @@ export default function Room() {
     socket.emit("toggle_scroll_sync", { roomId, enabled: newEnabled });
     postToIframe({ type: 'SET_SCROLL_SYNC', enabled: newEnabled });
     showNotif(newEnabled ? '🔗 Scroll sync ON' : '🔓 Free scroll — everyone scrolls independently');
+  };
+
+  const setFollowTarget = (studentId: string | null) => {
+    if (!socket) return;
+    socket.emit('set_follow_target', { roomId, studentId });
+    if (studentId) {
+      const target = users.find(u => u.id === studentId);
+      showNotif(`👁 Following ${target?.name || 'student'}'s whiteboard`);
+    } else {
+      showNotif('Stopped following');
+    }
   };
 
   const toggleStudentInteraction = () => {
@@ -1664,18 +1685,71 @@ export default function Room() {
                   sandbox="allow-scripts allow-same-origin allow-forms allow-modals allow-popups allow-pointer-lock"
                 />
               ) : whiteboardMode ? (
-                <Whiteboard
-                  ref={whiteboardRef}
-                  socket={socket}
-                  roomId={roomId!}
-                  isTeacher={true}
-                  interactive={true}
-                  zoomLevel={zoomLevel}
-                  scrollX={whiteboardScrollX}
-                  scrollY={whiteboardScrollY}
-                  isActive={true}
-                  initialState={whiteboardState}
-                />
+                <>
+                  <Whiteboard
+                    ref={whiteboardRef}
+                    socket={socket}
+                    roomId={roomId!}
+                    isTeacher={true}
+                    interactive={true}
+                    zoomLevel={zoomLevel}
+                    scrollX={whiteboardScrollX}
+                    scrollY={whiteboardScrollY}
+                    isActive={true}
+                    initialState={whiteboardState}
+                    followingStudentId={followingStudentId}
+                    onStopFollow={() => setFollowTarget(null)}
+                  />
+                  {/* Whiteboard follow picker (Miro/Canva-style). Only visible
+                      while the whiteboard is open. */}
+                  {users.some(u => u.role === 'student') && (
+                    <div
+                      style={{
+                        position: 'absolute',
+                        top: 12,
+                        right: 12,
+                        zIndex: 30,
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 8,
+                        padding: '6px 10px',
+                        borderRadius: 10,
+                        background: followingStudentId ? 'rgba(37,99,235,0.95)' : 'rgba(255,255,255,0.95)',
+                        color: followingStudentId ? '#fff' : '#0F172A',
+                        boxShadow: '0 6px 18px rgba(15,23,42,0.18), 0 0 0 1px rgba(15,23,42,0.08)',
+                        fontSize: 12.5,
+                        fontWeight: 600,
+                      }}
+                    >
+                      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                        <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+                        <circle cx="12" cy="12" r="3" />
+                      </svg>
+                      {followingStudentId ? (
+                        <>
+                          <span>Following {followingStudentName || 'student'}</span>
+                          <button
+                            onClick={() => setFollowTarget(null)}
+                            style={{ background: 'rgba(255,255,255,0.18)', color: '#fff', border: 'none', padding: '3px 8px', borderRadius: 6, fontSize: 11, fontWeight: 700, cursor: 'pointer' }}
+                          >
+                            Stop
+                          </button>
+                        </>
+                      ) : (
+                        <select
+                          value=""
+                          onChange={(e) => { if (e.target.value) setFollowTarget(e.target.value); }}
+                          style={{ background: 'transparent', border: 'none', color: '#0F172A', fontSize: 12.5, fontWeight: 600, cursor: 'pointer', padding: 0, outline: 'none' }}
+                        >
+                          <option value="">Follow a student…</option>
+                          {users.filter(u => u.role === 'student').map(s => (
+                            <option key={s.id} value={s.id}>{s.name}</option>
+                          ))}
+                        </select>
+                      )}
+                    </div>
+                  )}
+                </>
               ) : iframeUrl ? (
                 <div className="w-full h-full flex">
                   <div className={dualView ? "relative flex-1 border-r border-gray-300" : "relative w-full h-full"}>
