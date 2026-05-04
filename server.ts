@@ -219,7 +219,19 @@ async function startServer() {
     try {
       let saved = 0;
       for (const [roomId, room] of rooms.entries()) {
-        if (room.files.length === 0 && !room.lastRunHtml) continue; // Skip empty rooms
+        // Skip rooms with literally nothing in them. Whiteboard-only rooms
+        // (no files, no lastRunHtml, but with strokes / objects / shapes)
+        // SHOULD persist — otherwise a teacher who teaches purely on the
+        // whiteboard loses their work on every redeploy.
+        const hasContent =
+          room.files.length > 0 ||
+          !!room.lastRunHtml ||
+          !!room.tempContent ||
+          (room.chat?.length ?? 0) > 0 ||
+          (room.whiteboard?.objects?.length ?? 0) > 0 ||
+          (room.whiteboard?.strokes?.length ?? 0) > 0 ||
+          (room.whiteboard?.shapes?.length ?? 0) > 0;
+        if (!hasContent) continue;
         const data = JSON.stringify(serializeRoom(roomId, room));
         fs.writeFileSync(path.join(PERSIST_DIR, `${roomId}.json`), data, 'utf-8');
         saved++;
@@ -1242,14 +1254,36 @@ async function startServer() {
             }
           }
 
-          // Clean up truly empty rooms after 5 minutes
+          // When the last user leaves: persist + decide what to do with the
+          // room. Rooms with ANY content (uploaded HTML, whiteboard work,
+          // chat history, explanation overlay) stay alive for the full
+          // 48-hour absolute-inactivity expiry handled by the periodic
+          // sweep above — so a teacher can share a link and have a
+          // student join hours later. Only completely empty rooms (a stray
+          // /room URL that nobody put anything in) get the 5-min cleanup.
           if (room.users.size === 0) {
-            setTimeout(() => {
-              if (rooms.has(roomId) && rooms.get(roomId)!.users.size === 0) {
+            const hasContent =
+              room.files.length > 0 ||
+              !!room.lastRunHtml ||
+              !!room.tempContent ||
+              (room.chat?.length ?? 0) > 0 ||
+              (room.whiteboard?.objects?.length ?? 0) > 0 ||
+              (room.whiteboard?.strokes?.length ?? 0) > 0 ||
+              (room.whiteboard?.shapes?.length ?? 0) > 0;
+            if (hasContent) {
+              // Persist immediately so a quick server restart (Render cold
+              // sleep, redeploy, etc.) doesn't lose work that's only been
+              // in memory since the last 5-min interval tick.
+              saveRooms();
+              console.log(`Room ${roomId} kept (has content) — link valid until 48h expiry`);
+            } else {
+              setTimeout(() => {
+                const r = rooms.get(roomId);
+                if (!r || r.users.size > 0) return; // someone joined back
                 rooms.delete(roomId);
-                console.log(`Room ${roomId} cleaned up (empty)`);
-              }
-            }, 5 * 60 * 1000);
+                console.log(`Room ${roomId} cleaned up (empty, no content)`);
+              }, 5 * 60 * 1000);
+            }
           }
         }
       }
