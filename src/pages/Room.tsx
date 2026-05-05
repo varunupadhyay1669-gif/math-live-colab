@@ -198,6 +198,13 @@ export default function Room() {
   // ── Follow Clicks ──
   const [followStudentClicks, setFollowStudentClicks] = useState(false);
   const [studentClickIndicators, setStudentClickIndicators] = useState<Array<{ id: number; x: number; y: number; name: string; color: string }>>([]);
+  // Ref-mirror for the socket "interaction" listener — that listener is
+  // installed inside a useEffect with a small dep list, so the closure
+  // captures followStudentClicks at mount-time. Without this ref, toggling
+  // the button after mount silently does nothing because the listener still
+  // sees the stale value.
+  const followStudentClicksRef = useRef(false);
+  useEffect(() => { followStudentClicksRef.current = followStudentClicks; }, [followStudentClicks]);
 
   // ── Iframe readiness ──
   const iframeReadyRef = useRef(false);
@@ -226,6 +233,11 @@ export default function Room() {
 
   // ── Recording ──
   const [isRecording, setIsRecording] = useState(false);
+  // Ref-mirror, same reasoning as followStudentClicksRef above. Without this
+  // the socket "interaction" listener captured isRecording=false at mount and
+  // never recorded anything even after the user clicked Record.
+  const isRecordingRef = useRef(false);
+  useEffect(() => { isRecordingRef.current = isRecording; }, [isRecording]);
 
   // ── Sound ──
   const [soundMuted, setSoundMuted] = useState(false);
@@ -266,6 +278,11 @@ export default function Room() {
     if (state.tempContent) {
       setTempContent(state.tempContent);
       setShowTempContent(true);
+    } else if ('tempContent' in state) {
+      // Reconnect after a clear: explicitly tear down. Without this, the
+      // local temp-content view would stay mounted forever.
+      setTempContent(null);
+      setShowTempContent(false);
     }
     if (state.whiteboard) setWhiteboardState(state.whiteboard);
     const html = state.effectiveHtml || state.liveSnapshotHtml || state.lastRunHtml || state.sourceHtml;
@@ -401,7 +418,7 @@ export default function Room() {
     newSocket.on("chat_message", (msg: ChatMessage) => {
       setChatMessages(prev => [...prev, msg]);
       sounds.message();
-      if (isRecording) sessionRecorder.record('chat_message', msg);
+      if (isRecordingRef.current) sessionRecorder.record('chat_message', msg);
     });
     newSocket.on("hand_raised", ({ studentName }: { studentName: string }) => {
       setHandRaised({ studentName });
@@ -466,8 +483,10 @@ export default function Room() {
             setStudentClickIndicators(prev => prev.filter(i => i.id !== id));
           }, 2000);
 
-          // Auto-scroll to student click if following is enabled
-          if (followStudentClicks && iframeRef.current) {
+          // Auto-scroll to student click if following is enabled.
+          // Read through the ref so toggling Follow-Clicks AFTER mount actually
+          // takes effect (the surrounding useEffect captures the closure once).
+          if (followStudentClicksRef.current && iframeRef.current) {
             const iframe = iframeRef.current;
             iframe.contentWindow?.postMessage({
               type: 'FOLLOW_CLICK',
@@ -496,7 +515,9 @@ export default function Room() {
           }
         }
       }
-      if (isRecording) sessionRecorder.record('interaction', event);
+      // Same stale-closure reasoning: read through the ref so flipping Record
+      // on after mount actually starts recording from that moment forward.
+      if (isRecordingRef.current) sessionRecorder.record('interaction', event);
     });
 
     // ── Student Feedback ──

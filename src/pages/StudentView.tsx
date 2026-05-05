@@ -188,6 +188,18 @@ export default function StudentView() {
     if (typeof state.zoomLevel === 'number') setZoomLevel(state.zoomLevel);
     if (state.chat) setChatMessages(state.chat);
     if (state.whiteboard) setWhiteboardState(state.whiteboard);
+    // Temp explanation content: handle BOTH branches explicitly. If the
+    // teacher cleared temp content while this student was offline, the
+    // reconnect's session_state arrives with tempContent: null — the old
+    // code's `if (state.tempContent)` only handled truthy, so the student
+    // stayed stuck on the cleared explanation forever.
+    if (state.tempContent) {
+      setTempContent(state.tempContent);
+      setShowTempContent(true);
+    } else if ('tempContent' in state) {
+      setTempContent(null);
+      setShowTempContent(false);
+    }
     if (state.lastTeacherScroll) {
       const remoteScroll = { ...state.lastTeacherScroll, type: 'REMOTE_SCROLL' };
       pendingMessagesRef.current = pendingMessagesRef.current

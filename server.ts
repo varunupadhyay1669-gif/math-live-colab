@@ -280,7 +280,17 @@ async function startServer() {
           room.revision = raw.revision || 0;
           room.liveSnapshotHtml = raw.liveSnapshotHtml || null;
           room.whiteboard = raw.whiteboard
-            ? { objects: raw.whiteboard.objects || [], strokes: raw.whiteboard.strokes || [], shapes: raw.whiteboard.shapes || [], view: raw.whiteboard.view ?? null }
+            ? {
+                objects: raw.whiteboard.objects || [],
+                strokes: raw.whiteboard.strokes || [],
+                shapes: raw.whiteboard.shapes || [],
+                view: raw.whiteboard.view ?? null,
+                // gridMode and instruments were added later — restore them too
+                // so a server restart doesn't silently reset the teacher's
+                // graph-mode choice or wipe rulers/protractors off the board.
+                gridMode: raw.whiteboard.gridMode || 'grid',
+                instruments: raw.whiteboard.instruments || [],
+              }
             : { objects: [], strokes: [], shapes: [], view: null };
           room.lastTeacherScroll = raw.lastTeacherScroll || null;
           room.zoomLevel = raw.zoomLevel || 1;
@@ -669,11 +679,16 @@ async function startServer() {
       room.liveSnapshotHtml = html;
       const revision = bumpRevision(room);
       // Send to any students waiting for the teacher's live DOM
-      // (these students joined after the teacher and need the current content)
+      // (these students joined after the teacher and need the current content).
+      // We snapshot the pending set FIRST (delivery loop is async), then
+      // delete each student id only after delivering to them. Any student
+      // who joined the room (and was added to pendingSyncStudents) AFTER we
+      // started this loop stays in the set and will be picked up by the
+      // next snapshot — they're not silently dropped by a blanket .clear().
       if (room.pendingSyncStudents.size > 0) {
         const pending = Array.from(room.pendingSyncStudents);
-        room.pendingSyncStudents.clear();
         for (const studentId of pending) {
+          room.pendingSyncStudents.delete(studentId);
           emitSessionState(studentId, roomId, room, 'snapshot_ack', requestId);
           io.to(studentId).emit('run_preview', { fileId: room.activeFileId, html, revision });
         }
@@ -711,10 +726,13 @@ async function startServer() {
         // need this fresh HTML. Existing students already have a coherent state
         // from their own SYNC_* event stream — broadcasting the snapshot to them
         // would force a needless iframe reload (the auto-refresh-during-use bug).
+        // Same reasoning as the sync_html_update handler above: snapshot the
+        // pending set, deliver one-by-one and remove only those we delivered
+        // to. Newly-arriving pending students don't get blanket-cleared.
         if (room.pendingSyncStudents.size > 0) {
           const pending = Array.from(room.pendingSyncStudents);
-          room.pendingSyncStudents.clear();
           for (const studentId of pending) {
+            room.pendingSyncStudents.delete(studentId);
             emitSessionState(studentId, roomId, room, 'snapshot_ack', requestId);
             io.to(studentId).emit('run_preview', { fileId: room.activeFileId, html, revision });
             io.to(studentId).emit('dom_snapshot', { fileId: room.activeFileId, html, revision, requestId });
