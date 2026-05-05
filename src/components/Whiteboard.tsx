@@ -2248,7 +2248,7 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
               </button>
             ))}
             <div className="whiteboard-rail-divider" />
-            <button onClick={() => uploadInputRef.current?.click()} className="whiteboard-tool" title="Upload image">
+            <button onClick={() => uploadInputRef.current?.click()} className="whiteboard-tool" title="Upload image" aria-label="Upload image">
               <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M12 3v12" /><path d="m17 8-5-5-5 5" /><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
               </svg>
@@ -2319,8 +2319,8 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
           )}
           {canEdit && (
             <>
-              <button onClick={undo} disabled={!canUndo} className="whiteboard-action" title="Undo (Ctrl+Z)">↶ Undo</button>
-              <button onClick={redo} disabled={!canRedo} className="whiteboard-action" title="Redo (Ctrl+Shift+Z)">↷ Redo</button>
+              <button onClick={undo} disabled={!canUndo} className="whiteboard-action" title="Undo (Ctrl+Z)" aria-label="Undo (Ctrl+Z)">↶ Undo</button>
+              <button onClick={redo} disabled={!canRedo} className="whiteboard-action" title="Redo (Ctrl+Shift+Z)" aria-label="Redo (Ctrl+Shift+Z)">↷ Redo</button>
             </>
           )}
           <button onClick={() => zoomAt(1 / 1.2)} className="whiteboard-action">-</button>
