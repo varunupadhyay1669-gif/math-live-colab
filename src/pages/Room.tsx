@@ -285,6 +285,9 @@ export default function Room() {
       setShowTempContent(false);
     }
     if (state.whiteboard) setWhiteboardState(state.whiteboard);
+    // Whiteboard mode is server-persisted; restore on reconnect so the
+    // teacher lands on the same surface they were on before disconnect.
+    if (typeof state.whiteboardMode === 'boolean') setWhiteboardMode(state.whiteboardMode);
     const html = state.effectiveHtml || state.liveSnapshotHtml || state.lastRunHtml || state.sourceHtml;
     if (html) {
       setHtmlCode(state.sourceHtml || html);
