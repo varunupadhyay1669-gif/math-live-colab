@@ -213,13 +213,13 @@ export default function TeacherControls({
           <span style={{ fontSize: '11.5px' }}>{scrollSyncEnabled ? 'Linked' : 'Free'}</span>
         </button>
 
-        <button onClick={onForceSync} className="tb-btn" data-tip="Force sync all students">
+        <button onClick={onForceSync} className="tb-btn" data-tip="Force sync all students" aria-label="Force sync all students">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
             <polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/>
           </svg>
         </button>
 
-        <button onClick={onResetView} className="tb-btn" data-tip="Scroll everyone to top">
+        <button onClick={onResetView} className="tb-btn" data-tip="Scroll everyone to top" aria-label="Scroll everyone to top">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
             <line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/>
           </svg>
@@ -228,18 +228,18 @@ export default function TeacherControls({
         <div className="toolbar-divider" />
 
         {/* ── Zoom Controls (synced to all students) ── */}
-        <button onClick={onZoomOut} className="tb-btn" data-tip="Zoom out (synced)" disabled={zoomLevel <= 0.5}>
+        <button onClick={onZoomOut} className="tb-btn" data-tip="Zoom out (synced)" aria-label="Zoom out (synced)" disabled={zoomLevel <= 0.5}>
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
             <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="8" y1="11" x2="14" y2="11"/>
           </svg>
         </button>
         <button onClick={onZoomReset} className={`tb-btn-label ${zoomLevel !== 1 ? 'active' : ''}`}
-          data-tip="Click to reset to 100%" style={{ minWidth: '52px' }}>
+          data-tip="Click to reset to 100%" aria-label="Click to reset to 100%" style={{ minWidth: '52px' }}>
           <span style={{ fontSize: '11.5px', fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>
             {Math.round(zoomLevel * 100)}%
           </span>
         </button>
-        <button onClick={onZoomIn} className="tb-btn" data-tip="Zoom in (synced)" disabled={zoomLevel >= 3}>
+        <button onClick={onZoomIn} className="tb-btn" data-tip="Zoom in (synced)" aria-label="Zoom in (synced)" disabled={zoomLevel >= 3}>
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
             <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/>
           </svg>
@@ -263,7 +263,7 @@ export default function TeacherControls({
           <span style={{ fontSize: '11.5px' }}>{studentInteractionAllowed ? 'Interactive' : 'View Only'}</span>
         </button>
 
-        <button onClick={onAttentionCheck} className="tb-btn" data-tip="Roll call — check who's here">
+        <button onClick={onAttentionCheck} className="tb-btn" data-tip="Roll call — check who's here" aria-label="Roll call — check who's here">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
             <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 010 14.14M15.54 8.46a5 5 0 010 7.07"/>
           </svg>
@@ -307,7 +307,7 @@ export default function TeacherControls({
           )}
         </div>
 
-        <button onClick={onOpenQuiz} className="tb-btn" data-tip="Pop quiz">
+        <button onClick={onOpenQuiz} className="tb-btn" data-tip="Pop quiz" aria-label="Pop quiz">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
             <circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 015.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/>
           </svg>
@@ -368,7 +368,7 @@ export default function TeacherControls({
         </button>
 
         <div className="relative" style={{ display: 'inline-flex' }}>
-          <button onClick={() => setShowReactionMenu(!showReactionMenu)} className="tb-btn" data-tip="Send reaction">
+          <button onClick={() => setShowReactionMenu(!showReactionMenu)} className="tb-btn" data-tip="Send reaction" aria-label="Send reaction">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
               <circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/>
             </svg>
@@ -390,14 +390,14 @@ export default function TeacherControls({
           )}
         </div>
 
-        <button onClick={onTriggerCelebration} className="tb-btn" data-tip="Celebrate!">
+        <button onClick={onTriggerCelebration} className="tb-btn" data-tip="Celebrate!" aria-label="Celebrate!">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
             <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>
           </svg>
         </button>
 
         {/* ── Leaderboard ── */}
-        <button onClick={onToggleLeaderboard} className="tb-btn-label" data-tip="XP Leaderboard"
+        <button onClick={onToggleLeaderboard} className="tb-btn-label" data-tip="XP Leaderboard" aria-label="XP Leaderboard"
           style={{ position: 'relative' }}>
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
             <path d="M6 9H4.5a2.5 2.5 0 010-5H6"/><path d="M18 9h1.5a2.5 2.5 0 000-5H18"/><path d="M4 22h16"/><path d="M10 14.66V17c0 .55-.47.98-.97 1.21C7.85 18.75 7 20.24 7 22"/><path d="M14 14.66V17c0 .55.47.98.97 1.21C16.15 18.75 17 20.24 17 22"/><path d="M18 2H6v7a6 6 0 0012 0V2z"/>
@@ -411,7 +411,7 @@ export default function TeacherControls({
         </button>
 
         {/* ── Hard Reset ── */}
-        <button onClick={onHardReset} className="tb-btn" data-tip="Hard reset — clear everything"
+        <button onClick={onHardReset} className="tb-btn" data-tip="Hard reset — clear everything" aria-label="Hard reset — clear everything"
           style={{ color: 'var(--accent-rose, #F43F5E)' }}>
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
             <path d="M3 12a9 9 0 0115.5-6.3L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 01-15.5 6.3L3 16"/><path d="M3 21v-5h5"/>
