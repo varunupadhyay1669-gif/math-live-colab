@@ -188,6 +188,12 @@ export default function StudentView() {
     if (typeof state.zoomLevel === 'number') setZoomLevel(state.zoomLevel);
     if (state.chat) setChatMessages(state.chat);
     if (state.whiteboard) setWhiteboardState(state.whiteboard);
+    // Whiteboard mode (teacher is on the whiteboard surface, not HTML) is
+    // server-persisted so a late-joining student lands on the right surface.
+    // Without this, a student joining mid-lesson would sit on "Waiting for
+    // teacher" forever — the server has no lastRunHtml to deliver because
+    // the teacher chose whiteboard instead of uploading HTML.
+    if (typeof state.whiteboardMode === 'boolean') setWhiteboardMode(state.whiteboardMode);
     // Temp explanation content: handle BOTH branches explicitly. If the
     // teacher cleared temp content while this student was offline, the
     // reconnect's session_state arrives with tempContent: null — the old

@@ -49,6 +49,12 @@ interface RoomData {
     gridMode?: 'blank' | 'grid' | 'graph';
     instruments?: any[];
   };
+  // Is the teacher currently showing the whiteboard (vs an HTML simulation)?
+  // Persisted server-side so a late-joining student can land on the right
+  // surface — without this, students who joined while the teacher was on
+  // the whiteboard saw the "Waiting for teacher" placeholder forever
+  // because the room had no lastRunHtml to deliver.
+  whiteboardMode: boolean;
   lastTeacherScroll: any | null;
   zoomLevel: number;
 }
@@ -78,6 +84,7 @@ interface SessionStatePayload {
     gridMode?: 'blank' | 'grid' | 'graph';
     instruments?: any[];
   };
+  whiteboardMode: boolean;
   lastTeacherScroll: any | null;
   zoomLevel: number;
 }
@@ -182,6 +189,7 @@ async function startServer() {
       liveSnapshotHtml: null,
       revision: 0,
       whiteboard: { objects: [], strokes: [], shapes: [], view: null, gridMode: 'grid', instruments: [] },
+      whiteboardMode: false,
       lastTeacherScroll: null,
       zoomLevel: 1,
     };
@@ -214,6 +222,7 @@ async function startServer() {
       revision: room.revision,
       liveSnapshotHtml: room.liveSnapshotHtml,
       whiteboard: room.whiteboard,
+      whiteboardMode: room.whiteboardMode,
       lastTeacherScroll: room.lastTeacherScroll,
       zoomLevel: room.zoomLevel,
     };
@@ -292,6 +301,10 @@ async function startServer() {
                 instruments: raw.whiteboard.instruments || [],
               }
             : { objects: [], strokes: [], shapes: [], view: null };
+          // Whiteboard mode (teacher on whiteboard surface vs HTML) — persist
+          // so a server restart leaves the teacher and any rejoining student
+          // on the same surface they were on before.
+          room.whiteboardMode = !!raw.whiteboardMode;
           room.lastTeacherScroll = raw.lastTeacherScroll || null;
           room.zoomLevel = raw.zoomLevel || 1;
           rooms.set(raw.roomId, room);
@@ -382,6 +395,7 @@ async function startServer() {
       gates: room.gates,
       tempContent: room.tempContent,
       whiteboard: room.whiteboard,
+      whiteboardMode: room.whiteboardMode,
       lastTeacherScroll: room.lastTeacherScroll,
       zoomLevel: room.zoomLevel,
     };
@@ -1131,8 +1145,12 @@ async function startServer() {
     socket.on('whiteboard_mode_toggle', ({ roomId, active }: { roomId: string; active: boolean }) => {
       const room = rooms.get(roomId);
       if (!requireTeacher(room, socket.id)) return;
-      // Broadcast whiteboard mode change to all users in room
-      io.to(roomId).emit('whiteboard_mode_changed', { active });
+      // Persist BEFORE broadcasting. Without server-side persistence, a
+      // student who joins after the toggle never learns the teacher is on
+      // the whiteboard (the broadcast was a one-shot event), so they'd
+      // sit on the "Waiting for teacher" placeholder forever.
+      room.whiteboardMode = !!active;
+      io.to(roomId).emit('whiteboard_mode_changed', { active: room.whiteboardMode });
     });
 
     socket.on('whiteboard_scroll', ({ roomId, scrollX, scrollY }: { roomId: string; scrollX: number; scrollY: number }) => {
