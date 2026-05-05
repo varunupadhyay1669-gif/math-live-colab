@@ -46,6 +46,8 @@ interface RoomData {
     strokes: any[];
     shapes: any[];
     view: any | null;
+    gridMode?: 'blank' | 'grid' | 'graph';
+    instruments?: any[];
   };
   lastTeacherScroll: any | null;
   zoomLevel: number;
@@ -73,6 +75,8 @@ interface SessionStatePayload {
     strokes: any[];
     shapes: any[];
     view: any | null;
+    gridMode?: 'blank' | 'grid' | 'graph';
+    instruments?: any[];
   };
   lastTeacherScroll: any | null;
   zoomLevel: number;
@@ -177,7 +181,7 @@ async function startServer() {
       tempContent: null,
       liveSnapshotHtml: null,
       revision: 0,
-      whiteboard: { objects: [], strokes: [], shapes: [], view: null },
+      whiteboard: { objects: [], strokes: [], shapes: [], view: null, gridMode: 'grid', instruments: [] },
       lastTeacherScroll: null,
       zoomLevel: 1,
     };
@@ -958,10 +962,50 @@ async function startServer() {
       io.to(roomId).emit('whiteboard_remove_shape', { shapeId });
     });
 
+    // ── Grid mode + geometry instruments (ruler / protractor) ──
+    // Grid mode is a board-level setting. Persisted alongside view + shapes.
+    socket.on('whiteboard_set_grid_mode', ({ roomId, gridMode }: { roomId: string; gridMode: 'blank' | 'grid' | 'graph' }) => {
+      const room = rooms.get(roomId);
+      if (!requireTeacher(room, socket.id)) return;
+      if (gridMode !== 'blank' && gridMode !== 'grid' && gridMode !== 'graph') return;
+      room.whiteboard.gridMode = gridMode;
+      io.to(roomId).emit('whiteboard_set_grid_mode', { gridMode });
+    });
+
+    // Instruments are persistent so a late-joining student sees what's on
+    // the board. Capped to a sane limit to prevent runaway growth.
+    socket.on('whiteboard_add_instrument', ({ roomId, instrument }: any) => {
+      const room = rooms.get(roomId);
+      if (!requireTeacher(room, socket.id) || !instrument || typeof instrument.id !== 'string') return;
+      if (!Array.isArray(room.whiteboard.instruments)) room.whiteboard.instruments = [];
+      if (room.whiteboard.instruments.some((i: any) => i.id === instrument.id)) return;
+      room.whiteboard.instruments.push(instrument);
+      if (room.whiteboard.instruments.length > 16) {
+        room.whiteboard.instruments = room.whiteboard.instruments.slice(-16);
+      }
+      io.to(roomId).emit('whiteboard_add_instrument', { instrument });
+    });
+
+    socket.on('whiteboard_update_instrument', ({ roomId, instrument }: any) => {
+      const room = rooms.get(roomId);
+      if (!requireTeacher(room, socket.id) || !instrument || typeof instrument.id !== 'string') return;
+      if (!Array.isArray(room.whiteboard.instruments)) room.whiteboard.instruments = [];
+      room.whiteboard.instruments = room.whiteboard.instruments.map((i: any) => i.id === instrument.id ? instrument : i);
+      socket.to(roomId).emit('whiteboard_update_instrument', { instrument });
+    });
+
+    socket.on('whiteboard_remove_instrument', ({ roomId, instrumentId }: { roomId: string; instrumentId: string }) => {
+      const room = rooms.get(roomId);
+      if (!requireTeacher(room, socket.id) || typeof instrumentId !== 'string') return;
+      if (!Array.isArray(room.whiteboard.instruments)) room.whiteboard.instruments = [];
+      room.whiteboard.instruments = room.whiteboard.instruments.filter((i: any) => i.id !== instrumentId);
+      io.to(roomId).emit('whiteboard_remove_instrument', { instrumentId });
+    });
+
     socket.on('whiteboard_clear', ({ roomId }: { roomId: string }) => {
       const room = rooms.get(roomId);
       if (!requireTeacher(room, socket.id)) return;
-      room.whiteboard = { objects: [], strokes: [], shapes: [], view: null };
+      room.whiteboard = { objects: [], strokes: [], shapes: [], view: null, gridMode: room.whiteboard.gridMode ?? 'grid', instruments: [] };
       io.to(roomId).emit('whiteboard_clear');
     });
 
