@@ -1057,6 +1057,17 @@ export default function Room() {
 
   const toggleWhiteboardMode = () => {
     const newMode = !whiteboardMode;
+    // When switching INTO whiteboard, drop any HTML-overlay tool that was
+    // active (highlighter / pen / laser). Those tools belong to the
+    // AnnotationLayer over the iframe; if they leak into whiteboard mode the
+    // AnnotationLayer keeps capturing pointer events on top of the
+    // whiteboard, and the whiteboard's own tools silently do nothing. The
+    // teacher's whiteboard-side tool selection lives inside <Whiteboard/>
+    // and is unaffected by this reset.
+    if (newMode) {
+      setDrawMode(false);
+      setLaserMode(false);
+    }
     setWhiteboardMode(newMode);
     if (socket) {
       socket.emit('whiteboard_mode_toggle', { roomId, active: newMode });
@@ -1833,16 +1844,24 @@ export default function Room() {
                 </div>
               )}
 
-              {/* Drawing/Annotation Layer */}
-              <AnnotationLayer
-                socket={socket} roomId={roomId!}
-                drawMode={drawMode} laserMode={laserMode}
-                penType={penType} penColor={penColor} penWidth={penWidth}
-                iframeRef={iframeRef} interactive={true}
-                eraserMode={eraserMode}
-                eraserWidth={Math.max(penWidth * 4, 18)}
-                shapeTool={shapeTool}
-              />
+              {/* Drawing/Annotation Layer
+                  Only meaningful when there's an HTML iframe (or temp
+                  explanation content) underneath to annotate. In whiteboard
+                  mode the Whiteboard owns its own pen/highlighter tools, and
+                  rendering AnnotationLayer here would put an invisible event
+                  trap over the whiteboard whenever drawMode/laserMode were
+                  left active from an earlier HTML session. */}
+              {!whiteboardMode && (iframeUrl || (showTempContent && !!tempContent)) && (
+                <AnnotationLayer
+                  socket={socket} roomId={roomId!}
+                  drawMode={drawMode} laserMode={laserMode}
+                  penType={penType} penColor={penColor} penWidth={penWidth}
+                  iframeRef={iframeRef} interactive={true}
+                  eraserMode={eraserMode}
+                  eraserWidth={Math.max(penWidth * 4, 18)}
+                  shapeTool={shapeTool}
+                />
+              )}
 
               {/* Cursor Overlay */}
               <CursorOverlay cursors={cursors} />
