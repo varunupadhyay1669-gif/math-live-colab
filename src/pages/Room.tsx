@@ -556,8 +556,12 @@ export default function Room() {
         lastRevisionRef.current = state.revision;
       }
       if (state.activeFileId && state.lastRunHtml) {
-        setPreviewHtml(state.lastRunHtml);
-        setActiveFileId(state.activeFileId);
+        // Equality short-circuit (parity with StudentView): a duplicated
+        // force_sync_state with the same html shouldn't trip the iframe-URL
+        // useEffect to rebuild. React 18's setState bail handles it for
+        // identical strings, but being explicit makes the intent obvious.
+        setPreviewHtml(prev => prev === state.lastRunHtml ? prev : state.lastRunHtml);
+        setActiveFileId(prev => prev === state.activeFileId ? prev : state.activeFileId);
       }
       if (state.files) setFiles(state.files);
       setLastSyncTime(Date.now());
@@ -612,7 +616,12 @@ export default function Room() {
     });
 
     // ── Room Hard Reset (files are PRESERVED — only progress/session state is cleared) ──
-    newSocket.on("room_reset", (payload?: { activeFileId?: string | null; files?: FileEntry[]; lastRunHtml?: string | null }) => {
+    newSocket.on("room_reset", (payload?: { activeFileId?: string | null; files?: FileEntry[]; lastRunHtml?: string | null; revision?: number }) => {
+      // Track the bumped revision so subsequent session_state isn't dropped
+      // by the freshness guard against this client's pre-reset value.
+      if (typeof payload?.revision === 'number' && payload.revision > lastRevisionRef.current) {
+        lastRevisionRef.current = payload.revision;
+      }
       // Clear session progress/state
       setChatMessages([]);
       setCursors({});

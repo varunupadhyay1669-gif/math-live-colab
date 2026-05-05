@@ -419,14 +419,13 @@ export default function StudentView() {
         if (event.serverSeq <= lastInboundSeqRef.current) return;
         lastInboundSeqRef.current = event.serverSeq;
       }
-      if (typeof event.syncEpoch === 'number') {
-        const teacherScroll = event.type === "SYNC_SCROLL" && event.role === "teacher";
-        if (!teacherScroll && event.syncEpoch < syncEpochRef.current) return;
-        if (event.syncEpoch > syncEpochRef.current) {
-          syncEpochRef.current = event.syncEpoch;
-          pendingMessagesRef.current = [];
-        }
-      }
+      // syncEpoch comparison was removed (it was already removed on the
+      // teacher side). syncEpoch is a per-CLIENT local counter — comparing
+      // the teacher's number to the student's silently dropped every event
+      // whenever the two counters drifted (eg after the student rebuilt the
+      // iframe on a file switch — first teacher event after that arrived
+      // with a smaller epoch and was discarded). serverSeq above is the
+      // canonical, server-issued ordering and is sufficient on its own.
       // Track zoom level so we can re-apply on iframe reload
       if (event.type === "SYNC_ZOOM" && typeof event.zoom === 'number') {
         setZoomLevel(event.zoom);
@@ -599,7 +598,12 @@ export default function StudentView() {
     });
 
     // ── Hard Reset (content preserved — only session progress is cleared) ──
-    newSocket.on("room_reset", (payload?: { activeFileId?: string | null; files?: FileEntry[]; lastRunHtml?: string | null }) => {
+    newSocket.on("room_reset", (payload?: { activeFileId?: string | null; files?: FileEntry[]; lastRunHtml?: string | null; revision?: number }) => {
+      // Track the bumped revision so subsequent session_state isn't dropped
+      // by the freshness guard against this client's pre-reset value.
+      if (typeof payload?.revision === 'number' && payload.revision > lastRevisionRef.current) {
+        lastRevisionRef.current = payload.revision;
+      }
       // Clear session progress/state
       setChatMessages([]);
       setCursors({});

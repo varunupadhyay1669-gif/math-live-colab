@@ -1115,17 +1115,47 @@ async function startServer() {
       socket.to(roomId).emit('whiteboard_delete_stroke', { strokeIndex });
     });
 
-    socket.on('whiteboard_delete_strokes', ({ roomId, strokeIndices }: { roomId: string; strokeIndices: number[] }) => {
+    socket.on('whiteboard_delete_strokes', ({ roomId, strokeIds, strokeIndices }: { roomId: string; strokeIds?: string[]; strokeIndices?: number[] }) => {
       const room = rooms.get(roomId);
       if (!isMember(room, socket.id)) return;
       const user = room.users.get(socket.id);
       if (user?.role !== 'teacher' && !room.studentInteractionAllowed) return;
-      const unique = Array.from(new Set((strokeIndices || [])
-        .filter(index => Number.isInteger(index) && index >= 0 && index < room.whiteboard.strokes.length)))
-        .sort((a, b) => b - a);
-      if (unique.length === 0) return;
-      for (const index of unique) room.whiteboard.strokes.splice(index, 1);
-      socket.to(roomId).emit('whiteboard_delete_strokes', { strokeIndices: unique });
+
+      // ── Resolve to a set of stroke ids ──
+      // Prefer id-based deletion. Index-based delete (the legacy path) is
+      // unsafe under concurrency: if two clients each submit their own
+      // index list against the same array, the first .splice() shifts
+      // every subsequent index, so the second client deletes whichever
+      // strokes happen to land at those positions — not the ones they
+      // selected. Map any incoming legacy indices to the current ids
+      // FIRST (under the same tick), then do the actual delete by id.
+      const idsToDelete = new Set<string>();
+      if (Array.isArray(strokeIds)) {
+        for (const id of strokeIds) {
+          if (typeof id === 'string' && id) idsToDelete.add(id);
+        }
+      }
+      if (Array.isArray(strokeIndices)) {
+        for (const idx of strokeIndices) {
+          if (Number.isInteger(idx) && idx >= 0 && idx < room.whiteboard.strokes.length) {
+            const s = room.whiteboard.strokes[idx];
+            if (s && typeof s.id === 'string' && s.id) idsToDelete.add(s.id);
+          }
+        }
+      }
+      if (idsToDelete.size === 0) return;
+
+      const before = room.whiteboard.strokes.length;
+      room.whiteboard.strokes = room.whiteboard.strokes.filter((s: any) =>
+        !(s && typeof s.id === 'string' && idsToDelete.has(s.id))
+      );
+      if (room.whiteboard.strokes.length === before) return;
+
+      const deletedIds = Array.from(idsToDelete);
+      // Broadcast both for back-compat: new clients use strokeIds (race-free),
+      // old clients fall back to strokeIndices (computed against current
+      // server array, but unsafe if those clients had drifted).
+      socket.to(roomId).emit('whiteboard_delete_strokes', { strokeIds: deletedIds });
     });
 
     socket.on('whiteboard_mode_toggle', ({ roomId, active }: { roomId: string; active: boolean }) => {
@@ -1334,12 +1364,18 @@ async function startServer() {
       room.gates = {};
       room.isPaused = false;
       room.scores = {};
+      // Bump the canonical revision. Without this, any subsequent
+      // session_state / force_sync_state carries the OLD revision and clients
+      // with a higher local revision (stored before the reset) silently drop
+      // the post-reset state via the freshness guard.
+      bumpRevision(room);
       updateRoomActivity(roomId);
       io.to(roomId).emit('room_reset', {
         // Include preserved content so clients can restore it after clearing local state
         activeFileId: room.activeFileId,
         files: room.files,
         lastRunHtml: room.lastRunHtml,
+        revision: room.revision,
       });
       io.to(roomId).emit('leaderboard_update', []);
       // Also scroll everyone to top for a clean start
