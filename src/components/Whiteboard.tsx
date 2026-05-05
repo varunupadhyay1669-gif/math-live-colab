@@ -398,7 +398,11 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
         if (unique.length > 0) {
           unique.forEach(i => { const s = strokesRef.current[i]; if (s) removedStrokes.push(s); });
           setStrokes(prev => prev.filter((_, idx) => !unique.includes(idx)));
-          if (socket) socket.emit('whiteboard_delete_strokes', { roomId, strokeIndices: unique });
+          // Emit by stroke id (race-free) instead of index — concurrent
+          // deletes from the teacher and student would otherwise corrupt the
+          // server array via splice index drift.
+          const ids = removedStrokes.map(s => s.id).filter((id): id is string => !!id);
+          if (socket && ids.length > 0) socket.emit('whiteboard_delete_strokes', { roomId, strokeIds: ids });
         }
       }
       clearMultiSelection();
@@ -456,15 +460,11 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
             });
           }
           if (removedStrokes.length > 0) {
-            // Re-find indices in current state and delete.
+            // Race-free: delete by id everywhere.
             const idsToRemove = new Set(removedStrokes.map(s => s.id ?? ''));
-            const currentIndices: number[] = [];
-            strokesRef.current.forEach((s, idx) => { if (idsToRemove.has(s.id ?? '')) currentIndices.push(idx); });
-            const sorted = currentIndices.sort((a, b) => b - a);
-            if (sorted.length > 0) {
-              setStrokes(prev => prev.filter((_, idx) => !sorted.includes(idx)));
-              if (socket) socket.emit('whiteboard_delete_strokes', { roomId, strokeIndices: sorted });
-            }
+            setStrokes(prev => prev.filter(s => !idsToRemove.has(s.id ?? '')));
+            const ids = Array.from(idsToRemove).filter(id => !!id);
+            if (socket && ids.length > 0) socket.emit('whiteboard_delete_strokes', { roomId, strokeIds: ids });
           }
         },
       });
@@ -835,12 +835,15 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
     const deleteStrokeIndices = useCallback((indices: number[]) => {
       const unique = Array.from(new Set(indices)).filter(index => index >= 0 && index < strokesRef.current.length).sort((a, b) => b - a);
       if (unique.length === 0) return;
-      // Capture full stroke data so undo can re-add (server stores by index, but
-      // we restore by appending the saved strokes back).
+      // Capture full stroke data so undo can re-add. We resolve indices to
+      // ids HERE (atomically against the current array) and only carry ids
+      // forward — the server now deletes by id (race-free under concurrent
+      // deletes). Index-based emission is gone.
       const removedStrokes = unique.map(i => strokesRef.current[i]).filter(Boolean) as DrawStroke[];
+      const removedIds = removedStrokes.map(s => s.id).filter((id): id is string => !!id);
       setStrokes(prev => prev.filter((_, index) => !unique.includes(index)));
       setSelectedStrokeIndex(prev => (prev !== null && unique.includes(prev)) ? null : prev);
-      if (socket) socket.emit('whiteboard_delete_strokes', { roomId, strokeIndices: unique });
+      if (socket && removedIds.length > 0) socket.emit('whiteboard_delete_strokes', { roomId, strokeIds: removedIds });
       recordAction({
         undo: () => {
           // Re-append all deleted strokes; emit them as new draws so peers also restore.
@@ -854,14 +857,11 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
           }
         },
         redo: () => {
-          // Re-find current indices for these strokes (positions may have shifted)
-          const idsToRemove = new Set(removedStrokes.map(s => s.id));
-          const currentIndices: number[] = [];
-          strokesRef.current.forEach((s, idx) => { if (idsToRemove.has(s.id ?? '')) currentIndices.push(idx); });
-          if (currentIndices.length === 0) return;
-          const sorted = currentIndices.sort((a, b) => b - a);
-          setStrokes(prev => prev.filter((_, idx) => !sorted.includes(idx)));
-          if (socket) socket.emit('whiteboard_delete_strokes', { roomId, strokeIndices: sorted });
+          // Race-free redo: delete by id, no index lookup needed.
+          const idsToRemove = new Set(removedStrokes.map(s => s.id).filter((id): id is string => !!id));
+          if (idsToRemove.size === 0) return;
+          setStrokes(prev => prev.filter(s => !(s.id && idsToRemove.has(s.id))));
+          if (socket) socket.emit('whiteboard_delete_strokes', { roomId, strokeIds: Array.from(idsToRemove) });
         },
       });
     }, [socket, roomId, recordAction]);
@@ -1657,9 +1657,19 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
       const handleDeleteStroke = (data: { strokeIndex: number }) => {
         setStrokes(prev => prev.filter((_, index) => index !== data.strokeIndex));
       };
-      const handleDeleteStrokes = (data: { strokeIndices: number[] }) => {
-        const toDelete = new Set(data.strokeIndices || []);
-        setStrokes(prev => prev.filter((_, index) => !toDelete.has(index)));
+      const handleDeleteStrokes = (data: { strokeIds?: string[]; strokeIndices?: number[] }) => {
+        // Prefer id-based delete (race-free). Fall back to legacy index-based
+        // for backwards compatibility with any in-flight messages from older
+        // server builds. Mixing both (a server in transition) is also handled.
+        if (Array.isArray(data.strokeIds) && data.strokeIds.length > 0) {
+          const ids = new Set(data.strokeIds);
+          setStrokes(prev => prev.filter(s => !(s.id && ids.has(s.id))));
+          return;
+        }
+        if (Array.isArray(data.strokeIndices)) {
+          const toDelete = new Set(data.strokeIndices);
+          setStrokes(prev => prev.filter((_, index) => !toDelete.has(index)));
+        }
       };
       const handleSetGridMode = (data: { gridMode: GridMode }) => {
         if (data.gridMode === 'blank' || data.gridMode === 'grid' || data.gridMode === 'graph') {
@@ -1964,10 +1974,9 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
         if (strokeTool !== 'highlighter') {
           recordAction({
             undo: () => {
-              const idx = strokesRef.current.findIndex(s => s.id === stroke.id);
-              if (idx < 0) return;
+              if (!stroke.id) return;
               setStrokes(prev => prev.filter(s => s.id !== stroke.id));
-              if (socket) socket.emit('whiteboard_delete_strokes', { roomId, strokeIndices: [idx] });
+              if (socket) socket.emit('whiteboard_delete_strokes', { roomId, strokeIds: [stroke.id] });
             },
             redo: () => {
               setStrokes(prev => prev.some(s => s.id === stroke.id) ? prev : [...prev, stroke]);
