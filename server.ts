@@ -460,6 +460,20 @@ async function startServer() {
         return;
       }
 
+      // ── Teacher-takeover gate ──
+      // If someone else is already the teacher (alive socket connected), reject
+      // a duplicate teacher claim — only the original teacher (matched by name)
+      // can reclaim the seat after a disconnect. Without this gate, any user
+      // who knows the room id could claim role:'teacher' and become
+      // authoritative over the whole room (sync-hijack vector).
+      if (role === 'teacher' && room.teacherSocketId) {
+        const sittingTeacher = room.users.get(room.teacherSocketId);
+        if (sittingTeacher && sittingTeacher.name !== safeName) {
+          socket.emit('join_error', { message: 'Another teacher is already in this room.' });
+          return;
+        }
+      }
+
       socket.join(roomId);
       room.users.set(socket.id, { name: safeName, role, joinedAt: Date.now(), whiteboardSync: true });
 
@@ -470,6 +484,13 @@ async function startServer() {
 
       if (role === 'teacher') {
         room.teacherSocketId = socket.id;
+        // Reconnecting teacher: re-request a fresh DOM snapshot for any
+        // student who was waiting for one when the previous socket dropped.
+        // (Pending students were tied to the old socket; they would have hung
+        // forever otherwise.)
+        if (room.pendingSyncStudents.size > 0) {
+          io.to(socket.id).emit('request_html_sync', { requestId: `reconnect-${Date.now()}`, reason: 'teacher_reconnect' });
+        }
       } else if (role === 'student' && room.teacherSocketId) {
         // Track this student as needing fresh HTML from teacher's live DOM
         room.pendingSyncStudents.add(socket.id);
@@ -640,11 +661,12 @@ async function startServer() {
     socket.on('sync_html_update', ({ roomId, html, requestId }: { roomId: string; html: string; requestId?: string }) => {
       const room = rooms.get(roomId);
       if (!requireTeacher(room, socket.id) || !room.activeFileId) return;
-      // Store for future students
-      room.lastRunHtml = html;
+      // Same reasoning as in dom_snapshot above: a passive snapshot ack does
+      // NOT rewrite lastRunHtml or the persisted file source — only the live
+      // snapshot. Otherwise every late-joiner silently corrupts the teacher's
+      // uploaded HTML by overwriting it with whatever DOM state happened to
+      // be in the iframe at the moment they joined.
       room.liveSnapshotHtml = html;
-      const file = room.files.find(f => f.id === room.activeFileId);
-      if (file) file.html = html;
       const revision = bumpRevision(room);
       // Send to any students waiting for the teacher's live DOM
       // (these students joined after the teacher and need the current content)
@@ -662,13 +684,24 @@ async function startServer() {
     socket.on('dom_snapshot', ({ roomId, html, requestId }: { roomId: string; html: string; requestId?: string }) => {
       const room = rooms.get(roomId);
       if (!requireTeacher(room, socket.id) || !room.activeFileId) return;
+      const isForceSync = requestId?.startsWith('force-');
+      // ── Don't corrupt the source HTML on every late-join ack ──
+      // `liveSnapshotHtml` is the "current DOM right now" and is meant to
+      // change every snapshot. `lastRunHtml` is the last HTML the teacher
+      // actually ran (the file's pristine starting point); `file.html` is
+      // the saved source. Overwriting those on every late-join silently
+      // drifted the teacher's uploaded file away from what they uploaded —
+      // after a few lessons the "original" file was actually some random
+      // mid-state snapshot. Only force-sync (an explicit teacher request to
+      // re-baseline everyone) should rewrite the run/source.
       room.liveSnapshotHtml = html;
-      room.lastRunHtml = html;
-      const file = room.files.find(f => f.id === room.activeFileId);
-      if (file) file.html = html;
+      if (isForceSync) {
+        room.lastRunHtml = html;
+        const file = room.files.find(f => f.id === room.activeFileId);
+        if (file) file.html = html;
+      }
       const revision = bumpRevision(room);
 
-      const isForceSync = requestId?.startsWith('force-');
       if (isForceSync) {
         // Genuine force-sync: every client should re-render to match the snapshot.
         broadcastFullState(roomId, room, 'force_sync', requestId);
@@ -859,9 +892,27 @@ async function startServer() {
     });
 
     // ─── WHITEBOARD ───
+    // Per-stroke caps. A typical pen stroke is ~50-200 points — anything an
+    // order of magnitude larger is either a buggy client or an attack. Anyone
+    // can draw (this is a shared canvas), but the payload must be sane.
+    const MAX_STROKE_POINTS = 5000;
     socket.on('whiteboard_draw', ({ roomId, stroke }: any) => {
       const room = rooms.get(roomId);
       if (!isMember(room, socket.id)) return;
+      // Validate stroke shape — reject anything malformed instead of writing it
+      // to canonical state and persisting the corruption to disk.
+      if (!stroke || !Array.isArray(stroke.points) || stroke.points.length === 0) return;
+      if (stroke.points.length > MAX_STROKE_POINTS) {
+        // Truncate rather than reject — a long but legitimate stroke (eg a
+        // student drawing a long underline) shouldn't fail silently.
+        stroke.points = stroke.points.slice(0, MAX_STROKE_POINTS);
+      }
+      // Numeric sanity: every point must have finite x/y. One bad point would
+      // make the entire stroke unrenderable everywhere.
+      for (const p of stroke.points) {
+        if (!p || typeof p.x !== 'number' || typeof p.y !== 'number' ||
+            !Number.isFinite(p.x) || !Number.isFinite(p.y)) return;
+      }
       room.whiteboard.strokes.push(stroke);
       if (room.whiteboard.strokes.length > 5000) room.whiteboard.strokes = room.whiteboard.strokes.slice(-5000);
       socket.to(roomId).emit('whiteboard_stroke', { stroke, senderId: socket.id });
@@ -904,9 +955,30 @@ async function startServer() {
       // forgiving toward any user object that might have been created before
       // the field existed.
       if (sender.whiteboardSync === false) return;
-      // Persist the canonical view so late-joining users start at the same
-      // place. Whoever moved last (with sync on) wins.
-      room.whiteboard.view = view;
+
+      // ── Validate payload ──
+      // A malicious or buggy client could send NaN / Infinity / strings; if we
+      // wrote those into room.whiteboard.view (the canonical state) every
+      // sync-on user's canvas math would break. Hard-reject anything that
+      // isn't three finite numbers, with sane bounds.
+      const isFinite01 = (v: any) => typeof v === 'number' && Number.isFinite(v);
+      if (!view || !isFinite01(view.boardScale) || !isFinite01(view.boardOffsetX) || !isFinite01(view.boardOffsetY)) return;
+      const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
+      const safeView = {
+        boardScale: clamp(view.boardScale, 0.01, 100),
+        boardOffsetX: clamp(view.boardOffsetX, -1e7, 1e7),
+        boardOffsetY: clamp(view.boardOffsetY, -1e7, 1e7),
+      };
+
+      // ── Authority ──
+      // Persist the canonical view ONLY for teachers. Students with
+      // whiteboardSync on still get to broadcast their movement to peers (so
+      // mutual "follow my view" works), but a student can no longer overwrite
+      // the persisted view that late-joiners restore to. The teacher's last
+      // movement is the authoritative one across reloads.
+      if (sender.role === 'teacher') {
+        room.whiteboard.view = safeView;
+      }
       // Mutual sync: relay to every OTHER user whose whiteboardSync isn't
       // explicitly off. The "shared book" model — pan/zoom happens for both
       // sides at once.
@@ -914,7 +986,7 @@ async function startServer() {
       for (const [otherId, otherUser] of room.users.entries()) {
         if (otherId === socket.id) continue;
         if (otherUser.whiteboardSync === false) continue;
-        io.to(otherId).emit('whiteboard_set_view', { view });
+        io.to(otherId).emit('whiteboard_set_view', { view: safeView });
         recipientCount++;
       }
       // One-line diagnostic so it's obvious in the server log whether sync is
