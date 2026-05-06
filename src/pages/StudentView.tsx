@@ -165,7 +165,8 @@ export default function StudentView() {
   const [joinError, setJoinError] = useState<string | null>(null);
 
   // ── Sound ──
-  const [soundMuted, setSoundMuted] = useState(false);
+  // AUTONOMOUS: [ORDER-2 ESSENTIAL] - hydrate from persisted mute pref.
+  const [soundMuted, setSoundMuted] = useState(() => sounds.isMuted());
 
   // ── Iframe readiness ──
   const iframeReadyRef = useRef(false);

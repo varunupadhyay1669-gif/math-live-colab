@@ -240,10 +240,36 @@ export default function Room() {
   useEffect(() => { isRecordingRef.current = isRecording; }, [isRecording]);
 
   // ── Sound ──
-  const [soundMuted, setSoundMuted] = useState(false);
+  // AUTONOMOUS: [ORDER-2 ESSENTIAL] - hydrate from persisted mute pref so the
+  // toggle survives reloads instead of resetting on every page load.
+  const [soundMuted, setSoundMuted] = useState(() => sounds.isMuted());
 
   // ── User Panel ──
   const [showUserPanel, setShowUserPanel] = useState(false);
+
+  // AUTONOMOUS: [ORDER-2 ESSENTIAL] - beforeunload guard.
+  // The server persists every 5 minutes, so an accidental tab close can lose
+  // up to 5 min of work between saves. We install a "Leave site?" prompt
+  // when there's something in the room worth saving — uploaded HTML or any
+  // whiteboard activity. Browsers show a generic dialog (the message is
+  // ignored by Chrome/Firefox/Safari), but the prompt itself is enough to
+  // catch the "Cmd+W with five other tabs open" mistake.
+  useEffect(() => {
+    const handler = (e: BeforeUnloadEvent) => {
+      const hasFiles = files.length > 0;
+      const hasIframe = !!iframeUrl;
+      const hasWhiteboardActivity = whiteboardMode ||
+        ((whiteboardState?.objects?.length ?? 0) > 0) ||
+        ((whiteboardState?.strokes?.length ?? 0) > 0) ||
+        ((whiteboardState?.shapes?.length ?? 0) > 0);
+      if (!hasFiles && !hasIframe && !hasWhiteboardActivity) return;
+      e.preventDefault();
+      // Required for the prompt in older browsers.
+      e.returnValue = '';
+    };
+    window.addEventListener('beforeunload', handler);
+    return () => window.removeEventListener('beforeunload', handler);
+  }, [files.length, iframeUrl, whiteboardMode, whiteboardState]);
 
   // ── Room Password ──
   const [roomPassword, setRoomPassword] = useState<string>('');
