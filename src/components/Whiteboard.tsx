@@ -14,6 +14,7 @@ interface WhiteboardProps {
     objects?: BoardImageObject[];
     strokes?: DrawStroke[];
     shapes?: BoardShape[];
+    texts?: BoardText[];
     view?: BoardView | null;
     gridMode?: GridMode;
     instruments?: BoardInstrument[];
@@ -103,6 +104,27 @@ interface BoardImageObject {
   zIndex: number;
 }
 
+// Text labels on the whiteboard. Click-to-place; Enter/blur commits.
+// Stored separately from shapes because they have a fundamentally different
+// data shape (typed content, not endpoint coords) and are rendered with
+// fillText, not stroke geometry.
+//   x, y       = top-left of the first line in board space
+//   text       = full content (may contain \n for multi-line)
+//   fontSize   = board units; the canvas font is set to this and scales
+//                with the view's boardScale (so text "lives in the board"
+//                like all other content)
+//   color      = current pen color at time of creation
+//   updatedAt  = used to break sync ties if two users edit the same text
+interface BoardText {
+  id: string;
+  x: number;
+  y: number;
+  text: string;
+  fontSize: number;
+  color: string;
+  updatedAt?: number;
+}
+
 interface BoardView {
   boardScale: number;
   boardOffsetX: number;
@@ -117,7 +139,12 @@ export interface WhiteboardRef {
   getCanvas: () => HTMLCanvasElement | null;
 }
 
-type BoardTool = 'select' | 'pen' | 'highlighter' | 'eraser' | 'pan' | 'line' | 'rect' | 'circle' | 'arrow' | 'compass' | 'ruler' | 'protractor';
+type BoardTool = 'select' | 'pen' | 'highlighter' | 'eraser' | 'pan' | 'line' | 'rect' | 'circle' | 'arrow' | 'compass' | 'ruler' | 'protractor' | 'text';
+
+// Default font size for new text in board units. ~24px at 100% zoom.
+const TEXT_DEFAULT_FONT_SIZE = 24;
+const TEXT_FONT_FAMILY = 'ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+const TEXT_LINE_HEIGHT_RATIO = 1.25;
 
 // Compass produces a regular circle shape but the gesture is "click + drag
 // from the centre" (which the existing circle tool already does — compass
@@ -223,7 +250,7 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
     const marqueeRef = useRef<{ x1: number; y1: number; x2: number; y2: number } | null>(null);
     type ObjectHandle = 'tl' | 'tr' | 'bl' | 'br' | 'rotate';
     const dragRef = useRef<{
-      mode: 'draw' | 'erase' | 'pan' | 'object' | 'object-resize' | 'object-rotate' | 'shape-create' | 'shape-move' | 'marquee' | 'instrument-translate' | 'instrument-handle' | null;
+      mode: 'draw' | 'erase' | 'pan' | 'object' | 'object-resize' | 'object-rotate' | 'shape-create' | 'shape-move' | 'marquee' | 'instrument-translate' | 'instrument-handle' | 'text-move' | null;
       pointerId: number;
       startClientX: number;
       startClientY: number;
@@ -238,12 +265,34 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
       shapeStart?: { x1: number; y1: number; x2: number; y2: number };
       instrumentId?: string;
       instrumentStart?: BoardInstrument;
+      textId?: string;
+      textStartX?: number;
+      textStartY?: number;
     } | null>(null);
 
     const [objects, setObjects] = useState<BoardImageObject[]>([]);
     const [strokes, setStrokes] = useState<DrawStroke[]>([]);
     const [shapes, setShapes] = useState<BoardShape[]>([]);
     const [draftShape, setDraftShape] = useState<BoardShape | null>(null);
+    // Text labels (typed labels on the canvas — separate from shapes
+    // because they have a different data shape and are rendered with
+    // fillText, not stroke geometry).
+    const [texts, setTexts] = useState<BoardText[]>([]);
+    const textsRef = useRef<BoardText[]>([]);
+    const [selectedTextId, setSelectedTextId] = useState<string | null>(null);
+    // When the text editor overlay is open, this holds (a) the id of the
+    // text being edited (or null for a new one), (b) the screen pixel
+    // position to anchor the textarea, (c) the initial value to populate.
+    // Closing the overlay either commits or discards based on emptiness.
+    const [textEditor, setTextEditor] = useState<{
+      id: string | null;     // null = creating a new label, string = re-editing
+      boardX: number;        // board-space anchor (top-left of first line)
+      boardY: number;
+      value: string;
+      fontSize: number;
+      color: string;
+    } | null>(null);
+    const textEditorRef = useRef<HTMLTextAreaElement>(null);
     const [currentStroke, setCurrentStroke] = useState<DrawPoint[]>([]);
     const [selectedObjectId, setSelectedObjectId] = useState<string | null>(null);
     const [selectedStrokeIndex, setSelectedStrokeIndex] = useState<number | null>(null);
@@ -281,6 +330,10 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
     useEffect(() => {
       shapesRef.current = shapes;
     }, [shapes]);
+
+    useEffect(() => {
+      textsRef.current = texts;
+    }, [texts]);
 
     useEffect(() => {
       draftShapeRef.current = draftShape;
@@ -538,6 +591,177 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
         },
       });
     }, [selectedShapeId, shapes, socket, isTeacher, roomId, recordAction]);
+
+    // ── Text geometry + hit testing ──
+    // Measures the bounding box of a multi-line text in board space. Uses an
+    // offscreen 2D context to measure each line's width, then takes the
+    // maximum. Height is fontSize * lineHeightRatio per line. The bbox
+    // origin is the text's top-left (text.x, text.y).
+    const measureTextRef = useRef<HTMLCanvasElement | null>(null);
+    const measureText = useCallback((text: BoardText): { x: number; y: number; w: number; h: number; lines: string[] } => {
+      if (!measureTextRef.current) {
+        measureTextRef.current = document.createElement('canvas');
+      }
+      const ctx = measureTextRef.current.getContext('2d');
+      const lines = text.text.split('\n');
+      let maxW = 0;
+      if (ctx) {
+        ctx.font = `${text.fontSize}px ${TEXT_FONT_FAMILY}`;
+        for (const line of lines) {
+          const m = ctx.measureText(line);
+          if (m.width > maxW) maxW = m.width;
+        }
+      } else {
+        // Fallback heuristic if ever the offscreen canvas fails.
+        maxW = lines.reduce((m, l) => Math.max(m, l.length), 0) * text.fontSize * 0.55;
+      }
+      const lineH = text.fontSize * TEXT_LINE_HEIGHT_RATIO;
+      const h = Math.max(lines.length, 1) * lineH;
+      return { x: text.x, y: text.y, w: maxW, h, lines };
+    }, []);
+
+    const textHit = useCallback((point: DrawPoint, text: BoardText): boolean => {
+      const b = measureText(text);
+      const pad = 6 / view.boardScale;
+      return point.x >= b.x - pad && point.x <= b.x + b.w + pad &&
+             point.y >= b.y - pad && point.y <= b.y + b.h + pad;
+    }, [measureText, view.boardScale]);
+
+    const findTextAt = useCallback((point: DrawPoint): BoardText | null => {
+      // Iterate newest-first (rendered last → on top).
+      for (let i = textsRef.current.length - 1; i >= 0; i--) {
+        if (textHit(point, textsRef.current[i])) return textsRef.current[i];
+      }
+      return null;
+    }, [textHit]);
+
+    // ── Text mutators ──
+    const addText = useCallback((t: BoardText) => {
+      setTexts(prev => [...prev, t]);
+      if (socket && isTeacher) socket.emit('whiteboard_add_text', { roomId, text: t });
+    }, [socket, isTeacher, roomId]);
+
+    const updateText = useCallback((t: BoardText, broadcast = true) => {
+      setTexts(prev => prev.map(x => x.id === t.id ? t : x));
+      if (broadcast && socket && isTeacher) socket.emit('whiteboard_update_text', { roomId, text: t });
+    }, [socket, isTeacher, roomId]);
+
+    const removeSelectedText = useCallback(() => {
+      if (!selectedTextId) return;
+      const id = selectedTextId;
+      const snapshot = textsRef.current.find(t => t.id === id);
+      if (!snapshot) return;
+      const textSnapshot: BoardText = { ...snapshot };
+      setTexts(prev => prev.filter(t => t.id !== id));
+      setSelectedTextId(null);
+      if (socket && isTeacher) socket.emit('whiteboard_remove_text', { roomId, textId: id });
+      recordAction({
+        undo: () => {
+          setTexts(prev => prev.some(t => t.id === textSnapshot.id) ? prev : [...prev, textSnapshot]);
+          if (socket && isTeacher) socket.emit('whiteboard_add_text', { roomId, text: textSnapshot });
+        },
+        redo: () => {
+          setTexts(prev => prev.filter(t => t.id !== textSnapshot.id));
+          if (socket && isTeacher) socket.emit('whiteboard_remove_text', { roomId, textId: textSnapshot.id });
+        },
+      });
+    }, [selectedTextId, socket, isTeacher, roomId, recordAction]);
+
+    // Open the inline editor at the given board-space point. If editing an
+    // existing text, pre-fills with its content; if creating new, starts blank.
+    const openTextEditor = useCallback((boardX: number, boardY: number, existing?: BoardText) => {
+      setTextEditor({
+        id: existing?.id ?? null,
+        boardX,
+        boardY,
+        value: existing?.text ?? '',
+        fontSize: existing?.fontSize ?? TEXT_DEFAULT_FONT_SIZE,
+        color: existing?.color ?? color,
+      });
+    }, [color]);
+
+    // Commit the editor's current value as a text. Empty input → discard.
+    const commitTextEditor = useCallback(() => {
+      const ed = textEditor;
+      if (!ed) return;
+      const trimmed = ed.value;
+      // Empty (only whitespace) commit on a NEW text → discard.
+      // Empty commit on an EXISTING text → treat as delete.
+      if (!trimmed.trim()) {
+        if (ed.id) {
+          // Empty existing → delete
+          const existing = textsRef.current.find(t => t.id === ed.id);
+          if (existing) {
+            setTexts(prev => prev.filter(t => t.id !== ed.id));
+            if (socket && isTeacher) socket.emit('whiteboard_remove_text', { roomId, textId: ed.id });
+            const snap = { ...existing };
+            recordAction({
+              undo: () => {
+                setTexts(prev => prev.some(t => t.id === snap.id) ? prev : [...prev, snap]);
+                if (socket && isTeacher) socket.emit('whiteboard_add_text', { roomId, text: snap });
+              },
+              redo: () => {
+                setTexts(prev => prev.filter(t => t.id !== snap.id));
+                if (socket && isTeacher) socket.emit('whiteboard_remove_text', { roomId, textId: snap.id });
+              },
+            });
+          }
+        }
+        setTextEditor(null);
+        return;
+      }
+      if (ed.id) {
+        // Editing existing — update
+        const existing = textsRef.current.find(t => t.id === ed.id);
+        const before = existing ? { ...existing } : null;
+        const after: BoardText = {
+          id: ed.id,
+          x: ed.boardX,
+          y: ed.boardY,
+          text: trimmed,
+          fontSize: ed.fontSize,
+          color: ed.color,
+          updatedAt: Date.now(),
+        };
+        updateText(after);
+        if (before) {
+          recordAction({
+            undo: () => updateText(before),
+            redo: () => updateText(after),
+          });
+        }
+      } else {
+        const t: BoardText = {
+          id: newId('text'),
+          x: ed.boardX,
+          y: ed.boardY,
+          text: trimmed,
+          fontSize: ed.fontSize,
+          color: ed.color,
+          updatedAt: Date.now(),
+        };
+        addText(t);
+        recordAction({
+          undo: () => {
+            setTexts(prev => prev.filter(x => x.id !== t.id));
+            if (socket && isTeacher) socket.emit('whiteboard_remove_text', { roomId, textId: t.id });
+          },
+          redo: () => {
+            setTexts(prev => prev.some(x => x.id === t.id) ? prev : [...prev, t]);
+            if (socket && isTeacher) socket.emit('whiteboard_add_text', { roomId, text: t });
+          },
+        });
+      }
+      setTextEditor(null);
+      setTool('select');
+    }, [textEditor, addText, updateText, socket, isTeacher, roomId, recordAction]);
+
+    // Cancel discard the editor without committing (Esc).
+    const cancelTextEditor = useCallback(() => {
+      setTextEditor(null);
+      // Don't auto-revert tool here — user might want to click again to
+      // place another text. Tool reverts only on actual commit.
+    }, []);
 
     const setLiveStroke = useCallback((points: DrawPoint[]) => {
       currentStrokeRef.current = points;
@@ -1246,6 +1470,40 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
         ctx.restore();
       }
 
+      // ── Text labels ──
+      // Drawn after shapes so labels read on top of them. Multi-line
+      // supported via \n. The currently-being-edited text (if any) is
+      // rendered transparently so it doesn't overlap the textarea overlay.
+      const drawText = (t: BoardText) => {
+        if (textEditor && textEditor.id === t.id) return; // hidden during edit
+        ctx.save();
+        ctx.fillStyle = t.color;
+        ctx.font = `${t.fontSize}px ${TEXT_FONT_FAMILY}`;
+        ctx.textBaseline = 'top';
+        ctx.textAlign = 'left';
+        const lineH = t.fontSize * TEXT_LINE_HEIGHT_RATIO;
+        const lines = t.text.split('\n');
+        for (let i = 0; i < lines.length; i++) {
+          ctx.fillText(lines[i], t.x, t.y + i * lineH);
+        }
+        ctx.restore();
+      };
+      texts.forEach(drawText);
+      // Selection chrome for text — same dashed rect treatment as shapes.
+      if (selectedTextId) {
+        const sel = texts.find(t => t.id === selectedTextId);
+        if (sel) {
+          const b = measureText(sel);
+          const pad = 4 / view.boardScale;
+          ctx.save();
+          ctx.strokeStyle = '#2563eb';
+          ctx.lineWidth = 2 / view.boardScale;
+          ctx.setLineDash([8 / view.boardScale, 6 / view.boardScale]);
+          ctx.strokeRect(b.x - pad, b.y - pad, b.w + pad * 2, b.h + pad * 2);
+          ctx.restore();
+        }
+      }
+
       const drawStroke = (stroke: DrawStroke) => {
         if (stroke.points.length === 0) return;
         ctx.save();
@@ -1488,7 +1746,7 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
       });
 
       ctx.restore();
-    }, [objects, selectedObjectId, selectedStrokeIndex, strokeBounds, strokes, currentStroke, color, width, tool, view, shapes, draftShape, selectedShape, shapeBounds, getObjectHandlePositions, marquee, multiObjectIds, multiShapeIds, multiStrokeIndices, eraserMode, gridMode, instruments, getInstrumentPose]);
+    }, [objects, selectedObjectId, selectedStrokeIndex, strokeBounds, strokes, currentStroke, color, width, tool, view, shapes, draftShape, selectedShape, shapeBounds, getObjectHandlePositions, marquee, multiObjectIds, multiShapeIds, multiStrokeIndices, eraserMode, gridMode, instruments, getInstrumentPose, texts, selectedTextId, textEditor, measureText]);
 
     const downloadBoard = useCallback(() => {
       const canvas = canvasRef.current;
@@ -1531,6 +1789,7 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
       if (initialState.view) setView(initialState.view);
       if (initialState.gridMode) setGridMode(initialState.gridMode);
       if (initialState.instruments) setInstruments(initialState.instruments);
+      if (initialState.texts) setTexts(initialState.texts);
       (initialState.objects || []).forEach(loadImage);
     }, [initialState, loadImage]);
 
@@ -1562,9 +1821,13 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
           e.preventDefault();
         }
         if ((e.key === 'Backspace' || e.key === 'Delete') && canEdit) {
+          // Don't delete shapes etc. while the user is typing in the text
+          // editor — Backspace inside a textarea must work normally.
+          if (textEditor) return;
           if (selectedObjectId) removeSelectedObject();
           if (selectedStrokeIndex !== null) deleteStrokeIndices([selectedStrokeIndex]);
           if (selectedShapeId) removeSelectedShape();
+          if (selectedTextId) removeSelectedText();
           if (multiObjectIds.length > 0 || multiShapeIds.length > 0 || multiStrokeIndices.length > 0) {
             removeMultiSelection();
           }
@@ -1573,6 +1836,7 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
           setSelectedObjectId(null);
           setSelectedShapeId(null);
           setSelectedStrokeIndex(null);
+          setSelectedTextId(null);
           clearMultiSelection();
         }
         // Undo / Redo (ignore when typing into an input/textarea — none in
@@ -1602,7 +1866,7 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
         window.removeEventListener('keydown', down);
         window.removeEventListener('keyup', up);
       };
-    }, [isActive, canEdit, selectedObjectId, selectedStrokeIndex, selectedShapeId, removeSelectedObject, deleteStrokeIndices, removeSelectedShape, multiObjectIds.length, multiShapeIds.length, multiStrokeIndices.length, removeMultiSelection, clearMultiSelection, undo, redo]);
+    }, [isActive, canEdit, selectedObjectId, selectedStrokeIndex, selectedShapeId, selectedTextId, removeSelectedObject, deleteStrokeIndices, removeSelectedShape, removeSelectedText, multiObjectIds.length, multiShapeIds.length, multiStrokeIndices.length, removeMultiSelection, clearMultiSelection, undo, redo, textEditor]);
 
     useEffect(() => {
       if (!socket) return;
@@ -1645,9 +1909,11 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
         setObjects([]);
         setShapes([]);
         setInstruments([]);
+        setTexts([]);
         setSelectedObjectId(null);
         setSelectedStrokeIndex(null);
         setSelectedShapeId(null);
+        setSelectedTextId(null);
         imageCacheRef.current.clear();
       };
       const handleReset = () => {
@@ -1687,6 +1953,24 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
       const handleRemoveInstrument = (data: { instrumentId: string }) => {
         setInstruments(prev => prev.filter(i => i.id !== data.instrumentId));
       };
+      const handleAddText = (data: { text: BoardText }) => {
+        if (!data.text || !data.text.id) return;
+        setTexts(prev => prev.some(t => t.id === data.text.id) ? prev : [...prev, data.text]);
+      };
+      const handleUpdateText = (data: { text: BoardText }) => {
+        if (!data.text || !data.text.id) return;
+        // updatedAt-based last-write-wins to break ties when teacher and an
+        // edit-permitted student race on the same text.
+        setTexts(prev => prev.map(t => {
+          if (t.id !== data.text.id) return t;
+          const incomingTs = data.text.updatedAt ?? 0;
+          const currentTs = t.updatedAt ?? 0;
+          return incomingTs >= currentTs ? data.text : t;
+        }));
+      };
+      const handleRemoveText = (data: { textId: string }) => {
+        setTexts(prev => prev.filter(t => t.id !== data.textId));
+      };
       socket.on('whiteboard_image', handleImage);
       socket.on('whiteboard_add_image', handleAddImage);
       socket.on('whiteboard_update_object', handleUpdateObject);
@@ -1704,6 +1988,9 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
       socket.on('whiteboard_add_instrument', handleAddInstrument);
       socket.on('whiteboard_update_instrument', handleUpdateInstrument);
       socket.on('whiteboard_remove_instrument', handleRemoveInstrument);
+      socket.on('whiteboard_add_text', handleAddText);
+      socket.on('whiteboard_update_text', handleUpdateText);
+      socket.on('whiteboard_remove_text', handleRemoveText);
       return () => {
         socket.off('whiteboard_image', handleImage);
         socket.off('whiteboard_add_image', handleAddImage);
@@ -1722,6 +2009,9 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
         socket.off('whiteboard_add_instrument', handleAddInstrument);
         socket.off('whiteboard_update_instrument', handleUpdateInstrument);
         socket.off('whiteboard_remove_instrument', handleRemoveInstrument);
+        socket.off('whiteboard_add_text', handleAddText);
+        socket.off('whiteboard_update_text', handleUpdateText);
+        socket.off('whiteboard_remove_text', handleRemoveText);
       };
     }, [socket, addImageObject, loadImage]);
 
@@ -1740,6 +2030,21 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
       if (tool === 'ruler' || tool === 'protractor') {
         toggleInstrument(tool);
         setTool('select');
+        dragRef.current = null;
+        return;
+      }
+
+      // Text tool click — open the inline editor at the click point. If
+      // there's already a text under the cursor, edit that one instead of
+      // creating a new label on top.
+      if (tool === 'text') {
+        const hitText = findTextAt(point);
+        if (hitText) {
+          setSelectedTextId(hitText.id);
+          openTextEditor(hitText.x, hitText.y, hitText);
+        } else {
+          openTextEditor(point.x, point.y);
+        }
         dragRef.current = null;
         return;
       }
@@ -1820,10 +2125,31 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
           };
           return;
         }
+        // Text hit — select and start a translate drag. Selection is
+        // separate state from selectedShapeId so they don't shadow each
+        // other; only one is set at a time per the resets below.
+        const hitText = findTextAt(point);
+        if (hitText) {
+          setSelectedTextId(hitText.id);
+          setSelectedShapeId(null);
+          setSelectedObjectId(null);
+          setSelectedStrokeIndex(null);
+          dragRef.current = {
+            mode: 'text-move',
+            pointerId: e.pointerId,
+            startClientX: e.clientX, startClientY: e.clientY,
+            startOffsetX: view.boardOffsetX, startOffsetY: view.boardOffsetY,
+            textId: hitText.id,
+            textStartX: hitText.x,
+            textStartY: hitText.y,
+          };
+          return;
+        }
         const strokeIndex = findStrokeAtPoint(point);
         if (strokeIndex !== -1) {
           setSelectedObjectId(null);
           setSelectedShapeId(null);
+          setSelectedTextId(null);
           setSelectedStrokeIndex(strokeIndex);
           clearMultiSelection();
           return;
@@ -1832,6 +2158,7 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
         setSelectedObjectId(null);
         setSelectedShapeId(null);
         setSelectedStrokeIndex(null);
+        setSelectedTextId(null);
         clearMultiSelection();
         setMarquee({ x1: point.x, y1: point.y, x2: point.x, y2: point.y });
         dragRef.current = { mode: 'marquee', pointerId: e.pointerId, startClientX: e.clientX, startClientY: e.clientY, startOffsetX: view.boardOffsetX, startOffsetY: view.boardOffsetY };
@@ -1945,6 +2272,16 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
           const next: BoardInstrument = { ...start, rotation: newRot };
           setInstruments(prev => prev.map(i => i.id === next.id ? next : i));
         }
+        return;
+      }
+      if (drag.mode === 'text-move' && drag.textId && drag.textStartX !== undefined && drag.textStartY !== undefined) {
+        const dx = (e.clientX - drag.startClientX) / view.boardScale;
+        const dy = (e.clientY - drag.startClientY) / view.boardScale;
+        const startX = drag.textStartX;
+        const startY = drag.textStartY;
+        // Local-only update during drag — emit on pointer up to avoid
+        // flooding the wire with intermediate positions.
+        setTexts(prev => prev.map(t => t.id === drag.textId ? { ...t, x: startX + dx, y: startY + dy } : t));
         return;
       }
       if (drag.mode === 'draw') setLiveStroke([...currentStrokeRef.current, screenToBoard(e.clientX, e.clientY)]);
@@ -2101,6 +2438,21 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
           socket.emit('whiteboard_update_instrument', { roomId, instrument: moved });
         }
       }
+      if (drag.mode === 'text-move' && drag.textId) {
+        // Broadcast the final position. Capture before/after for undo.
+        const moved = textsRef.current.find(t => t.id === drag.textId);
+        if (moved && socket && isTeacher) {
+          socket.emit('whiteboard_update_text', { roomId, text: moved });
+        }
+        if (moved && drag.textStartX !== undefined && drag.textStartY !== undefined) {
+          const before: BoardText = { ...moved, x: drag.textStartX, y: drag.textStartY };
+          const after: BoardText = { ...moved };
+          recordAction({
+            undo: () => updateText(before),
+            redo: () => updateText(after),
+          });
+        }
+      }
       setLiveStroke([]);
       erasedDuringDragRef.current = new Set();
       dragRef.current = null;
@@ -2206,9 +2558,11 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
       setStrokes([]);
       setShapes([]);
       setInstruments([]);
+      setTexts([]);
       setSelectedObjectId(null);
       setSelectedStrokeIndex(null);
       setSelectedShapeId(null);
+      setSelectedTextId(null);
       imageCacheRef.current.clear();
       if (socket && isTeacher) socket.emit('whiteboard_clear', { roomId });
     };
@@ -2244,6 +2598,9 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
       { id: 'rect', label: 'Rectangle', icon: <rect x="4" y="6" width="16" height="12" /> },
       { id: 'circle', label: 'Circle', icon: <circle cx="12" cy="12" r="8" /> },
       { id: 'arrow', label: 'Arrow', icon: <><path d="M5 19L19 5" /><path d="M12 5h7v7" /></> },
+      // Text — typed labels for math (eg "x = 45°", "let n be even"). Click
+      // anywhere on the board, type, press Enter to commit.
+      { id: 'text', label: 'Text', icon: <><path d="M4 7V5h16v2" /><path d="M9 19h6" /><path d="M12 5v14" /></> },
       // Compass — circle drawn from the centre, leaves a small dot at the centre point.
       { id: 'compass', label: 'Compass', icon: <><circle cx="12" cy="12" r="8" /><circle cx="12" cy="12" r="1.5" fill="currentColor" /><path d="M12 4v3" /></> },
       // Ruler — toggle: spawn / remove the ruler instrument on the board.
@@ -2266,9 +2623,12 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
       tool === 'ruler' ? 'Click to drop a ruler on the board' :
       tool === 'protractor' ? 'Click to drop a protractor on the board' :
       tool === 'highlighter' ? 'Highlighter — fades away after a few seconds' :
+      tool === 'text' ? 'Text — click on the board, type, Enter to commit' :
       'Draw ink';
 
-    const showColorAndWidth = tool === 'pen' || (isShapeTool(tool) && tool !== 'ruler' && tool !== 'protractor');
+    // Text uses the color picker (so the teacher can pick a colour for the
+    // label), but not the width slider (font size is fixed at default).
+    const showColorAndWidth = tool === 'pen' || tool === 'text' || (isShapeTool(tool) && tool !== 'ruler' && tool !== 'protractor');
 
     return (
       <div className="whiteboard-shell">
@@ -2356,6 +2716,7 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
           {canEdit && selectedObject && <button onClick={removeSelectedObject} className="whiteboard-action danger">Delete image</button>}
           {canEdit && selectedShape && <button onClick={removeSelectedShape} className="whiteboard-action danger">Delete shape</button>}
           {canEdit && selectedStrokeIndex !== null && <button onClick={() => deleteStrokeIndices([selectedStrokeIndex])} className="whiteboard-action danger">Delete stroke</button>}
+          {canEdit && selectedTextId && <button onClick={removeSelectedText} className="whiteboard-action danger">Delete text</button>}
           {canEdit && (multiObjectIds.length + multiShapeIds.length + multiStrokeIndices.length) > 0 && (
             <button onClick={removeMultiSelection} className="whiteboard-action danger">
               Delete {multiObjectIds.length + multiShapeIds.length + multiStrokeIndices.length} items
@@ -2388,6 +2749,7 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
                 tool === 'eraser' ? ERASER_CURSOR :
                 tool === 'pen' ? PEN_CURSOR :
                 tool === 'highlighter' ? PEN_CURSOR :
+                tool === 'text' ? 'text' :
                 'crosshair',
             }}
             onPointerDown={handlePointerDown}
@@ -2395,13 +2757,93 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
             onPointerUp={handlePointerUp}
             onPointerCancel={handlePointerUp}
             onWheel={handleWheel}
+            onDoubleClick={(e) => {
+              // Double-click in the select tool re-opens the editor for the
+              // text under the cursor — Excalidraw / FigJam UX.
+              if (!canEdit || tool !== 'select') return;
+              const rect = canvasRef.current?.getBoundingClientRect();
+              if (!rect) return;
+              const point = screenToBoard(e.clientX, e.clientY);
+              const hit = findTextAt(point);
+              if (hit) {
+                setSelectedTextId(hit.id);
+                openTextEditor(hit.x, hit.y, hit);
+              }
+            }}
           />
-          {objects.length === 0 && strokes.length === 0 && shapes.length === 0 && (
+          {objects.length === 0 && strokes.length === 0 && shapes.length === 0 && texts.length === 0 && (
             <div className="whiteboard-empty">
               <h3>Whiteboard</h3>
               <p>{canEdit ? 'Use the tools on the left to draw, add shapes, erase, upload images, and arrange the board.' : 'Waiting for the teacher to use the whiteboard.'}</p>
             </div>
           )}
+
+          {/* Inline text editor overlay. A real textarea positioned at the
+              text's board-space anchor, scaled to match the current zoom.
+              Commits on Enter (without Shift) or blur; cancels on Escape. */}
+          {textEditor && containerRef.current && (() => {
+            const rect = containerRef.current.getBoundingClientRect();
+            // Convert board-space anchor to wrapper-local CSS pixels.
+            // (The canvas is absolute-inset, so wrapper-local === canvas-local.)
+            const screenX = textEditor.boardX * view.boardScale + view.boardOffsetX;
+            const screenY = textEditor.boardY * view.boardScale + view.boardOffsetY;
+            const cssFontSize = Math.max(8, textEditor.fontSize * view.boardScale);
+            return (
+              <textarea
+                ref={textEditorRef}
+                autoFocus
+                value={textEditor.value}
+                onChange={(e) => setTextEditor(ed => ed ? { ...ed, value: e.target.value } : ed)}
+                onBlur={commitTextEditor}
+                onKeyDown={(e) => {
+                  if (e.key === 'Escape') {
+                    e.preventDefault();
+                    cancelTextEditor();
+                  } else if (e.key === 'Enter' && !e.shiftKey) {
+                    // Enter commits; Shift+Enter inserts a newline.
+                    e.preventDefault();
+                    commitTextEditor();
+                  }
+                  // Stop the global key handler from also acting on these keys
+                  // while the editor is open (Backspace would delete selected
+                  // shapes otherwise).
+                  e.stopPropagation();
+                }}
+                style={{
+                  position: 'absolute',
+                  left: `${screenX}px`,
+                  top: `${screenY}px`,
+                  // Important: padding/border 0 so what the user types lines
+                  // up exactly with where the committed text will render.
+                  margin: 0,
+                  padding: 0,
+                  border: 'none',
+                  outline: '2px solid #2563eb',
+                  outlineOffset: '2px',
+                  background: 'rgba(255,255,255,0.95)',
+                  color: textEditor.color,
+                  fontFamily: TEXT_FONT_FAMILY,
+                  fontSize: `${cssFontSize}px`,
+                  lineHeight: TEXT_LINE_HEIGHT_RATIO,
+                  // Width grows with content; height auto-fits via rows
+                  minWidth: `${Math.max(80, cssFontSize * 6)}px`,
+                  width: 'auto',
+                  resize: 'none',
+                  overflow: 'hidden',
+                  whiteSpace: 'pre',
+                  zIndex: 40,
+                  caretColor: textEditor.color,
+                  boxShadow: '0 4px 14px rgba(15,23,42,0.18)',
+                  borderRadius: 4,
+                }}
+                rows={Math.max(1, textEditor.value.split('\n').length)}
+                // Auto-grow horizontally too (best effort — relies on
+                // the textarea's intrinsic width with whiteSpace: 'pre').
+                cols={Math.max(8, ...textEditor.value.split('\n').map(l => l.length + 1))}
+              />
+            );
+          })()}
+
           <div className="whiteboard-hint">
             Space + drag pans. Wheel zooms. Select image or stroke, then press Delete.
           </div>
