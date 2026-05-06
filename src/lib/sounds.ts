@@ -3,9 +3,30 @@
  * No external dependencies — self-contained audio synthesis.
  */
 
+// AUTONOMOUS: [ORDER-2 ESSENTIAL] - Persist mute preference to localStorage.
+// Without this, every reload re-enables sounds even if the user just muted
+// them in the last session — a common annoyance when teaching from a quiet
+// room. Defensive read so server-side / SSR / sandboxed contexts don't
+// crash on the missing window object.
+const MUTE_KEY = 'mathlive:soundMuted';
+function readMutedPref(): boolean {
+  try {
+    return typeof window !== 'undefined' && window.localStorage.getItem(MUTE_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+function writeMutedPref(value: boolean): void {
+  try {
+    if (typeof window !== 'undefined') window.localStorage.setItem(MUTE_KEY, value ? '1' : '0');
+  } catch {
+    // private mode / quota — silently no-op
+  }
+}
+
 let audioCtx: AudioContext | null = null;
 let masterVolume = 0.3;
-let muted = false;
+let muted = readMutedPref();
 
 function getContext(): AudioContext {
   if (!audioCtx) {
@@ -107,6 +128,7 @@ export const sounds = {
 
   toggleMute(): boolean {
     muted = !muted;
+    writeMutedPref(muted);
     return muted;
   },
 

@@ -228,9 +228,24 @@ async function startServer() {
     };
   }
 
-  function saveRooms() {
+  // AUTONOMOUS: [ORDER-1 CRITICAL] - saveRooms used to call fs.writeFileSync
+  // for every room. With 50 large rooms during a SIGTERM redeploy that
+  // serialized 50 blocking writes (~100MB+) on the event loop, freezing
+  // every other socket handler — including the disconnect handlers that
+  // also call saveRooms. Now writes happen in parallel via fs.promises and
+  // never block the loop.
+  // Also: a single failing write no longer aborts the whole batch — each
+  // file is independently caught and logged.
+  // Concurrency guard: if a save is already in flight, skip the new one
+  // instead of stacking saves. This avoids fs contention during a burst of
+  // disconnects on shutdown.
+  let saveInFlight = false;
+  async function saveRooms() {
+    if (saveInFlight) return;
+    saveInFlight = true;
     try {
-      let saved = 0;
+      const writes: Promise<void>[] = [];
+      let attempted = 0;
       for (const [roomId, room] of rooms.entries()) {
         // Skip rooms with literally nothing in them. Whiteboard-only rooms
         // (no files, no lastRunHtml, but with strokes / objects / shapes)
@@ -245,13 +260,19 @@ async function startServer() {
           (room.whiteboard?.strokes?.length ?? 0) > 0 ||
           (room.whiteboard?.shapes?.length ?? 0) > 0;
         if (!hasContent) continue;
+        attempted++;
         const data = JSON.stringify(serializeRoom(roomId, room));
-        fs.writeFileSync(path.join(PERSIST_DIR, `${roomId}.json`), data, 'utf-8');
-        saved++;
+        writes.push(
+          fs.promises.writeFile(path.join(PERSIST_DIR, `${roomId}.json`), data, 'utf-8')
+            .catch(err => {
+              console.error(`Failed to persist room ${roomId}:`, err);
+            })
+        );
       }
-      if (saved > 0) console.log(`💾 Persisted ${saved} rooms`);
-    } catch (err) {
-      console.error('Failed to persist rooms:', err);
+      await Promise.all(writes);
+      if (attempted > 0) console.log(`💾 Persisted ${attempted} rooms (parallel, non-blocking)`);
+    } finally {
+      saveInFlight = false;
     }
   }
 
@@ -309,7 +330,22 @@ async function startServer() {
           room.zoomLevel = raw.zoomLevel || 1;
           rooms.set(raw.roomId, room);
           restored++;
-        } catch { fs.unlinkSync(filePath); cleaned++; }
+        } catch (err) {
+          // AUTONOMOUS: [ORDER-1 CRITICAL] - was silently fs.unlinkSync.
+          // A corrupt parse used to delete the file with no log, no
+          // recovery path. Now: log the error AND move to a .corrupt
+          // suffix so a human can inspect / recover. Bad bytes shouldn't
+          // erase a teacher's lesson.
+          console.error(`Failed to restore ${file}:`, err);
+          try {
+            const corruptPath = filePath + '.corrupt';
+            fs.renameSync(filePath, corruptPath);
+            console.error(`  → moved to ${corruptPath} for recovery`);
+          } catch (renameErr) {
+            console.error('  → also failed to quarantine:', renameErr);
+          }
+          cleaned++;
+        }
       }
       if (restored > 0) console.log(`📂 Restored ${restored} rooms from disk`);
       if (cleaned > 0) console.log(`🧹 Cleaned ${cleaned} stale room files`);
@@ -324,9 +360,18 @@ async function startServer() {
   // Periodic save
   setInterval(saveRooms, PERSIST_INTERVAL);
 
-  // Save on process exit
-  process.on('SIGINT', () => { saveRooms(); process.exit(0); });
-  process.on('SIGTERM', () => { saveRooms(); process.exit(0); });
+  // Save on process exit. Now that saveRooms() is async, the previous
+  // fire-and-forget pattern lost the in-flight writes when process.exit()
+  // ran before they finished. Await — but with a deadline so we don't hang
+  // forever if a write is wedged.
+  // AUTONOMOUS: [ORDER-1 CRITICAL] - prevents data loss on redeploy.
+  const shutdown = (signal: string) => {
+    console.log(`Received ${signal}, persisting rooms before exit…`);
+    const deadline = new Promise<void>(resolve => setTimeout(resolve, 4000));
+    Promise.race([saveRooms(), deadline]).finally(() => process.exit(0));
+  };
+  process.on('SIGINT', () => shutdown('SIGINT'));
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
 
   function getRoomUserList(room: RoomData) {
     const list: Array<{ id: string; name: string; role: string }> = [];
@@ -956,9 +1001,22 @@ async function startServer() {
       io.to(roomId).emit('whiteboard_image', { imageUrl });
     });
 
+    // AUTONOMOUS: [ORDER-1 CRITICAL] - Server-side image size cap. The
+    // client downscales before send, but a malicious or modified client
+    // could push an arbitrary base64 blob and we'd persist + broadcast it.
+    // Cap each image's serialized size at 6MB (some headroom over the
+    // client's 4MB byte cap because base64 inflates by ~33%).
+    const MAX_IMAGE_OBJECT_BYTES = 6 * 1024 * 1024;
     socket.on('whiteboard_add_image', ({ roomId, object }: any) => {
       const room = rooms.get(roomId);
       if (!requireTeacher(room, socket.id)) return;
+      if (!object || typeof object.id !== 'string' || typeof object.src !== 'string') return;
+      // Quick byte cap on the data URL. JSON.stringify cost would be
+      // dominated by .src for any reasonable image object.
+      if (object.src.length > MAX_IMAGE_OBJECT_BYTES) {
+        console.warn(`Rejected oversize whiteboard image from ${socket.id}: ${object.src.length} bytes`);
+        return;
+      }
       room.whiteboard.objects.push(object);
       io.to(roomId).emit('whiteboard_add_image', { object });
     });
@@ -1479,6 +1537,21 @@ async function startServer() {
 
     socket.on('disconnect', () => {
       console.log('User disconnected:', socket.id);
+    });
+  });
+
+  // AUTONOMOUS: [ORDER-4 FUTURE-PROOFING] - /healthz for monitoring.
+  // Render's free tier sleeps after 15min idle; a periodic ping at /healthz
+  // is the standard wake-up trick. Also gives us a single endpoint to
+  // verify the server is alive (uptime monitoring, load balancer health
+  // checks, manual debugging "is it up").
+  // Returns 200 with a small JSON payload — cheap enough to hammer.
+  app.get('/healthz', (_req, res) => {
+    res.status(200).json({
+      ok: true,
+      uptime: process.uptime(),
+      rooms: rooms.size,
+      ts: Date.now(),
     });
   });
 

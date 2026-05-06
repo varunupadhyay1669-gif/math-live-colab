@@ -2115,19 +2115,71 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
       }
     };
 
+    // AUTONOMOUS: [ORDER-1 CRITICAL] - Cap image size before it enters the
+    // board state. Without this, dropping a 50MB phone photo would:
+    //   (a) bloat room.whiteboard.objects, which gets JSON.stringified on
+    //       every save tick — multi-MB writes to disk every 5 minutes,
+    //   (b) get base64'd and broadcast over the socket to every peer,
+    //       blowing past Socket.IO's 5MB default frame size and silently
+    //       dropping the message (image never appears for students),
+    //   (c) accumulate in localStorage if we ever add client persistence.
+    // 4MB is generous for a math teaching context; bigger images get
+    // downscaled to fit a 2048px max edge before insertion.
+    const IMAGE_BYTE_CAP = 4 * 1024 * 1024;
+    const IMAGE_MAX_EDGE = 2048;
+
+    const ingestImageBlob = useCallback(async (blob: Blob): Promise<void> => {
+      // Decode → measure → optionally downscale → addImageObject
+      // Reject anything that's not actually an image type.
+      if (!blob.type.startsWith('image/')) return;
+
+      const dataUrl = await new Promise<string>((resolve, reject) => {
+        const r = new FileReader();
+        r.onload = () => resolve(String(r.result || ''));
+        r.onerror = () => reject(r.error);
+        r.readAsDataURL(blob);
+      }).catch(() => '');
+      if (!dataUrl) return;
+
+      const img = await new Promise<HTMLImageElement | null>(resolve => {
+        const i = new Image();
+        i.onload = () => resolve(i);
+        i.onerror = () => resolve(null);
+        i.src = dataUrl;
+      });
+      if (!img) return;
+
+      // Fast path: small image, no rescaling needed.
+      const tooLarge = blob.size > IMAGE_BYTE_CAP || img.naturalWidth > IMAGE_MAX_EDGE || img.naturalHeight > IMAGE_MAX_EDGE;
+      if (!tooLarge) {
+        addImageObject(dataUrl, img.naturalWidth, img.naturalHeight);
+        return;
+      }
+
+      // Downscale via offscreen canvas. Preserves aspect ratio; clamps
+      // longest edge to IMAGE_MAX_EDGE. Re-encodes as JPEG quality 0.85
+      // for big photos (PNG would still be huge for photographic content).
+      const ratio = Math.min(IMAGE_MAX_EDGE / img.naturalWidth, IMAGE_MAX_EDGE / img.naturalHeight, 1);
+      const w = Math.round(img.naturalWidth * ratio);
+      const h = Math.round(img.naturalHeight * ratio);
+      const canvas = document.createElement('canvas');
+      canvas.width = w;
+      canvas.height = h;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return;
+      ctx.drawImage(img, 0, 0, w, h);
+      // PNGs without transparency become huge; force JPEG for photographic
+      // content over the threshold. Keep PNG for transparent images.
+      const hasAlpha = blob.type === 'image/png' || blob.type === 'image/webp';
+      const outputUrl = canvas.toDataURL(hasAlpha ? 'image/png' : 'image/jpeg', 0.85);
+      addImageObject(outputUrl, w, h);
+    }, [addImageObject]);
+
     const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
       const file = e.target.files?.[0];
       e.target.value = '';
       if (!file) return;
-      const reader = new FileReader();
-      reader.onload = event => {
-        const dataUrl = event.target?.result as string;
-        if (!dataUrl) return;
-        const img = new Image();
-        img.onload = () => addImageObject(dataUrl, img.naturalWidth, img.naturalHeight);
-        img.src = dataUrl;
-      };
-      reader.readAsDataURL(file);
+      void ingestImageBlob(file);
     };
 
     useEffect(() => {
@@ -2137,19 +2189,11 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
         const blob = item?.getAsFile();
         if (!blob) return;
         e.preventDefault();
-        const reader = new FileReader();
-        reader.onload = event => {
-          const dataUrl = event.target?.result as string;
-          if (!dataUrl) return;
-          const img = new Image();
-          img.onload = () => addImageObject(dataUrl, img.naturalWidth, img.naturalHeight);
-          img.src = dataUrl;
-        };
-        reader.readAsDataURL(blob);
+        void ingestImageBlob(blob);
       };
       window.addEventListener('paste', handlePaste);
       return () => window.removeEventListener('paste', handlePaste);
-    }, [isActive, isTeacher, addImageObject]);
+    }, [isActive, isTeacher, ingestImageBlob]);
 
     const clearInk = () => {
       setStrokes([]);
