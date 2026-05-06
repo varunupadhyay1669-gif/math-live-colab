@@ -42,6 +42,12 @@ interface BoardShape {
   // point is visible (real compass behaviour). Plain circle tool leaves it
   // unset / false.
   centerMark?: boolean;
+  // AUTONOMOUS: layering — wall-clock ms at creation. Used to sort all
+  // content (images, strokes, shapes, texts) chronologically so a newer
+  // shape paints on top of older strokes/images, like a stack of paper.
+  // Missing on old persisted data — falls back to 0 (bottom layer) and
+  // still renders correctly.
+  createdAt?: number;
 }
 
 // Background grid style. 'blank' = no grid (plain white). 'grid' = light
@@ -123,6 +129,11 @@ interface BoardText {
   fontSize: number;
   color: string;
   updatedAt?: number;
+  // Wall-clock ms at creation. Stable across edits — only the original
+  // create time controls z-order. updatedAt may change on edit; createdAt
+  // does not. So editing an old label doesn't suddenly bring it to the
+  // front of everything painted on top of it.
+  createdAt?: number;
 }
 
 interface BoardView {
@@ -207,6 +218,18 @@ const MAX_SCALE = 6;
 
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
 const newId = (prefix: string) => `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+// Migration helper: existing rooms persisted before unified z-ordering
+// have strokes/shapes/texts WITHOUT a `createdAt` field. Our IDs embed
+// the original creation Date.now() in the format `${prefix}-${ts}-${rand}`
+// so we can recover a sensible chronological order from the id alone.
+// Returns 0 if the id doesn't match the expected pattern (rare but
+// possible — items rendered at the very bottom in that case).
+function deriveTimestampFromId(id: string | undefined): number {
+  if (!id) return 0;
+  const match = id.match(/^[a-zA-Z]+-(\d+)-/);
+  return match ? parseInt(match[1], 10) || 0 : 0;
+}
 
 function distanceToSegment(point: DrawPoint, a: DrawPoint, b: DrawPoint) {
   const dx = b.x - a.x;
@@ -757,7 +780,9 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
         return;
       }
       if (ed.id) {
-        // Editing existing — update
+        // Editing existing — update. Preserve the original createdAt so the
+        // label's z-order doesn't jump to the top just because the user
+        // edited the contents.
         const existing = textsRef.current.find(t => t.id === ed.id);
         const before = existing ? { ...existing } : null;
         const after: BoardText = {
@@ -767,6 +792,7 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
           text: trimmed,
           fontSize: ed.fontSize,
           color: ed.color,
+          createdAt: existing?.createdAt ?? Date.now(),
           updatedAt: Date.now(),
         };
         updateText(after);
@@ -777,6 +803,7 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
           });
         }
       } else {
+        const now = Date.now();
         const t: BoardText = {
           id: newId('text'),
           x: ed.boardX,
@@ -784,7 +811,8 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
           text: trimmed,
           fontSize: ed.fontSize,
           color: ed.color,
-          updatedAt: Date.now(),
+          createdAt: now,
+          updatedAt: now,
         };
         addText(t);
         recordAction({
@@ -1395,68 +1423,24 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
         }
       }
 
-      [...objects].sort((a, b) => a.zIndex - b.zIndex).forEach(object => {
+      // ── Per-kind draw functions (defined first, executed in unified
+      //    chronological order below). This is the key fix for the layering
+      //    bug: previously images/shapes/texts/strokes were rendered in
+      //    fixed kind-order (always strokes ON TOP of images), so a question
+      //    image pasted AFTER student strokes left the strokes visible
+      //    bleeding through. Now everything sorts by createdAt/zIndex and
+      //    paints chronologically — a new image truly covers older content
+      //    underneath, like stacking sheets of paper.
+      const drawImageObject = (object: BoardImageObject) => {
         const img = imageCacheRef.current.get(object.id);
-        if (img?.complete) {
-          ctx.save();
-          ctx.translate(object.x + (object.width * object.scale) / 2, object.y + (object.height * object.scale) / 2);
-          ctx.rotate((object.rotation * Math.PI) / 180);
-          ctx.drawImage(img, -(object.width * object.scale) / 2, -(object.height * object.scale) / 2, object.width * object.scale, object.height * object.scale);
-          ctx.restore();
-        }
-        if (object.id === selectedObjectId) {
-          const w = object.width * object.scale;
-          const h = object.height * object.scale;
-          const cx = object.x + w / 2;
-          const cy = object.y + h / 2;
-          // Dashed selection rectangle — rotated with the image.
-          ctx.save();
-          ctx.translate(cx, cy);
-          ctx.rotate((object.rotation * Math.PI) / 180);
-          ctx.strokeStyle = '#2563eb';
-          ctx.lineWidth = 2 / view.boardScale;
-          ctx.setLineDash([10 / view.boardScale, 7 / view.boardScale]);
-          ctx.strokeRect(-w / 2, -h / 2, w, h);
-          ctx.restore();
+        if (!img?.complete) return;
+        ctx.save();
+        ctx.translate(object.x + (object.width * object.scale) / 2, object.y + (object.height * object.scale) / 2);
+        ctx.rotate((object.rotation * Math.PI) / 180);
+        ctx.drawImage(img, -(object.width * object.scale) / 2, -(object.height * object.scale) / 2, object.width * object.scale, object.height * object.scale);
+        ctx.restore();
+      };
 
-          // Resize + rotate handles. Positions are already rotated into world
-          // space by getObjectHandlePositions; the corner squares themselves
-          // are also drawn rotated so they look square against the image.
-          ctx.save();
-          ctx.setLineDash([]);
-          const handles = getObjectHandlePositions(object);
-          const HANDLE = 11 / view.boardScale;
-          const HALF = HANDLE / 2;
-          ctx.fillStyle = '#ffffff';
-          ctx.strokeStyle = '#2563eb';
-          ctx.lineWidth = 1.5 / view.boardScale;
-          // Connector line from the (rotated) top-edge midpoint to the rotation handle
-          const topMidLocal = { x: object.x + w / 2, y: object.y };
-          const topMid = rotatePoint(topMidLocal, { x: cx, y: cy }, object.rotation);
-          ctx.beginPath();
-          ctx.moveTo(topMid.x, topMid.y);
-          ctx.lineTo(handles.rotate.x, handles.rotate.y);
-          ctx.stroke();
-          // Corner squares — rotated with the image so they don't look skewed
-          (['tl', 'tr', 'bl', 'br'] as const).forEach(id => {
-            const p = handles[id];
-            ctx.save();
-            ctx.translate(p.x, p.y);
-            ctx.rotate((object.rotation * Math.PI) / 180);
-            ctx.fillRect(-HALF, -HALF, HANDLE, HANDLE);
-            ctx.strokeRect(-HALF, -HALF, HANDLE, HANDLE);
-            ctx.restore();
-          });
-          // Rotation handle (circle — rotation-invariant, no extra transform)
-          ctx.beginPath();
-          ctx.arc(handles.rotate.x, handles.rotate.y, HALF, 0, Math.PI * 2);
-          ctx.fill();
-          ctx.stroke();
-          ctx.restore();
-        }
-      });
-
-      // ── Shapes (between images and ink) ──
       const drawShape = (shape: BoardShape) => {
         ctx.save();
         ctx.strokeStyle = shape.color;
@@ -1504,22 +1488,11 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
         }
         ctx.restore();
       };
-      shapes.forEach(drawShape);
-      if (draftShape) drawShape(draftShape);
-      if (selectedShape) {
-        const b = shapeBounds(selectedShape);
-        ctx.save();
-        ctx.strokeStyle = '#2563eb';
-        ctx.lineWidth = 2 / view.boardScale;
-        ctx.setLineDash([8 / view.boardScale, 6 / view.boardScale]);
-        ctx.strokeRect(b.x, b.y, b.w, b.h);
-        ctx.restore();
-      }
+      // (drawShape executed below in the unified content pass.)
 
       // ── Text labels ──
-      // Drawn after shapes so labels read on top of them. Multi-line
-      // supported via \n. The currently-being-edited text (if any) is
-      // rendered transparently so it doesn't overlap the textarea overlay.
+      // The currently-being-edited text (if any) is rendered transparently
+      // so it doesn't overlap the textarea overlay.
       const drawText = (t: BoardText) => {
         if (textEditor && textEditor.id === t.id) return; // hidden during edit
         ctx.save();
@@ -1534,21 +1507,7 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
         }
         ctx.restore();
       };
-      texts.forEach(drawText);
-      // Selection chrome for text — same dashed rect treatment as shapes.
-      if (selectedTextId) {
-        const sel = texts.find(t => t.id === selectedTextId);
-        if (sel) {
-          const b = measureText(sel);
-          const pad = 4 / view.boardScale;
-          ctx.save();
-          ctx.strokeStyle = '#2563eb';
-          ctx.lineWidth = 2 / view.boardScale;
-          ctx.setLineDash([8 / view.boardScale, 6 / view.boardScale]);
-          ctx.strokeRect(b.x - pad, b.y - pad, b.w + pad * 2, b.h + pad * 2);
-          ctx.restore();
-        }
-      }
+      // (drawText executed below in the unified content pass.)
 
       const drawStroke = (stroke: DrawStroke) => {
         if (stroke.points.length === 0) return;
@@ -1586,8 +1545,54 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
         ctx.stroke();
         ctx.restore();
       };
-      strokes.forEach(drawStroke);
-      // Live preview while drawing (pen / pixel-eraser / highlighter)
+      // ── UNIFIED CONTENT RENDER (chronological z-order) ──
+      // Build a sorted list of every content item by its creation timestamp.
+      // Older items render first (underneath); newer items render on top.
+      // This is what makes "stacking sheets of paper" work — a question
+      // image pasted after student strokes COVERS those strokes; new pen
+      // ink on top of an image stays visible above it.
+      //
+      // Migration: items missing createdAt sort to z=0 — they render at the
+      // very bottom, preserving the relative order they had before this
+      // refactor (which was: images first, then everything else).
+      type RenderItem =
+        | { kind: 'image'; value: BoardImageObject; z: number }
+        | { kind: 'stroke'; value: DrawStroke; z: number }
+        | { kind: 'shape'; value: BoardShape; z: number }
+        | { kind: 'text'; value: BoardText; z: number };
+      const items: RenderItem[] = [];
+      for (const o of objects) {
+        // Image z: prefer zIndex, fall back to id-embedded timestamp.
+        items.push({ kind: 'image', value: o, z: o.zIndex || deriveTimestampFromId(o.id) });
+      }
+      for (const s of strokes) {
+        // Stroke z: createdAt OR id-embedded timestamp. Old persisted
+        // strokes lack createdAt; deriveTimestampFromId recovers their
+        // original creation order so they don't all land at the bottom.
+        items.push({ kind: 'stroke', value: s, z: s.createdAt || deriveTimestampFromId(s.id) });
+      }
+      for (const s of shapes) {
+        items.push({ kind: 'shape', value: s, z: s.createdAt || deriveTimestampFromId(s.id) });
+      }
+      for (const t of texts) {
+        items.push({ kind: 'text', value: t, z: t.createdAt || deriveTimestampFromId(t.id) });
+      }
+      // Stable-ish sort: ties (same z) keep input order. Important because
+      // a freshly-uploaded image and a stroke drawn in the same ms tick
+      // shouldn't randomly reorder on every redraw.
+      items.sort((a, b) => a.z - b.z);
+      for (const item of items) {
+        if (item.kind === 'image') drawImageObject(item.value);
+        else if (item.kind === 'stroke') drawStroke(item.value);
+        else if (item.kind === 'shape') drawShape(item.value);
+        else if (item.kind === 'text') drawText(item.value);
+      }
+
+      // ── In-flight overlays (always above all content, below selection) ──
+      // The draft shape (during click-and-drag shape creation) and the live
+      // pen/highlighter/eraser stroke are UI overlays of the current
+      // gesture. They sit visually on top of every committed item.
+      if (draftShape) drawShape(draftShape);
       if (currentStroke.length > 0) {
         if (tool === 'pen') {
           drawStroke({ id: 'current', points: currentStroke, color, width, tool: 'pen' });
@@ -1602,6 +1607,79 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
             tool: 'highlighter',
             createdAt: Date.now(),
           });
+        }
+      }
+
+      // ── Selection chrome (always above content + draft) ──
+      // Image selection: dashed rect + corner/rotation handles. Drawn AFTER
+      // all content so the handles never get hidden underneath a newer
+      // image that happens to overlap the selected one.
+      if (selectedObjectId) {
+        const object = objects.find(o => o.id === selectedObjectId);
+        if (object) {
+          const w = object.width * object.scale;
+          const h = object.height * object.scale;
+          const cx = object.x + w / 2;
+          const cy = object.y + h / 2;
+          ctx.save();
+          ctx.translate(cx, cy);
+          ctx.rotate((object.rotation * Math.PI) / 180);
+          ctx.strokeStyle = '#2563eb';
+          ctx.lineWidth = 2 / view.boardScale;
+          ctx.setLineDash([10 / view.boardScale, 7 / view.boardScale]);
+          ctx.strokeRect(-w / 2, -h / 2, w, h);
+          ctx.restore();
+
+          ctx.save();
+          ctx.setLineDash([]);
+          const handles = getObjectHandlePositions(object);
+          const HANDLE = 11 / view.boardScale;
+          const HALF = HANDLE / 2;
+          ctx.fillStyle = '#ffffff';
+          ctx.strokeStyle = '#2563eb';
+          ctx.lineWidth = 1.5 / view.boardScale;
+          const topMidLocal = { x: object.x + w / 2, y: object.y };
+          const topMid = rotatePoint(topMidLocal, { x: cx, y: cy }, object.rotation);
+          ctx.beginPath();
+          ctx.moveTo(topMid.x, topMid.y);
+          ctx.lineTo(handles.rotate.x, handles.rotate.y);
+          ctx.stroke();
+          (['tl', 'tr', 'bl', 'br'] as const).forEach(id => {
+            const p = handles[id];
+            ctx.save();
+            ctx.translate(p.x, p.y);
+            ctx.rotate((object.rotation * Math.PI) / 180);
+            ctx.fillRect(-HALF, -HALF, HANDLE, HANDLE);
+            ctx.strokeRect(-HALF, -HALF, HANDLE, HANDLE);
+            ctx.restore();
+          });
+          ctx.beginPath();
+          ctx.arc(handles.rotate.x, handles.rotate.y, HALF, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.stroke();
+          ctx.restore();
+        }
+      }
+      if (selectedShape) {
+        const b = shapeBounds(selectedShape);
+        ctx.save();
+        ctx.strokeStyle = '#2563eb';
+        ctx.lineWidth = 2 / view.boardScale;
+        ctx.setLineDash([8 / view.boardScale, 6 / view.boardScale]);
+        ctx.strokeRect(b.x, b.y, b.w, b.h);
+        ctx.restore();
+      }
+      if (selectedTextId) {
+        const sel = texts.find(t => t.id === selectedTextId);
+        if (sel) {
+          const b = measureText(sel);
+          const pad = 4 / view.boardScale;
+          ctx.save();
+          ctx.strokeStyle = '#2563eb';
+          ctx.lineWidth = 2 / view.boardScale;
+          ctx.setLineDash([8 / view.boardScale, 6 / view.boardScale]);
+          ctx.strokeRect(b.x - pad, b.y - pad, b.w + pad * 2, b.h + pad * 2);
+          ctx.restore();
         }
       }
       if (selectedStrokeIndex !== null && strokes[selectedStrokeIndex]) {
@@ -2228,6 +2306,7 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
           kind,
           x1: point.x, y1: point.y, x2: point.x, y2: point.y,
           color, width,
+          createdAt: Date.now(),
           // Compass marks the construction-point centre on the resulting circle.
           ...(tool === 'compass' ? { centerMark: true } : {}),
         };
@@ -2349,13 +2428,16 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
           (tool === 'eraser' && eraserMode === 'pixel') ? 'eraser-pixel' :
           tool === 'highlighter' ? 'highlighter' :
           'pen';
+        // createdAt is set on EVERY stroke now (not just highlighter).
+        // It's the z-order key — without it, two strokes drawn before and
+        // after an image both render after the image in the unified pass.
         const stroke: DrawStroke = {
           id: newId('stroke'),
           points: currentStrokeRef.current,
           color: strokeTool === 'highlighter' ? '#FACC15' /* warm yellow highlighter */ : color,
           width: strokeTool === 'highlighter' ? Math.max(width * 3, 14) /* chunky highlighter */ : width,
           tool: strokeTool,
-          ...(strokeTool === 'highlighter' ? { createdAt: Date.now() } : {}),
+          createdAt: Date.now(),
         };
         setStrokes(prev => [...prev, stroke]);
         if (socket) socket.emit('whiteboard_draw', { roomId, stroke });
