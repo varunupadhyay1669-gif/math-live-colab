@@ -48,6 +48,7 @@ interface RoomData {
     view: any | null;
     gridMode?: 'blank' | 'grid' | 'graph';
     instruments?: any[];
+    texts?: any[];
   };
   // Is the teacher currently showing the whiteboard (vs an HTML simulation)?
   // Persisted server-side so a late-joining student can land on the right
@@ -83,6 +84,7 @@ interface SessionStatePayload {
     view: any | null;
     gridMode?: 'blank' | 'grid' | 'graph';
     instruments?: any[];
+    texts?: any[];
   };
   whiteboardMode: boolean;
   lastTeacherScroll: any | null;
@@ -188,7 +190,7 @@ async function startServer() {
       tempContent: null,
       liveSnapshotHtml: null,
       revision: 0,
-      whiteboard: { objects: [], strokes: [], shapes: [], view: null, gridMode: 'grid', instruments: [] },
+      whiteboard: { objects: [], strokes: [], shapes: [], view: null, gridMode: 'grid', instruments: [], texts: [] },
       whiteboardMode: false,
       lastTeacherScroll: null,
       zoomLevel: 1,
@@ -258,7 +260,8 @@ async function startServer() {
           (room.chat?.length ?? 0) > 0 ||
           (room.whiteboard?.objects?.length ?? 0) > 0 ||
           (room.whiteboard?.strokes?.length ?? 0) > 0 ||
-          (room.whiteboard?.shapes?.length ?? 0) > 0;
+          (room.whiteboard?.shapes?.length ?? 0) > 0 ||
+          (room.whiteboard?.texts?.length ?? 0) > 0;
         if (!hasContent) continue;
         attempted++;
         const data = JSON.stringify(serializeRoom(roomId, room));
@@ -320,6 +323,7 @@ async function startServer() {
                 // graph-mode choice or wipe rulers/protractors off the board.
                 gridMode: raw.whiteboard.gridMode || 'grid',
                 instruments: raw.whiteboard.instruments || [],
+                texts: raw.whiteboard.texts || [],
               }
             : { objects: [], strokes: [], shapes: [], view: null };
           // Whiteboard mode (teacher on whiteboard surface vs HTML) — persist
@@ -1164,10 +1168,48 @@ async function startServer() {
       io.to(roomId).emit('whiteboard_remove_instrument', { instrumentId });
     });
 
+    // ── Text labels ──
+    // Match the shape pattern: teacher-only mutations, capped to a sane
+    // limit so a buggy/malicious client can't fill the room.
+    const MAX_TEXTS_PER_ROOM = 1000;
+    const MAX_TEXT_LENGTH = 4000;
+    socket.on('whiteboard_add_text', ({ roomId, text }: any) => {
+      const room = rooms.get(roomId);
+      if (!requireTeacher(room, socket.id) || !text || typeof text.id !== 'string' || typeof text.text !== 'string') return;
+      if (!Array.isArray(room.whiteboard.texts)) room.whiteboard.texts = [];
+      if (room.whiteboard.texts.some((t: any) => t.id === text.id)) return;
+      // Cap individual text length so no single label can be megabytes.
+      if (text.text.length > MAX_TEXT_LENGTH) text.text = text.text.slice(0, MAX_TEXT_LENGTH);
+      room.whiteboard.texts.push(text);
+      if (room.whiteboard.texts.length > MAX_TEXTS_PER_ROOM) {
+        room.whiteboard.texts = room.whiteboard.texts.slice(-MAX_TEXTS_PER_ROOM);
+      }
+      io.to(roomId).emit('whiteboard_add_text', { text });
+    });
+
+    socket.on('whiteboard_update_text', ({ roomId, text }: any) => {
+      const room = rooms.get(roomId);
+      if (!requireTeacher(room, socket.id) || !text || typeof text.id !== 'string') return;
+      if (!Array.isArray(room.whiteboard.texts)) room.whiteboard.texts = [];
+      if (typeof text.text === 'string' && text.text.length > MAX_TEXT_LENGTH) {
+        text.text = text.text.slice(0, MAX_TEXT_LENGTH);
+      }
+      room.whiteboard.texts = room.whiteboard.texts.map((t: any) => t.id === text.id ? text : t);
+      socket.to(roomId).emit('whiteboard_update_text', { text });
+    });
+
+    socket.on('whiteboard_remove_text', ({ roomId, textId }: { roomId: string; textId: string }) => {
+      const room = rooms.get(roomId);
+      if (!requireTeacher(room, socket.id) || typeof textId !== 'string') return;
+      if (!Array.isArray(room.whiteboard.texts)) room.whiteboard.texts = [];
+      room.whiteboard.texts = room.whiteboard.texts.filter((t: any) => t.id !== textId);
+      io.to(roomId).emit('whiteboard_remove_text', { textId });
+    });
+
     socket.on('whiteboard_clear', ({ roomId }: { roomId: string }) => {
       const room = rooms.get(roomId);
       if (!requireTeacher(room, socket.id)) return;
-      room.whiteboard = { objects: [], strokes: [], shapes: [], view: null, gridMode: room.whiteboard.gridMode ?? 'grid', instruments: [] };
+      room.whiteboard = { objects: [], strokes: [], shapes: [], view: null, gridMode: room.whiteboard.gridMode ?? 'grid', instruments: [], texts: [] };
       io.to(roomId).emit('whiteboard_clear');
     });
 
