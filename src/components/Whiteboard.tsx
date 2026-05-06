@@ -303,6 +303,11 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
     const [multiObjectIds, setMultiObjectIds] = useState<string[]>([]);
     const [multiShapeIds, setMultiShapeIds] = useState<string[]>([]);
     const [multiStrokeIndices, setMultiStrokeIndices] = useState<number[]>([]);
+    // AUTONOMOUS: [ORDER-3 FRICTION] - texts were the one selectable item the
+    // marquee couldn't lasso. The whole point of marquee is "select a region
+    // of mixed content and operate on it together"; excluding texts made the
+    // feature feel half-finished.
+    const [multiTextIds, setMultiTextIds] = useState<string[]>([]);
     const [tool, setTool] = useState<BoardTool>('select');
     // When tool is 'eraser', this picks between two eraser flavours:
     //   stroke = click on a stroke to delete the entire stroke (existing).
@@ -319,9 +324,22 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
     // Geometry instruments (ruler / protractor) — synced across the room.
     const [instruments, setInstruments] = useState<BoardInstrument[]>([]);
     const instrumentsRef = useRef<BoardInstrument[]>([]);
+    // AUTONOMOUS: [ORDER-3 FRICTION] - Font size for new text labels.
+    // Persisted only locally (per-user preference, not synced) — each text
+    // bakes in its size at creation time, so changing this slider doesn't
+    // retroactively resize previous labels. Default = TEXT_DEFAULT_FONT_SIZE.
+    const [textFontSize, setTextFontSize] = useState<number>(TEXT_DEFAULT_FONT_SIZE);
 
     const selectedObject = selectedObjectId ? objects.find(obj => obj.id === selectedObjectId) : null;
     const canEdit = interactive;
+    // AUTONOMOUS: [ORDER-2 ESSENTIAL] - Students can upload + manipulate
+    // images on the shared whiteboard when interactive mode is on. The
+    // teacher-controlled `studentInteractionAllowed` toggle (which is what
+    // gates `interactive` for student clients) is the explicit opt-in.
+    // Image content has a hard server-side size cap (6MB) added in the
+    // autonomous improvement pass, so a misbehaving student can't spam
+    // multi-MB blobs into canonical state.
+    const canMutateImages = isTeacher || interactive;
 
     useEffect(() => {
       strokesRef.current = strokes;
@@ -416,6 +434,7 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
       setMultiObjectIds([]);
       setMultiShapeIds([]);
       setMultiStrokeIndices([]);
+      setMultiTextIds([]);
     }, []);
 
     // Bulk-delete every item in the marquee multi-selection.
@@ -425,6 +444,7 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
       const removedObjects: BoardImageObject[] = [];
       const removedShapes: BoardShape[] = [];
       const removedStrokes: DrawStroke[] = [];
+      const removedTexts: BoardText[] = [];
 
       if (multiObjectIds.length > 0) {
         const ids = new Set(multiObjectIds);
@@ -432,7 +452,7 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
         setObjects(prev => prev.filter(o => !ids.has(o.id)));
         multiObjectIds.forEach(id => {
           imageCacheRef.current.delete(id);
-          if (socket && isTeacher) socket.emit('whiteboard_remove_object', { roomId, objectId: id });
+          if (socket && canMutateImages) socket.emit('whiteboard_remove_object', { roomId, objectId: id });
         });
       }
       if (multiShapeIds.length > 0) {
@@ -458,9 +478,17 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
           if (socket && ids.length > 0) socket.emit('whiteboard_delete_strokes', { roomId, strokeIds: ids });
         }
       }
+      if (multiTextIds.length > 0) {
+        const ids = new Set(multiTextIds);
+        textsRef.current.forEach(t => { if (ids.has(t.id)) removedTexts.push({ ...t }); });
+        setTexts(prev => prev.filter(t => !ids.has(t.id)));
+        multiTextIds.forEach(id => {
+          if (socket && isTeacher) socket.emit('whiteboard_remove_text', { roomId, textId: id });
+        });
+      }
       clearMultiSelection();
 
-      if (removedObjects.length === 0 && removedShapes.length === 0 && removedStrokes.length === 0) return;
+      if (removedObjects.length === 0 && removedShapes.length === 0 && removedStrokes.length === 0 && removedTexts.length === 0) return;
       recordAction({
         undo: () => {
           if (removedObjects.length > 0) {
@@ -472,7 +500,7 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
             // No explicit loadImage — the existing `objects` useEffect re-runs
             // when the array changes and calls loadImage for any new entry.
             removedObjects.forEach(o => {
-              if (socket && isTeacher) socket.emit('whiteboard_add_image', { roomId, object: o });
+              if (socket && canMutateImages) socket.emit('whiteboard_add_image', { roomId, object: o });
             });
           }
           if (removedShapes.length > 0) {
@@ -495,6 +523,16 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
               if (socket) socket.emit('whiteboard_draw', { roomId, stroke });
             });
           }
+          if (removedTexts.length > 0) {
+            setTexts(prev => {
+              const existing = new Set(prev.map(t => t.id));
+              const additions = removedTexts.filter(t => !existing.has(t.id));
+              return [...prev, ...additions];
+            });
+            removedTexts.forEach(t => {
+              if (socket && isTeacher) socket.emit('whiteboard_add_text', { roomId, text: t });
+            });
+          }
         },
         redo: () => {
           if (removedObjects.length > 0) {
@@ -502,7 +540,7 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
             setObjects(prev => prev.filter(o => !ids.has(o.id)));
             removedObjects.forEach(o => {
               imageCacheRef.current.delete(o.id);
-              if (socket && isTeacher) socket.emit('whiteboard_remove_object', { roomId, objectId: o.id });
+              if (socket && canMutateImages) socket.emit('whiteboard_remove_object', { roomId, objectId: o.id });
             });
           }
           if (removedShapes.length > 0) {
@@ -519,9 +557,16 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
             const ids = Array.from(idsToRemove).filter(id => !!id);
             if (socket && ids.length > 0) socket.emit('whiteboard_delete_strokes', { roomId, strokeIds: ids });
           }
+          if (removedTexts.length > 0) {
+            const ids = new Set(removedTexts.map(t => t.id));
+            setTexts(prev => prev.filter(t => !ids.has(t.id)));
+            removedTexts.forEach(t => {
+              if (socket && isTeacher) socket.emit('whiteboard_remove_text', { roomId, textId: t.id });
+            });
+          }
         },
       });
-    }, [multiObjectIds, multiShapeIds, multiStrokeIndices, objects, shapes, socket, isTeacher, roomId, clearMultiSelection, recordAction]);
+    }, [multiObjectIds, multiShapeIds, multiStrokeIndices, multiTextIds, objects, shapes, socket, isTeacher, canMutateImages, roomId, clearMultiSelection, recordAction]);
 
     const selectedShape = selectedShapeId ? shapes.find(s => s.id === selectedShapeId) : null;
 
@@ -668,17 +713,18 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
     }, [selectedTextId, socket, isTeacher, roomId, recordAction]);
 
     // Open the inline editor at the given board-space point. If editing an
-    // existing text, pre-fills with its content; if creating new, starts blank.
+    // existing text, pre-fills with its content; if creating new, starts blank
+    // and uses the currently-selected font size from the toolbar.
     const openTextEditor = useCallback((boardX: number, boardY: number, existing?: BoardText) => {
       setTextEditor({
         id: existing?.id ?? null,
         boardX,
         boardY,
         value: existing?.text ?? '',
-        fontSize: existing?.fontSize ?? TEXT_DEFAULT_FONT_SIZE,
+        fontSize: existing?.fontSize ?? textFontSize,
         color: existing?.color ?? color,
       });
-    }, [color]);
+    }, [color, textFontSize]);
 
     // Commit the editor's current value as a text. Empty input → discard.
     const commitTextEditor = useCallback(() => {
@@ -913,25 +959,25 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
       setSelectedStrokeIndex(null);
       setTool('select');
       loadImage(object);
-      if (socket && isTeacher) socket.emit('whiteboard_add_image', { roomId, object });
+      if (socket && canMutateImages) socket.emit('whiteboard_add_image', { roomId, object });
       recordAction({
         undo: () => {
           setObjects(prev => prev.filter(o => o.id !== object.id));
           imageCacheRef.current.delete(object.id);
-          if (socket && isTeacher) socket.emit('whiteboard_remove_object', { roomId, objectId: object.id });
+          if (socket && canMutateImages) socket.emit('whiteboard_remove_object', { roomId, objectId: object.id });
         },
         redo: () => {
           setObjects(prev => prev.some(o => o.id === object.id) ? prev : [...prev, object]);
           loadImage(object);
-          if (socket && isTeacher) socket.emit('whiteboard_add_image', { roomId, object });
+          if (socket && canMutateImages) socket.emit('whiteboard_add_image', { roomId, object });
         },
       });
-    }, [screenToBoard, loadImage, socket, isTeacher, roomId, recordAction]);
+    }, [screenToBoard, loadImage, socket, canMutateImages, roomId, recordAction]);
 
     const updateObject = useCallback((object: BoardImageObject, broadcast = true) => {
       setObjects(prev => prev.map(obj => obj.id === object.id ? object : obj));
-      if (broadcast && socket && isTeacher) socket.emit('whiteboard_update_object', { roomId, object });
-    }, [socket, isTeacher, roomId]);
+      if (broadcast && socket && canMutateImages) socket.emit('whiteboard_update_object', { roomId, object });
+    }, [socket, canMutateImages, roomId]);
 
     const removeSelectedObject = useCallback(() => {
       if (!selectedObjectId) return;
@@ -940,21 +986,21 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
       const snapshot: BoardImageObject = { ...target };
       setObjects(prev => prev.filter(obj => obj.id !== selectedObjectId));
       imageCacheRef.current.delete(selectedObjectId);
-      if (socket && isTeacher) socket.emit('whiteboard_remove_object', { roomId, objectId: selectedObjectId });
+      if (socket && canMutateImages) socket.emit('whiteboard_remove_object', { roomId, objectId: selectedObjectId });
       setSelectedObjectId(null);
       recordAction({
         undo: () => {
           setObjects(prev => prev.some(o => o.id === snapshot.id) ? prev : [...prev, snapshot]);
           loadImage(snapshot);
-          if (socket && isTeacher) socket.emit('whiteboard_add_image', { roomId, object: snapshot });
+          if (socket && canMutateImages) socket.emit('whiteboard_add_image', { roomId, object: snapshot });
         },
         redo: () => {
           setObjects(prev => prev.filter(o => o.id !== snapshot.id));
           imageCacheRef.current.delete(snapshot.id);
-          if (socket && isTeacher) socket.emit('whiteboard_remove_object', { roomId, objectId: snapshot.id });
+          if (socket && canMutateImages) socket.emit('whiteboard_remove_object', { roomId, objectId: snapshot.id });
         },
       });
-    }, [selectedObjectId, objects, socket, isTeacher, roomId, recordAction, loadImage]);
+    }, [selectedObjectId, objects, socket, canMutateImages, roomId, recordAction, loadImage]);
 
     // Where the resize / rotate handles sit in WORLD space — i.e. with the
     // image's rotation already applied around its centre. Hit-tests and the
@@ -1571,7 +1617,7 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
       }
 
       // ── Multi-select highlights (no individual handles, just dashed rects) ──
-      if (multiObjectIds.length > 0 || multiShapeIds.length > 0 || multiStrokeIndices.length > 0) {
+      if (multiObjectIds.length > 0 || multiShapeIds.length > 0 || multiStrokeIndices.length > 0 || multiTextIds.length > 0) {
         ctx.save();
         ctx.strokeStyle = '#2563eb';
         ctx.lineWidth = 1.6 / view.boardScale;
@@ -1592,6 +1638,13 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
           if (!strokeIdxSet.has(idx)) return;
           const b = strokeBounds(s);
           if (b) ctx.strokeRect(b.x, b.y, b.w, b.h);
+        });
+        const textIdSet = new Set(multiTextIds);
+        texts.forEach(t => {
+          if (!textIdSet.has(t.id)) return;
+          const b = measureText(t);
+          const pad = 4 / view.boardScale;
+          ctx.strokeRect(b.x - pad, b.y - pad, b.w + pad * 2, b.h + pad * 2);
         });
         ctx.restore();
       }
@@ -1746,7 +1799,7 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
       });
 
       ctx.restore();
-    }, [objects, selectedObjectId, selectedStrokeIndex, strokeBounds, strokes, currentStroke, color, width, tool, view, shapes, draftShape, selectedShape, shapeBounds, getObjectHandlePositions, marquee, multiObjectIds, multiShapeIds, multiStrokeIndices, eraserMode, gridMode, instruments, getInstrumentPose, texts, selectedTextId, textEditor, measureText]);
+    }, [objects, selectedObjectId, selectedStrokeIndex, strokeBounds, strokes, currentStroke, color, width, tool, view, shapes, draftShape, selectedShape, shapeBounds, getObjectHandlePositions, marquee, multiObjectIds, multiShapeIds, multiStrokeIndices, multiTextIds, eraserMode, gridMode, instruments, getInstrumentPose, texts, selectedTextId, textEditor, measureText]);
 
     const downloadBoard = useCallback(() => {
       const canvas = canvasRef.current;
@@ -1828,7 +1881,7 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
           if (selectedStrokeIndex !== null) deleteStrokeIndices([selectedStrokeIndex]);
           if (selectedShapeId) removeSelectedShape();
           if (selectedTextId) removeSelectedText();
-          if (multiObjectIds.length > 0 || multiShapeIds.length > 0 || multiStrokeIndices.length > 0) {
+          if (multiObjectIds.length > 0 || multiShapeIds.length > 0 || multiStrokeIndices.length > 0 || multiTextIds.length > 0) {
             removeMultiSelection();
           }
         }
@@ -1866,7 +1919,7 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
         window.removeEventListener('keydown', down);
         window.removeEventListener('keyup', up);
       };
-    }, [isActive, canEdit, selectedObjectId, selectedStrokeIndex, selectedShapeId, selectedTextId, removeSelectedObject, deleteStrokeIndices, removeSelectedShape, removeSelectedText, multiObjectIds.length, multiShapeIds.length, multiStrokeIndices.length, removeMultiSelection, clearMultiSelection, undo, redo, textEditor]);
+    }, [isActive, canEdit, selectedObjectId, selectedStrokeIndex, selectedShapeId, selectedTextId, removeSelectedObject, deleteStrokeIndices, removeSelectedShape, removeSelectedText, multiObjectIds.length, multiShapeIds.length, multiStrokeIndices.length, multiTextIds.length, removeMultiSelection, clearMultiSelection, undo, redo, textEditor]);
 
     useEffect(() => {
       if (!socket) return;
@@ -2332,11 +2385,11 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
           recordAction({
             undo: () => {
               setObjects(prev => prev.map(o => o.id === before.id ? before : o));
-              if (socket && isTeacher) socket.emit('whiteboard_update_object', { roomId, object: before });
+              if (socket && canMutateImages) socket.emit('whiteboard_update_object', { roomId, object: before });
             },
             redo: () => {
               setObjects(prev => prev.map(o => o.id === after.id ? after : o));
-              if (socket && isTeacher) socket.emit('whiteboard_update_object', { roomId, object: after });
+              if (socket && canMutateImages) socket.emit('whiteboard_update_object', { roomId, object: after });
             },
           });
         }
@@ -2350,11 +2403,11 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
           recordAction({
             undo: () => {
               setObjects(prev => prev.map(o => o.id === before.id ? before : o));
-              if (socket && isTeacher) socket.emit('whiteboard_update_object', { roomId, object: before });
+              if (socket && canMutateImages) socket.emit('whiteboard_update_object', { roomId, object: before });
             },
             redo: () => {
               setObjects(prev => prev.map(o => o.id === after.id ? after : o));
-              if (socket && isTeacher) socket.emit('whiteboard_update_object', { roomId, object: after });
+              if (socket && canMutateImages) socket.emit('whiteboard_update_object', { roomId, object: after });
             },
           });
         }
@@ -2423,9 +2476,19 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
               const b = strokeBounds(s);
               if (b && rectsOverlap(marqueeRect, b)) hitStrokes.push(i);
             });
+            // Texts: measure each text's bbox and check overlap. Same
+            // pattern as shapes/strokes — the union forms one logical
+            // multi-selection across all four content kinds.
+            const hitTexts = texts
+              .filter(t => {
+                const b = measureText(t);
+                return rectsOverlap(marqueeRect, b);
+              })
+              .map(t => t.id);
             setMultiObjectIds(hitObjects);
             setMultiShapeIds(hitShapes);
             setMultiStrokeIndices(hitStrokes);
+            setMultiTextIds(hitTexts);
           }
         }
         setMarquee(null);
@@ -2466,6 +2529,89 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
         setSyncedView({ ...view, boardOffsetX: view.boardOffsetX - e.deltaX, boardOffsetY: view.boardOffsetY - e.deltaY });
       }
     };
+
+    // AUTONOMOUS: [ORDER-1 CRITICAL] - Native non-passive wheel listener so
+    // preventDefault() ACTUALLY works.
+    //
+    // React's synthetic onWheel is bound as a passive listener by default,
+    // which means our preventDefault() above is silently ignored. Result on
+    // a Mac trackpad: pinch-zoom (which fires wheel with ctrlKey:true) was
+    // zooming the whole BROWSER PAGE instead of the whiteboard — toolbar
+    // and all. Same for Ctrl+wheel on any platform.
+    //
+    // The fix is to attach a non-passive `wheel` listener directly to the
+    // canvas via addEventListener with `{ passive: false }`. We also block
+    // ALL ctrl+wheel anywhere in the canvas-wrap so a pinch landing on the
+    // wrap padding (just outside the canvas pixel area) doesn't slip
+    // through to the browser.
+    useEffect(() => {
+      if (!isActive) return;
+      const canvas = canvasRef.current;
+      const wrap = containerRef.current;
+      if (!canvas || !wrap) return;
+      // Block any native wheel that would otherwise reach the browser zoom
+      // handler. We always preventDefault here — React's synthetic onWheel
+      // (above) does the actual zoom/pan logic.
+      const blockNativeZoom = (e: WheelEvent) => {
+        // Always prevent: even non-ctrl wheel on the canvas wrap should not
+        // scroll the surrounding page (the page is fixed-height in the
+        // room). React's onWheel handles the desired pan/zoom semantics.
+        e.preventDefault();
+      };
+      canvas.addEventListener('wheel', blockNativeZoom, { passive: false });
+      wrap.addEventListener('wheel', blockNativeZoom, { passive: false });
+      return () => {
+        canvas.removeEventListener('wheel', blockNativeZoom);
+        wrap.removeEventListener('wheel', blockNativeZoom);
+      };
+    }, [isActive]);
+
+    // AUTONOMOUS: [ORDER-1 CRITICAL] - Page-wide guard against browser zoom
+    // while the whiteboard is mounted.
+    //
+    // Two failure modes this catches:
+    //   1. Pinch zoom on a Mac trackpad anywhere OUTSIDE the canvas area
+    //      (the toolbar rail, the topbar, the page chrome). The native
+    //      gesture fires wheel with ctrlKey:true and the browser zooms.
+    //   2. Cmd/Ctrl+= / Cmd/Ctrl+- / Cmd/Ctrl+0 keyboard shortcuts.
+    // Result was the entire UI scaling — buttons too, exactly the bug the
+    // user reported. We block these only while a teaching surface is
+    // active so the home page is unaffected.
+    useEffect(() => {
+      if (!isActive) return;
+      const onWheel = (e: WheelEvent) => {
+        if (e.ctrlKey || e.metaKey) {
+          e.preventDefault();
+        }
+      };
+      const onKey = (e: KeyboardEvent) => {
+        if ((e.ctrlKey || e.metaKey) && (e.key === '=' || e.key === '+' || e.key === '-' || e.key === '0')) {
+          e.preventDefault();
+        }
+      };
+      window.addEventListener('wheel', onWheel, { passive: false });
+      window.addEventListener('keydown', onKey);
+      return () => {
+        window.removeEventListener('wheel', onWheel);
+        window.removeEventListener('keydown', onKey);
+      };
+    }, [isActive]);
+
+    // AUTONOMOUS: [ORDER-1 CRITICAL] - Safari-specific: pinch-zoom fires
+    // gesturestart/gesturechange/gestureend events (different from wheel).
+    // Block them so Safari doesn't fall back to its own zoom semantics.
+    useEffect(() => {
+      if (!isActive) return;
+      const block = (e: Event) => e.preventDefault();
+      window.addEventListener('gesturestart', block as any);
+      window.addEventListener('gesturechange', block as any);
+      window.addEventListener('gestureend', block as any);
+      return () => {
+        window.removeEventListener('gesturestart', block as any);
+        window.removeEventListener('gesturechange', block as any);
+        window.removeEventListener('gestureend', block as any);
+      };
+    }, [isActive]);
 
     // AUTONOMOUS: [ORDER-1 CRITICAL] - Cap image size before it enters the
     // board state. Without this, dropping a 50MB phone photo would:
@@ -2590,24 +2736,34 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
     const protractorActive = instruments.some(i => i.kind === 'protractor');
 
     const tools: Array<{ id: BoardTool; label: string; icon: React.ReactNode; pressed?: boolean }> = [
+      // AUTONOMOUS: [ORDER-3 FRICTION] - Eraser used to live at the bottom
+      // of a 12-tool rail. On a 13" MacBook the rail overflowed and Eraser
+      // was below the viewport with no way to scroll. Reordered:
+      //   - core editing (Select, Pen, Eraser, Highlighter) at the top —
+      //     the most-reached tools
+      //   - shapes (Line / Rect / Circle / Arrow) next
+      //   - text + math instruments (Compass / Ruler / Protractor)
+      //   - utility (Hand / image upload) at the end
+      // Combined with the new scrollable rail (CSS) the user reaches every
+      // tool on every screen size.
       { id: 'select', label: 'Select', icon: <path d="M4 4l7 16 2-7 7-2L4 4z" /> },
       { id: 'pen', label: 'Pen', icon: <path d="M17 3a2.8 2.8 0 0 1 4 4L8 20l-5 1 1-5L17 3z" /> },
+      { id: 'eraser', label: 'Eraser', icon: <><path d="m7 21-4-4 11-11 4 4L7 21z" /><path d="M14 6l4-4 4 4-4 4" /><path d="M3 21h18" /></> },
       // Highlighter — fades after a few seconds. Chunky marker icon.
       { id: 'highlighter', label: 'Highlighter', icon: <><path d="M9 11l-4 4v3h3l4-4" /><path d="M11 9l5-5 4 4-5 5z" /><path d="M14 6l4 4" /></> },
+      // Text — typed labels for math (eg "x = 45°", "let n be even"). Click
+      // anywhere on the board, type, press Enter to commit.
+      { id: 'text', label: 'Text', icon: <><path d="M4 7V5h16v2" /><path d="M9 19h6" /><path d="M12 5v14" /></> },
       { id: 'line', label: 'Line', icon: <path d="M5 19L19 5" /> },
       { id: 'rect', label: 'Rectangle', icon: <rect x="4" y="6" width="16" height="12" /> },
       { id: 'circle', label: 'Circle', icon: <circle cx="12" cy="12" r="8" /> },
       { id: 'arrow', label: 'Arrow', icon: <><path d="M5 19L19 5" /><path d="M12 5h7v7" /></> },
-      // Text — typed labels for math (eg "x = 45°", "let n be even"). Click
-      // anywhere on the board, type, press Enter to commit.
-      { id: 'text', label: 'Text', icon: <><path d="M4 7V5h16v2" /><path d="M9 19h6" /><path d="M12 5v14" /></> },
       // Compass — circle drawn from the centre, leaves a small dot at the centre point.
       { id: 'compass', label: 'Compass', icon: <><circle cx="12" cy="12" r="8" /><circle cx="12" cy="12" r="1.5" fill="currentColor" /><path d="M12 4v3" /></> },
       // Ruler — toggle: spawn / remove the ruler instrument on the board.
       { id: 'ruler', label: 'Ruler', icon: <><path d="M3 14l11-11 7 7-11 11z" /><path d="M7 10l1 1M10 7l1 1M13 4l1 1M5 16l1 1" /></>, pressed: rulerActive },
       // Protractor — toggle: spawn / remove the protractor instrument.
       { id: 'protractor', label: 'Protractor', icon: <><path d="M3 14a9 9 0 0 1 18 0" /><path d="M3 14h18" /><path d="M12 14v-3" /></>, pressed: protractorActive },
-      { id: 'eraser', label: 'Eraser', icon: <><path d="m7 21-4-4 11-11 4 4L7 21z" /><path d="M14 6l4-4 4 4-4 4" /><path d="M3 21h18" /></> },
       { id: 'pan', label: 'Hand', icon: <><path d="M18 11V6a2 2 0 0 0-4 0v5" /><path d="M14 10V4a2 2 0 0 0-4 0v8" /><path d="M10 12V6a2 2 0 0 0-4 0v7" /><path d="M6 13c-2 0-3 1-3 3 0 4 4 6 8 6h3c4 0 7-3 7-7v-4a2 2 0 0 0-4 0" /></> },
     ];
 
@@ -2696,6 +2852,24 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
               >Pixel</button>
             </div>
           )}
+          {/* AUTONOMOUS: [ORDER-3 FRICTION] - Font-size picker. Visible only
+              while the Text tool is active so it doesn't crowd the toolbar
+              for other tools. Sizes are board units; "Aa" labels visually
+              differentiate them at a glance. Each new label bakes in the
+              selected size at creation time. */}
+          {tool === 'text' && (
+            <div className="whiteboard-control-group" role="group" aria-label="Text size">
+              {[16, 24, 36, 56].map((size, i) => (
+                <button
+                  key={size}
+                  onClick={() => setTextFontSize(size)}
+                  className={`whiteboard-action ${textFontSize === size ? 'active' : ''}`}
+                  title={`${['Small', 'Normal', 'Large', 'Huge'][i]} text (${size}px)`}
+                  style={{ fontSize: `${10 + i * 2}px`, fontWeight: 700, padding: '4px 10px' }}
+                >Aa</button>
+              ))}
+            </div>
+          )}
           {showColorAndWidth && (
             <div className="whiteboard-control-group">
               {COLORS.map(c => (
@@ -2717,9 +2891,9 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
           {canEdit && selectedShape && <button onClick={removeSelectedShape} className="whiteboard-action danger">Delete shape</button>}
           {canEdit && selectedStrokeIndex !== null && <button onClick={() => deleteStrokeIndices([selectedStrokeIndex])} className="whiteboard-action danger">Delete stroke</button>}
           {canEdit && selectedTextId && <button onClick={removeSelectedText} className="whiteboard-action danger">Delete text</button>}
-          {canEdit && (multiObjectIds.length + multiShapeIds.length + multiStrokeIndices.length) > 0 && (
+          {canEdit && (multiObjectIds.length + multiShapeIds.length + multiStrokeIndices.length + multiTextIds.length) > 0 && (
             <button onClick={removeMultiSelection} className="whiteboard-action danger">
-              Delete {multiObjectIds.length + multiShapeIds.length + multiStrokeIndices.length} items
+              Delete {multiObjectIds.length + multiShapeIds.length + multiStrokeIndices.length + multiTextIds.length} items
             </button>
           )}
           {canEdit && (

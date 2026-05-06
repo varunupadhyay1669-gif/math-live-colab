@@ -1257,6 +1257,13 @@ body {
   position: absolute;
   left: 14px;
   top: 76px;
+  /* AUTONOMOUS: [ORDER-3 FRICTION] - Cap the rail height and scroll
+     overflow. With 12+ tools the rail used to overflow the viewport on a
+     13" MacBook with no way to reach the bottom items (Eraser, Hand). Now:
+     bounded by the viewport, scrolls vertically when needed. The
+     scrollbar is hidden on most browsers (clean look) but the rail
+     remains scrollable via wheel/trackpad. */
+  bottom: 14px;
   z-index: 20;
   display: flex;
   flex-direction: column;
@@ -1268,6 +1275,24 @@ body {
   border: 1px solid rgba(15,23,42,0.08);
   box-shadow: 0 24px 54px -28px rgba(15,23,42,0.45);
   backdrop-filter: blur(16px);
+  overflow-y: auto;
+  overflow-x: hidden;
+  /* Hide the scrollbar without disabling scrolling. */
+  scrollbar-width: thin;
+  scrollbar-color: rgba(15,23,42,0.18) transparent;
+}
+.whiteboard-rail::-webkit-scrollbar {
+  width: 6px;
+}
+.whiteboard-rail::-webkit-scrollbar-track {
+  background: transparent;
+}
+.whiteboard-rail::-webkit-scrollbar-thumb {
+  background: rgba(15,23,42,0.18);
+  border-radius: 3px;
+}
+.whiteboard-rail::-webkit-scrollbar-thumb:hover {
+  background: rgba(15,23,42,0.32);
 }
 
 .whiteboard-tool {
