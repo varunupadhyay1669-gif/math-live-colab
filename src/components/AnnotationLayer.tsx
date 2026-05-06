@@ -51,6 +51,17 @@ interface StrokeData {
   //     shape-circle — circle (centre = first, edge = last; radius = distance)
   //     shape-arrow  — line + arrowhead at last
   kind?: StrokeKind;
+  // Iframe scroll position at the moment the stroke was captured. Used at
+  // render time to offset the stroke's points by (currentScroll - captureScroll)
+  // so the annotation moves with the content when the iframe is scrolled.
+  // Without this, strokes stayed pinned to the canvas viewport and "floated"
+  // away from whatever the teacher was annotating as soon as the page
+  // scrolled — exactly the bug reported.
+  // In iframe document pixels. Defaults to 0 for back-compat with old
+  // peers that didn't send these (those strokes will appear pinned, like
+  // before, but new strokes from updated peers will scroll correctly).
+  scrollX?: number;
+  scrollY?: number;
 }
 
 const newStrokeId = () => `s-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -90,6 +101,21 @@ export default function AnnotationLayer({
   const shapeActive = interactive && shapeTool !== 'off';
   const isShapingRef = useRef<false | ShapeKind>(false);
 
+  // Read the iframe's current scroll position. Tolerant of cross-origin /
+  // not-yet-loaded iframes — falls back to 0,0 in those cases (which means
+  // strokes will simply not scroll, the pre-fix behaviour). The iframe is
+  // currently sandboxed with allow-same-origin so contentWindow is
+  // accessible; if that ever changes, this gracefully degrades.
+  const getIframeScroll = useCallback((): { x: number; y: number } => {
+    try {
+      const win = iframeRef.current?.contentWindow;
+      if (!win) return { x: 0, y: 0 };
+      return { x: win.scrollX || 0, y: win.scrollY || 0 };
+    } catch {
+      return { x: 0, y: 0 };
+    }
+  }, [iframeRef]);
+
   const getCanvasCoords = useCallback((e: React.PointerEvent<HTMLCanvasElement> | React.MouseEvent<HTMLCanvasElement>) => {
     const canvas = canvasRef.current;
     if (!canvas) return { x: 0, y: 0 };
@@ -112,6 +138,11 @@ export default function AnnotationLayer({
     const now = Date.now();
     const w = rect.width;
     const h = rect.height;
+
+    // Current iframe scroll. Each stroke was captured with its own scroll
+    // baseline; subtracting from the current scroll gives the on-screen
+    // pixel offset to apply so the annotation moves with the content.
+    const currentScroll = getIframeScroll();
 
     // Filter expired transient strokes
     strokesRef.current = strokesRef.current.filter(s => {
@@ -169,6 +200,15 @@ export default function AnnotationLayer({
       }
 
       if (alpha <= 0) return;
+
+      // Scroll offset for this stroke: how far the iframe has scrolled
+      // since the stroke was captured, in CANVAS pixels (which is also
+      // iframe viewport pixels, since the canvas is positioned over the
+      // iframe at 100% size). Old strokes (no scrollX/Y) → offset 0,
+      // identical to the pre-fix behaviour for those.
+      const offsetX = currentScroll.x - (stroke.scrollX ?? currentScroll.x);
+      const offsetY = currentScroll.y - (stroke.scrollY ?? currentScroll.y);
+
       ctx.save();
       ctx.globalAlpha = alpha;
       if (stroke.kind === 'eraser-pixel') {
@@ -190,13 +230,24 @@ export default function AnnotationLayer({
       // Shape strokes: use first/last only.
       if (stroke.kind === 'shape-line' || stroke.kind === 'shape-rect' || stroke.kind === 'shape-circle' || stroke.kind === 'shape-arrow') {
         if (stroke.points.length >= 2) {
-          drawShapeStroke(stroke.kind, stroke.points[0], stroke.points[stroke.points.length - 1]);
+          const a = stroke.points[0];
+          const b = stroke.points[stroke.points.length - 1];
+          // Apply the scroll offset by translating the points before
+          // handing them to drawShapeStroke. We adjust the normalized x/y
+          // by the offset's normalized equivalent.
+          const aOff = { x: a.x - offsetX / w, y: a.y - offsetY / h };
+          const bOff = { x: b.x - offsetX / w, y: b.y - offsetY / h };
+          drawShapeStroke(stroke.kind, aOff, bOff);
         }
       } else {
         ctx.beginPath();
         stroke.points.forEach((p, i) => {
-          if (i === 0) ctx.moveTo(p.x * w, p.y * h);
-          else ctx.lineTo(p.x * w, p.y * h);
+          // Scroll offset: subtract the delta between current scroll and
+          // capture-time scroll so the stroke moves with the content.
+          const px = p.x * w - offsetX;
+          const py = p.y * h - offsetY;
+          if (i === 0) ctx.moveTo(px, py);
+          else ctx.lineTo(px, py);
         });
         ctx.stroke();
       }
@@ -235,7 +286,7 @@ export default function AnnotationLayer({
       }
       ctx.restore();
     }
-  }, [penColor, penWidth, eraserWidth]);
+  }, [penColor, penWidth, eraserWidth, getIframeScroll]);
 
   // Animation loop
   useEffect(() => {
@@ -252,10 +303,55 @@ export default function AnnotationLayer({
     };
   }, [renderStrokes]);
 
+  // ── Iframe scroll listener ──
+  // The iframe's scroll position is read at render-time to offset each
+  // stroke. We need to RE-RENDER on every scroll so the strokes follow the
+  // content visibly. Attach the listener only when the iframe content
+  // window becomes available (it's null until the iframe loads), and tear
+  // it down on unmount or iframeRef change.
+  useEffect(() => {
+    let win: Window | null = null;
+    let cleanup: (() => void) | null = null;
+    const tryAttach = () => {
+      try {
+        const candidate = iframeRef.current?.contentWindow ?? null;
+        if (!candidate || candidate === win) return;
+        // Detach any previous listener first.
+        if (cleanup) { cleanup(); cleanup = null; }
+        win = candidate;
+        const handler = () => renderStrokes();
+        candidate.addEventListener('scroll', handler, { passive: true });
+        cleanup = () => {
+          try { candidate.removeEventListener('scroll', handler); } catch {}
+        };
+      } catch {
+        // Cross-origin or detached — silently no-op. Strokes won't follow
+        // scroll in that case but everything else still works.
+      }
+    };
+    // Try immediately and again on iframe load events (the contentWindow
+    // is replaced on each navigation / srcdoc change).
+    tryAttach();
+    const iframe = iframeRef.current;
+    iframe?.addEventListener('load', tryAttach);
+    // Also poll briefly for the case where the iframe is created lazily;
+    // a few RAFs is enough to catch the typical mount race.
+    let ticks = 0;
+    const tick = setInterval(() => {
+      tryAttach();
+      if (++ticks >= 20) clearInterval(tick); // give up after ~2s
+    }, 100);
+    return () => {
+      clearInterval(tick);
+      iframe?.removeEventListener('load', tryAttach);
+      if (cleanup) cleanup();
+    };
+  }, [iframeRef, renderStrokes]);
+
   // Receive remote strokes
   useEffect(() => {
     if (!socket) return;
-    const handleStroke = (data: { id?: string; points: Array<{ x: number; y: number }>; color: string; width: number; transient?: boolean; kind?: 'pen' | 'eraser-pixel' }) => {
+    const handleStroke = (data: { id?: string; points: Array<{ x: number; y: number }>; color: string; width: number; transient?: boolean; kind?: StrokeKind; scrollX?: number; scrollY?: number }) => {
       strokesRef.current.push({
         id: data.id ?? newStrokeId(),
         points: data.points,
@@ -264,6 +360,8 @@ export default function AnnotationLayer({
         transient: data.transient,
         kind: data.kind,
         time: Date.now(),
+        scrollX: data.scrollX,
+        scrollY: data.scrollY,
       });
       renderStrokes();
     };
@@ -390,6 +488,11 @@ export default function AnnotationLayer({
     if (e) {
       try { (e.currentTarget as HTMLCanvasElement).releasePointerCapture(e.pointerId); } catch {}
     }
+    // Capture the iframe scroll position at COMMIT time. The points
+    // themselves are normalized to the canvas viewport — the scrollX/Y
+    // baseline ties them to a specific position in the document so they
+    // travel with the content on subsequent scrolls.
+    const { x: scrollX, y: scrollY } = getIframeScroll();
     if (isShapingRef.current) {
       const kind: ShapeKind = isShapingRef.current;
       isShapingRef.current = false;
@@ -402,9 +505,9 @@ export default function AnnotationLayer({
         const dy = Math.abs(b.y - a.y);
         if (dx > 0.005 || dy > 0.005) {
           const id = newStrokeId();
-          const stroke: StrokeData = { id, points: [a, b], color: penColor, width: penWidth, time: Date.now(), kind };
+          const stroke: StrokeData = { id, points: [a, b], color: penColor, width: penWidth, time: Date.now(), kind, scrollX, scrollY };
           strokesRef.current.push(stroke);
-          socket.emit('draw_stroke', { roomId, id, points: [a, b], color: penColor, width: penWidth, kind });
+          socket.emit('draw_stroke', { roomId, id, points: [a, b], color: penColor, width: penWidth, kind, scrollX, scrollY });
         }
       }
       currentStrokeRef.current = [];
@@ -416,9 +519,9 @@ export default function AnnotationLayer({
       const points = currentStrokeRef.current;
       if (points.length > 1 && socket) {
         const id = newStrokeId();
-        const stroke: StrokeData = { id, points, color: '#000', width: eraserWidth, time: Date.now(), kind: 'eraser-pixel' };
+        const stroke: StrokeData = { id, points, color: '#000', width: eraserWidth, time: Date.now(), kind: 'eraser-pixel', scrollX, scrollY };
         strokesRef.current.push(stroke);
-        socket.emit('draw_stroke', { roomId, id, points, color: '#000', width: eraserWidth, kind: 'eraser-pixel' });
+        socket.emit('draw_stroke', { roomId, id, points, color: '#000', width: eraserWidth, kind: 'eraser-pixel', scrollX, scrollY });
       }
       currentStrokeRef.current = [];
       isErasingRef.current = false;
@@ -435,9 +538,9 @@ export default function AnnotationLayer({
     const points = currentStrokeRef.current;
     if (points.length > 1 && socket) {
       const id = newStrokeId();
-      const stroke: StrokeData = { id, points, color: penColor, width: penWidth, time: Date.now(), transient: isTransientRef.current, kind: 'pen' };
+      const stroke: StrokeData = { id, points, color: penColor, width: penWidth, time: Date.now(), transient: isTransientRef.current, kind: 'pen', scrollX, scrollY };
       strokesRef.current.push(stroke);
-      socket.emit('draw_stroke', { roomId, id, points, color: penColor, width: penWidth, transient: isTransientRef.current, kind: 'pen' });
+      socket.emit('draw_stroke', { roomId, id, points, color: penColor, width: penWidth, transient: isTransientRef.current, kind: 'pen', scrollX, scrollY });
     }
     currentStrokeRef.current = [];
   };
