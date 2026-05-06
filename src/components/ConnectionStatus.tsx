@@ -11,6 +11,13 @@ export default function ConnectionStatus({ socket, connected }: ConnectionStatus
   const [attempts, setAttempts] = useState(0);
   const [showToast, setShowToast] = useState(false);
   const [toastMsg, setToastMsg] = useState('');
+  // AUTONOMOUS: [ORDER-3 FRICTION] - Round-trip latency in ms. Updated
+  // every PING_INTERVAL_MS via a ping/pong with the server. Surfaces in
+  // the inline indicator's tooltip — and as a small text label next to
+  // the status dot when latency is poor (>200ms) so the user notices
+  // before sync feels broken. Useful diagnostic for "is the room
+  // sluggish?" without opening devtools.
+  const [latencyMs, setLatencyMs] = useState<number | null>(null);
   // AUTONOMOUS: [ORDER-3 FRICTION] - Refs to fix two real bugs in this
   // component:
   //   1. The "✅ Reconnected!" toast used to fire on the very first
@@ -94,6 +101,32 @@ export default function ConnectionStatus({ socket, connected }: ConnectionStatus
     };
   }, []);
 
+  // AUTONOMOUS: [ORDER-3 FRICTION] - Periodic ping/pong for latency.
+  // Measures the round-trip time so the user has visibility when sync
+  // gets sluggish (e.g. on a poor network). Skips when disconnected to
+  // avoid stacking pongs in Socket.IO's reconnect buffer.
+  useEffect(() => {
+    if (!socket) return;
+    const PING_INTERVAL_MS = 10_000;
+    const onPong = (data: { ts: number }) => {
+      if (typeof data?.ts !== 'number') return;
+      const rtt = Math.max(0, Date.now() - data.ts);
+      setLatencyMs(rtt);
+    };
+    socket.on('pong', onPong);
+    const sendPing = () => {
+      if (socket.connected) socket.emit('ping', { ts: Date.now() });
+    };
+    // Send one immediately on mount/reconnect so the indicator updates
+    // quickly instead of waiting up to PING_INTERVAL_MS for the first sample.
+    sendPing();
+    const interval = setInterval(sendPing, PING_INTERVAL_MS);
+    return () => {
+      clearInterval(interval);
+      socket.off('pong', onPong);
+    };
+  }, [socket]);
+
   const statusConfig = {
     connected: { color: '#10B981', label: 'Connected', icon: '🟢' },
     connecting: { color: '#94a3b8', label: 'Connecting…', icon: '⚪' },
@@ -102,11 +135,19 @@ export default function ConnectionStatus({ socket, connected }: ConnectionStatus
   };
 
   const cfg = statusConfig[status];
+  // AUTONOMOUS: [ORDER-3 FRICTION] - When connected, fold the latency
+  // value into the dot's tooltip so a power-user (or anyone curious about
+  // "is the room slow?") can hover and see the RTT. Visible label only
+  // appears for poor latency (>200ms) so happy-path users never see
+  // numbers cluttering the header.
+  const latencyText = latencyMs == null ? '' : ` · ${latencyMs}ms`;
+  const tooltip = status === 'connected' ? `${cfg.label}${latencyText}` : cfg.label;
+  const showLatencyInline = status === 'connected' && latencyMs != null && latencyMs > 200;
 
   return (
     <>
       {/* Inline indicator */}
-      <div className="flex items-center gap-1.5 tooltip-wrapper" data-tooltip={cfg.label}>
+      <div className="flex items-center gap-1.5 tooltip-wrapper" data-tooltip={tooltip}>
         <div className="w-2 h-2 rounded-full" style={{
           background: cfg.color,
           boxShadow: `0 0 6px ${cfg.color}60`,
@@ -115,6 +156,11 @@ export default function ConnectionStatus({ socket, connected }: ConnectionStatus
         {status !== 'connected' && (
           <span className="text-[11px] font-medium" style={{ color: cfg.color }}>
             {cfg.label}
+          </span>
+        )}
+        {showLatencyInline && (
+          <span className="text-[11px] font-medium" style={{ color: '#F59E0B' }}>
+            {latencyMs}ms
           </span>
         )}
       </div>

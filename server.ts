@@ -514,6 +514,15 @@ async function startServer() {
   io.on('connection', (socket) => {
     console.log('User connected:', socket.id);
 
+    // AUTONOMOUS: [ORDER-3 FRICTION] - ping/pong for the client-side
+    // latency indicator. Client emits `ping` with a timestamp; we echo it
+    // back as `pong` and the client measures RTT. Stateless, cheap (only
+    // emitted when the user has the room open), and no impact on
+    // existing flows because nothing else listens for these events.
+    socket.on('ping', (data: { ts: number }) => {
+      socket.emit('pong', { ts: data?.ts ?? Date.now() });
+    });
+
     // ─── JOIN ROOM ───
     socket.on('join_room', ({ roomId, userName, role, password }: { roomId: string; userName: string; role: 'teacher' | 'student'; password?: string }) => {
       // Validate inputs
