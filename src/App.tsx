@@ -8,6 +8,7 @@ import Home from './pages/Home';
 import Room from './pages/Room';
 import StudentView from './pages/StudentView';
 import ErrorBoundary from './components/ErrorBoundary';
+import ShortcutsOverlay from './components/ShortcutsOverlay';
 
 export default function App() {
   return (
@@ -23,6 +24,9 @@ export default function App() {
           {/* Backward compatibility */}
           <Route path="/student/:roomId" element={<StudentView />} />
         </Routes>
+        {/* AUTONOMOUS: [ORDER-3 FRICTION] - Mounted once at the root so the
+            `?` shortcut works on every page. Self-contained — no props. */}
+        <ShortcutsOverlay />
       </BrowserRouter>
     </ErrorBoundary>
   );

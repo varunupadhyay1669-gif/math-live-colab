@@ -410,6 +410,17 @@ async function startServer() {
     return !!room && room.teacherSocketId === socketId && room.users.get(socketId)?.role === 'teacher';
   }
 
+  // AUTONOMOUS: [ORDER-2 ESSENTIAL] - For collab actions where students get
+  // write access when the teacher has explicitly enabled interactive mode.
+  // Currently used for whiteboard image upload/move/delete so a student can
+  // paste a question photo onto the shared canvas. The teacher controls the
+  // gate via the studentInteractionAllowed toggle.
+  function requireTeacherOrInteractive(room: RoomData | undefined, socketId: string): room is RoomData {
+    if (!room || !room.users.has(socketId)) return false;
+    if (room.teacherSocketId === socketId) return true;
+    return !!room.studentInteractionAllowed;
+  }
+
   function bumpRevision(room: RoomData): number {
     room.revision += 1;
     return room.revision;
@@ -1011,9 +1022,15 @@ async function startServer() {
     // Cap each image's serialized size at 6MB (some headroom over the
     // client's 4MB byte cap because base64 inflates by ~33%).
     const MAX_IMAGE_OBJECT_BYTES = 6 * 1024 * 1024;
+    // AUTONOMOUS: [ORDER-2 ESSENTIAL] - Image add/move/remove now allows
+    // students when the teacher has flipped the studentInteractionAllowed
+    // toggle on. Lets a student paste a question photo onto the shared
+    // whiteboard, drag it where it belongs, and remove it later. The 6MB
+    // size cap above is the abuse mitigation; it applies equally to anyone
+    // who can mutate.
     socket.on('whiteboard_add_image', ({ roomId, object }: any) => {
       const room = rooms.get(roomId);
-      if (!requireTeacher(room, socket.id)) return;
+      if (!requireTeacherOrInteractive(room, socket.id)) return;
       if (!object || typeof object.id !== 'string' || typeof object.src !== 'string') return;
       // Quick byte cap on the data URL. JSON.stringify cost would be
       // dominated by .src for any reasonable image object.
@@ -1027,14 +1044,14 @@ async function startServer() {
 
     socket.on('whiteboard_update_object', ({ roomId, object }: any) => {
       const room = rooms.get(roomId);
-      if (!requireTeacher(room, socket.id)) return;
+      if (!requireTeacherOrInteractive(room, socket.id)) return;
       room.whiteboard.objects = room.whiteboard.objects.map(obj => obj.id === object.id ? object : obj);
       socket.to(roomId).emit('whiteboard_update_object', { object });
     });
 
     socket.on('whiteboard_remove_object', ({ roomId, objectId }: { roomId: string; objectId: string }) => {
       const room = rooms.get(roomId);
-      if (!requireTeacher(room, socket.id)) return;
+      if (!requireTeacherOrInteractive(room, socket.id)) return;
       room.whiteboard.objects = room.whiteboard.objects.filter(obj => obj.id !== objectId);
       io.to(roomId).emit('whiteboard_remove_object', { objectId });
     });
