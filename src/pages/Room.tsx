@@ -1732,6 +1732,91 @@ export default function Room() {
                   {dualView ? '✕ Exit Dual View' : '👥 Dual View'}
                 </button>
               )}
+              {/* AUTONOMOUS: [ORDER-1 CRITICAL] - <Whiteboard> is mounted
+                  ONCE and stays mounted for the entire room session, even
+                  when the teacher toggles to HTML mode. Visibility is
+                  controlled via the `isActive` prop — the component returns
+                  null internally when isActive is false, so it disappears
+                  visually, but its useState (objects, strokes, shapes,
+                  texts, view, gridMode, instruments, undo stack) is
+                  preserved by React across the null render.
+                  Before this fix, mounting was inside a conditional ternary
+                  — toggling HTML mode UNMOUNTED the Whiteboard and dropped
+                  every local state value. On remount the component
+                  rehydrated from `whiteboardState`, which was the snapshot
+                  captured at session-join (long stale). Result: every
+                  stroke/shape/text drawn during the lesson vanished the
+                  moment the teacher peeked at HTML and came back.
+                  Server-side persistence (5-min snapshot, 48h cap) was
+                  always working — this was purely a client-side state
+                  loss. */}
+              <Whiteboard
+                ref={whiteboardRef}
+                socket={socket}
+                roomId={roomId!}
+                isTeacher={true}
+                interactive={true}
+                zoomLevel={zoomLevel}
+                scrollX={whiteboardScrollX}
+                scrollY={whiteboardScrollY}
+                isActive={whiteboardMode && !showTempContent}
+                initialState={whiteboardState}
+                whiteboardSyncEnabled={whiteboardSyncEnabled}
+              />
+              {/* Whiteboard mutual-sync toggle (the "shared book" switch).
+                  Only renders when the whiteboard is the visible surface. */}
+              {whiteboardMode && !showTempContent && (
+                <div
+                  style={{
+                    position: 'absolute',
+                    top: 12,
+                    right: 12,
+                    zIndex: 30,
+                    display: 'flex',
+                    flexDirection: 'column',
+                    alignItems: 'flex-end',
+                    gap: 6,
+                  }}
+                >
+                  <button
+                    onClick={toggleWhiteboardSync}
+                    title={whiteboardSyncEnabled ? 'Pan/zoom mirrors both sides — click to go independent' : 'Independent view — click to share again'}
+                    style={{
+                      display: 'flex', alignItems: 'center', gap: 8,
+                      padding: '6px 12px',
+                      borderRadius: 10,
+                      background: whiteboardSyncEnabled ? 'rgba(37,99,235,0.95)' : 'rgba(255,255,255,0.95)',
+                      color: whiteboardSyncEnabled ? '#fff' : '#0F172A',
+                      boxShadow: '0 6px 18px rgba(15,23,42,0.18), 0 0 0 1px rgba(15,23,42,0.08)',
+                      fontSize: 12.5, fontWeight: 600,
+                      border: 'none', cursor: 'pointer',
+                    }}
+                  >
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      {whiteboardSyncEnabled ? (
+                        <><path d="M2 7h11l-3-3" /><path d="M22 17H11l3 3" /></>
+                      ) : (
+                        <><circle cx="12" cy="12" r="9" /><path d="M5 5l14 14" /></>
+                      )}
+                    </svg>
+                    {whiteboardSyncEnabled ? 'Shared view' : 'Independent view'}
+                  </button>
+                  {whiteboardSyncEnabled && !peerSyncEnabled && (
+                    <div style={{
+                      background: 'rgba(245, 158, 11, 0.95)',
+                      color: '#fff',
+                      padding: '4px 10px',
+                      borderRadius: 8,
+                      fontSize: 11,
+                      fontWeight: 600,
+                      boxShadow: '0 4px 12px rgba(15,23,42,0.18)',
+                    }}>
+                      Student is on independent view
+                    </div>
+                  )}
+                </div>
+              )}
+
               {showTempContent && tempContent && tempContentUrl ? (
                 // Temporary explanation content overlay — uses same ref so scroll sync works
                 <iframe
@@ -1743,71 +1828,9 @@ export default function Room() {
                   sandbox="allow-scripts allow-same-origin allow-forms allow-modals allow-popups allow-pointer-lock"
                 />
               ) : whiteboardMode ? (
-                <>
-                  <Whiteboard
-                    ref={whiteboardRef}
-                    socket={socket}
-                    roomId={roomId!}
-                    isTeacher={true}
-                    interactive={true}
-                    zoomLevel={zoomLevel}
-                    scrollX={whiteboardScrollX}
-                    scrollY={whiteboardScrollY}
-                    isActive={true}
-                    initialState={whiteboardState}
-                    whiteboardSyncEnabled={whiteboardSyncEnabled}
-                  />
-                  {/* Whiteboard mutual-sync toggle (the "shared book" switch). */}
-                  <div
-                    style={{
-                      position: 'absolute',
-                      top: 12,
-                      right: 12,
-                      zIndex: 30,
-                      display: 'flex',
-                      flexDirection: 'column',
-                      alignItems: 'flex-end',
-                      gap: 6,
-                    }}
-                  >
-                    <button
-                      onClick={toggleWhiteboardSync}
-                      title={whiteboardSyncEnabled ? 'Pan/zoom mirrors both sides — click to go independent' : 'Independent view — click to share again'}
-                      style={{
-                        display: 'flex', alignItems: 'center', gap: 8,
-                        padding: '6px 12px',
-                        borderRadius: 10,
-                        background: whiteboardSyncEnabled ? 'rgba(37,99,235,0.95)' : 'rgba(255,255,255,0.95)',
-                        color: whiteboardSyncEnabled ? '#fff' : '#0F172A',
-                        boxShadow: '0 6px 18px rgba(15,23,42,0.18), 0 0 0 1px rgba(15,23,42,0.08)',
-                        fontSize: 12.5, fontWeight: 600,
-                        border: 'none', cursor: 'pointer',
-                      }}
-                    >
-                      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                        {whiteboardSyncEnabled ? (
-                          <><path d="M2 7h11l-3-3" /><path d="M22 17H11l3 3" /></>
-                        ) : (
-                          <><circle cx="12" cy="12" r="9" /><path d="M5 5l14 14" /></>
-                        )}
-                      </svg>
-                      {whiteboardSyncEnabled ? 'Shared view' : 'Independent view'}
-                    </button>
-                    {whiteboardSyncEnabled && !peerSyncEnabled && (
-                      <div style={{
-                        background: 'rgba(245, 158, 11, 0.95)',
-                        color: '#fff',
-                        padding: '4px 10px',
-                        borderRadius: 8,
-                        fontSize: 11,
-                        fontWeight: 600,
-                        boxShadow: '0 4px 12px rgba(15,23,42,0.18)',
-                      }}>
-                        Student is on independent view
-                      </div>
-                    )}
-                  </div>
-                </>
+                /* Whiteboard is rendered above (always mounted). When
+                   active, this branch is empty so we don't double-up. */
+                null
               ) : iframeUrl ? (
                 <div className="w-full h-full flex">
                   <div className={dualView ? "relative flex-1 border-r border-gray-300" : "relative w-full h-full"}>
