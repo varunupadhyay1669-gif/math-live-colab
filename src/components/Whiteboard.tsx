@@ -218,6 +218,14 @@ const MAX_SCALE = 6;
 
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
 const newId = (prefix: string) => `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+// AUTONOMOUS: snap-to-grid for graph mode. Rounds a board-space point to
+// the nearest minor grid intersection so shape endpoints land cleanly
+// on graph-paper crossings (90° angles, equal lengths) — what a math
+// teacher expects from a coordinate plane.
+const snapToGrid = (p: { x: number; y: number }): { x: number; y: number } => ({
+  x: Math.round(p.x / GRID_STEP) * GRID_STEP,
+  y: Math.round(p.y / GRID_STEP) * GRID_STEP,
+});
 
 // Migration helper: existing rooms persisted before unified z-ordering
 // have strokes/shapes/texts WITHOUT a `createdAt` field. Our IDs embed
@@ -2301,10 +2309,17 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
         setSelectedShapeId(null);
         const kind = shapeKindForTool(tool);
         if (!kind) return;
+        // AUTONOMOUS: snap-to-grid when the teacher has graph paper on.
+        // The default minor grid step is GRID_STEP (80 board units); if
+        // they're using graph mode for math, drawing shapes onto the grid
+        // intersections is exactly what they expect. Only applies in
+        // 'graph' mode — plain 'grid' / 'blank' modes don't snap because
+        // those are free-form notebook surfaces, not coordinate systems.
+        const start = gridMode === 'graph' ? snapToGrid(point) : point;
         const draft: BoardShape = {
           id: newId('shape'),
           kind,
-          x1: point.x, y1: point.y, x2: point.x, y2: point.y,
+          x1: start.x, y1: start.y, x2: start.x, y2: start.y,
           color, width,
           createdAt: Date.now(),
           // Compass marks the construction-point centre on the resulting circle.
@@ -2353,7 +2368,9 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
         return;
       }
       if (drag.mode === 'shape-create' && draftShapeRef.current) {
-        const point = screenToBoard(e.clientX, e.clientY);
+        const raw = screenToBoard(e.clientX, e.clientY);
+        // Same snap behaviour as the start point: only in graph mode.
+        const point = gridMode === 'graph' ? snapToGrid(raw) : raw;
         const next = { ...draftShapeRef.current, x2: point.x, y2: point.y };
         setDraftShape(next);
         return;
