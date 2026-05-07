@@ -140,10 +140,17 @@ export default function TeacherControls({
               data-tip={eraserMode !== 'off' ? 'Eraser on — click to turn off' : 'Eraser'}
               aria-pressed={eraserMode !== 'off'}
             >
+              {/* AUTONOMOUS: Classic two-tone rubber eraser silhouette.
+                  The previous icon was a tilted pencil-eraser line drawing
+                  that read as a "knife" or "axe" to most users. This one is
+                  the recognisable school-eraser shape: rounded slanted
+                  block with the pink top + cream bottom partition. Stays
+                  monochrome (currentColor) so it tints with the active
+                  state, but the inner divider line keeps the
+                  "two-material rubber eraser" silhouette. */}
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="m7 21-4-4 11-11 4 4L7 21z" />
-                <path d="M14 6l4-4 4 4-4 4" />
-                <path d="M3 21h18" />
+                <path d="M19 13l-7.5 7.5a2 2 0 0 1-2.83 0L4.5 16.33a2 2 0 0 1 0-2.83L13.5 4.5a2 2 0 0 1 2.83 0L19.5 7.67a2 2 0 0 1 0 2.83Z" fill="currentColor" fillOpacity="0.18" />
+                <path d="m9 11 4 4" />
               </svg>
             </button>
 

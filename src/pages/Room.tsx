@@ -1985,7 +1985,13 @@ export default function Room() {
                   penType={penType} penColor={penColor} penWidth={penWidth}
                   iframeRef={iframeRef} interactive={true}
                   eraserMode={eraserMode}
-                  eraserWidth={Math.max(penWidth * 4, 18)}
+                  // AUTONOMOUS: eraser floor bumped from 18 to 32. Combined
+                  // with the 24px hit-radius minimum and drag interpolation
+                  // in AnnotationLayer, the eraser now reliably catches a
+                  // stroke under your cursor every time. Default felt too
+                  // tight before — users reported "sometimes works,
+                  // sometimes not."
+                  eraserWidth={Math.max(penWidth * 4, 32)}
                   shapeTool={shapeTool}
                 />
               )}
