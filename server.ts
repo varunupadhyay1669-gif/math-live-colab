@@ -576,7 +576,19 @@ async function startServer() {
       }
 
       if (role === 'teacher') {
+        // AUTONOMOUS: Tell the previous teacher socket (if it's still
+        // alive — same name, different tab) that it's been deposed.
+        // Without this notification, the old window had every
+        // teacher-only emit silently fail the requireTeacher check on
+        // the server; the tutor saw cursor cards still updating and
+        // assumed everything was fine, but new HTML files / shape
+        // edits / pause toggles never propagated. They'd think "sync
+        // is broken" when actually they were just on the wrong tab.
+        const previousTeacherSocketId = room.teacherSocketId;
         room.teacherSocketId = socket.id;
+        if (previousTeacherSocketId && previousTeacherSocketId !== socket.id) {
+          io.to(previousTeacherSocketId).emit('teacher_replaced', { takenOverBySocketId: socket.id });
+        }
         // Reconnecting teacher: re-request a fresh DOM snapshot for any
         // student who was waiting for one when the previous socket dropped.
         // (Pending students were tied to the old socket; they would have hung
@@ -999,7 +1011,13 @@ async function startServer() {
     const MAX_STROKE_POINTS = 5000;
     socket.on('whiteboard_draw', ({ roomId, stroke }: any) => {
       const room = rooms.get(roomId);
-      if (!isMember(room, socket.id)) return;
+      // AUTONOMOUS: gate on requireTeacherOrInteractive (matches the
+      // image / shape / instrument permission model). Previously any
+      // room member could emit whiteboard_draw — legitimate UI gates
+      // students at canEdit=interactive, but a curious student in
+      // DevTools could bypass that and scribble even in view-only
+      // mode.
+      if (!requireTeacherOrInteractive(room, socket.id)) return;
       // Validate stroke shape — reject anything malformed instead of writing it
       // to canonical state and persisting the corruption to disk.
       if (!stroke || !Array.isArray(stroke.points) || stroke.points.length === 0) return;
@@ -1199,6 +1217,25 @@ async function startServer() {
     // limit so a buggy/malicious client can't fill the room.
     const MAX_TEXTS_PER_ROOM = 1000;
     const MAX_TEXT_LENGTH = 4000;
+    // AUTONOMOUS: Server-side clamp on the client-supplied `updatedAt` /
+    // `createdAt` timestamps. The text update handler uses updatedAt for
+    // last-write-wins arbitration on the client; without server clamping a
+    // client whose system clock is wrong (or a malicious one) could send
+    // Number.MAX_SAFE_INTEGER and PERMANENTLY pin its version — every
+    // subsequent legitimate edit by another user would lose the conflict
+    // because their updatedAt is smaller. Now the server rewrites both
+    // timestamps to its own Date.now() at the moment of receipt, so the
+    // ordering is server-authoritative.
+    const stampText = (text: any) => {
+      const now = Date.now();
+      if (typeof text.createdAt !== 'number' || !Number.isFinite(text.createdAt) || text.createdAt > now) {
+        text.createdAt = now;
+      }
+      // updatedAt is always rewritten — server is the source of truth for
+      // when the change happened (this matches what other CRDT-ish systems do).
+      text.updatedAt = now;
+    };
+
     socket.on('whiteboard_add_text', ({ roomId, text }: any) => {
       const room = rooms.get(roomId);
       if (!requireTeacher(room, socket.id) || !text || typeof text.id !== 'string' || typeof text.text !== 'string') return;
@@ -1206,6 +1243,7 @@ async function startServer() {
       if (room.whiteboard.texts.some((t: any) => t.id === text.id)) return;
       // Cap individual text length so no single label can be megabytes.
       if (text.text.length > MAX_TEXT_LENGTH) text.text = text.text.slice(0, MAX_TEXT_LENGTH);
+      stampText(text);
       room.whiteboard.texts.push(text);
       if (room.whiteboard.texts.length > MAX_TEXTS_PER_ROOM) {
         room.whiteboard.texts = room.whiteboard.texts.slice(-MAX_TEXTS_PER_ROOM);
@@ -1220,6 +1258,7 @@ async function startServer() {
       if (typeof text.text === 'string' && text.text.length > MAX_TEXT_LENGTH) {
         text.text = text.text.slice(0, MAX_TEXT_LENGTH);
       }
+      stampText(text);
       room.whiteboard.texts = room.whiteboard.texts.map((t: any) => t.id === text.id ? text : t);
       socket.to(roomId).emit('whiteboard_update_text', { text });
     });

@@ -1921,6 +1921,17 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
 
     useEffect(() => {
       if (!initialState) return;
+      // AUTONOMOUS: Don't clobber local state while the user is mid-edit.
+      // initialState changes whenever a force_sync_state / session_state
+      // arrives — those can fire during normal use (run_preview, late
+      // student joins). If the teacher is typing in a text label, the
+      // hydration would replace `texts` with the server snapshot (which
+      // might not include the in-progress text), drop the textarea, and
+      // also reset `view` — yanking the textarea position out from
+      // under their cursor. Same logic for an in-flight drag/draw.
+      // The data isn't lost — it'll arrive via incremental whiteboard_*
+      // events. We just defer the bulk-replace until interaction is idle.
+      if (textEditor || dragRef.current) return;
       const normalized = (initialState.strokes || []).map(stroke => ({ ...stroke, id: stroke.id || newId('stroke'), tool: 'pen' as const }));
       setObjects(initialState.objects || []);
       setStrokes(normalized);
@@ -1930,7 +1941,7 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
       if (initialState.instruments) setInstruments(initialState.instruments);
       if (initialState.texts) setTexts(initialState.texts);
       (initialState.objects || []).forEach(loadImage);
-    }, [initialState, loadImage]);
+    }, [initialState, loadImage]); // eslint-disable-line react-hooks/exhaustive-deps
 
     useEffect(() => {
       objects.forEach(loadImage);
@@ -2828,6 +2839,49 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
     // external caller. The toolbar now uses the proper undo/redo system.
     const undoLastStroke = () => deleteStrokeIndices([strokes.length - 1]);
     void undoLastStroke;
+
+    // AUTONOMOUS: Commit any in-flight gesture when isActive flips false.
+    // Without this, if the teacher pen-down → drag → mode-toggles to HTML
+    // mid-stroke, isActive flips false → component returns null → canvas
+    // unmounts → pointerUp never fires → currentStrokeRef points are
+    // discarded and no `whiteboard_draw` ever emits. Student sees nothing,
+    // teacher sees half a stroke disappear. Same bug for shape-create.
+    // Fix: when isActive transitions to false, finalize the in-flight
+    // gesture before the canvas unmounts.
+    useEffect(() => {
+      if (isActive) return;
+      const drag = dragRef.current;
+      if (!drag) return;
+      if (drag.mode === 'draw' && currentStrokeRef.current.length > 1) {
+        const strokeTool: DrawStroke['tool'] =
+          (tool === 'eraser' && eraserMode === 'pixel') ? 'eraser-pixel' :
+          tool === 'highlighter' ? 'highlighter' :
+          'pen';
+        const stroke: DrawStroke = {
+          id: newId('stroke'),
+          points: currentStrokeRef.current,
+          color: strokeTool === 'highlighter' ? '#FACC15' : color,
+          width: strokeTool === 'highlighter' ? Math.max(width * 3, 14) : width,
+          tool: strokeTool,
+          createdAt: Date.now(),
+        };
+        setStrokes(prev => [...prev, stroke]);
+        if (socket) socket.emit('whiteboard_draw', { roomId, stroke });
+      } else if (drag.mode === 'shape-create' && draftShapeRef.current) {
+        const finished = draftShapeRef.current;
+        const minDelta = 4 / view.boardScale;
+        const dx = Math.abs(finished.x2 - finished.x1);
+        const dy = Math.abs(finished.y2 - finished.y1);
+        if (dx > minDelta || dy > minDelta) {
+          setShapes(prev => [...prev, finished]);
+          if (socket && isTeacher) socket.emit('whiteboard_add_shape', { roomId, shape: finished });
+        }
+        setDraftShape(null);
+      }
+      // Always clear in-flight state regardless of which mode.
+      dragRef.current = null;
+      setLiveStroke([]);
+    }, [isActive]); // eslint-disable-line react-hooks/exhaustive-deps
 
     if (!isActive) return null;
 

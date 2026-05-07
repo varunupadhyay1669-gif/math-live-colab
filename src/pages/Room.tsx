@@ -84,6 +84,16 @@ export default function Room() {
   // ── Core State ──
   const [socket, setSocket] = useState<Socket | null>(null);
   const [connected, setConnected] = useState(false);
+  // AUTONOMOUS: When the teacher opens the same room in two browser
+  // tabs, only the most recently joined window owns the teacher seat
+  // server-side (PR #42 takeover gate). The OLD window keeps running
+  // — its student-cursor cards still update, the UI looks healthy —
+  // but every teacher-only emit silently fails the requireTeacher
+  // check. The tutor would think "sync is broken" without realising
+  // they're on the wrong tab. This banner makes the demotion explicit
+  // and disables all write actions on the dethroned tab until the
+  // user reloads.
+  const [teacherReplaced, setTeacherReplaced] = useState(false);
   const [files, setFiles] = useState<FileEntry[]>([]);
   const [activeFileId, setActiveFileId] = useState<string | null>(null);
   const [htmlCode, setHtmlCode] = useState("");
@@ -382,9 +392,19 @@ export default function Room() {
 
     newSocket.on("connect", () => {
       setConnected(true);
+      // Re-claim the teacher seat on (re)connect. If a different tab is
+      // already in the room we'll be allowed (same name) and that other
+      // tab will receive a `teacher_replaced` notification.
+      setTeacherReplaced(false);
       newSocket.emit("join_room", { roomId, userName: teacherName, role: 'teacher' });
     });
     newSocket.on("disconnect", () => setConnected(false));
+
+    // AUTONOMOUS: deposed by another tab — show the banner and stop
+    // pretending we still own the teacher seat. We DON'T navigate away
+    // or close the tab automatically; the user might want to read what
+    // they had open. Just block writes (UI-side) and tell them clearly.
+    newSocket.on("teacher_replaced", () => setTeacherReplaced(true));
 
     newSocket.on("room_state", (state: any) => {
       applySessionState(state);
@@ -1530,6 +1550,31 @@ export default function Room() {
           </button>
         </div>
       </header>
+
+      {/* AUTONOMOUS: Teacher-replaced banner. Shown when another tab of
+          the same teacher took over the room. The banner is non-dismissible
+          (a hard reload fixes it; the user shouldn't keep editing on a
+          dead-write tab). */}
+      {teacherReplaced && (
+        <div className="animate-slide-down px-4 py-2.5 flex items-center justify-center gap-3 text-sm font-semibold"
+          style={{ background: '#FEF2F2', color: '#991B1B', borderBottom: '1px solid #FCA5A5' }}>
+          <span>⚠️ Another tab of yours took over the teacher seat — your changes here are no longer syncing.</span>
+          <button
+            onClick={() => window.location.reload()}
+            style={{
+              padding: '4px 12px',
+              borderRadius: 8,
+              border: '1px solid #DC2626',
+              background: '#fff',
+              color: '#991B1B',
+              fontWeight: 600,
+              cursor: 'pointer',
+            }}
+          >
+            Reload
+          </button>
+        </div>
+      )}
 
       {/* ═══ HAND RAISED BANNER ═══ */}
       {handRaised && (
