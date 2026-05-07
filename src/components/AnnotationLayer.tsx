@@ -66,6 +66,17 @@ interface StrokeData {
 
 const newStrokeId = () => `s-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
+// AUTONOMOUS: Recognisable eraser cursor (pink/cream rubber-block shape).
+// The previous `cell` cursor read as a crosshair/+, completely unrelated to
+// erasing. This SVG cursor is the same silhouette as the toolbar icon, so
+// the user sees the same shape under their hand as on the button. The
+// hot-spot sits at the bottom-tip of the eraser block — that's the point
+// where the eraser actually deletes ink, matching real-world expectation.
+const ERASER_CURSOR = (() => {
+  const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><path d="M19 13l-7.5 7.5a2 2 0 0 1-2.83 0L4.5 16.33a2 2 0 0 1 0-2.83L13.5 4.5a2 2 0 0 1 2.83 0L19.5 7.67a2 2 0 0 1 0 2.83Z" fill="#FBCFE8" stroke="#9D174D" stroke-width="1.6" stroke-linejoin="round"/><path d="m9 11 4 4" stroke="#9D174D" stroke-width="1.6" stroke-linecap="round"/></svg>';
+  return `url('data:image/svg+xml;utf8,${encodeURIComponent(svg)}') 6 18, cell`;
+})();
+
 // Minimum perpendicular distance from a point to a line segment, in
 // canvas-pixel space. Used by the per-stroke eraser to decide which
 // stroke the click landed on.
@@ -387,37 +398,101 @@ export default function AnnotationLayer({
   // cursor (within tolerance), or null. Operates in canvas-pixel space so
   // the tolerance feels consistent regardless of the canvas' rendered
   // dimensions.
-  const hitStrokeAt = useCallback((nx: number, ny: number): string | null => {
+  // AUTONOMOUS: Eraser power-up.
+  //
+  // Old behaviour: tolerance was Math.max(8, eraserWidth/2) — with the
+  // default eraserWidth=18 that's ~9px. Click on a thin stroke missing by
+  // 12px → no erase. User clicks again, sometimes hits, sometimes doesn't.
+  // "Sometimes works, sometimes doesn't" was a real reliability problem.
+  //
+  // hitStrokeAt now returns ALL stroke ids whose closest segment is within
+  // tolerance — not just the first match. Combined with a generous fixed
+  // minimum tolerance (24px), one click reliably bites every stroke under
+  // the eraser tip. Drag-erase calls this on every move AND interpolates
+  // sub-points along the move segment, so a fast trackpad swipe doesn't
+  // skip thin strokes between samples.
+  const ERASER_HIT_FLOOR_PX = 24;
+
+  const hitStrokesAt = useCallback((nx: number, ny: number): string[] => {
     const canvas = canvasRef.current;
-    if (!canvas) return null;
+    if (!canvas) return [];
     const rect = canvas.getBoundingClientRect();
     const px = nx * rect.width;
     const py = ny * rect.height;
-    const tol = Math.max(8, eraserWidth / 2);
-    // Check newest first so overlapping strokes prefer the top one.
+    const tol = Math.max(ERASER_HIT_FLOOR_PX, eraserWidth / 2);
+    const hits: string[] = [];
     for (let i = strokesRef.current.length - 1; i >= 0; i--) {
       const stroke = strokesRef.current[i];
-      if (stroke.kind === 'eraser-pixel') continue; // can't erase the eraser
+      if (stroke.kind === 'eraser-pixel') continue; // can't erase the eraser itself
+      if (!stroke.id) continue;
       const half = stroke.width / 2 + tol;
-      for (let j = 0; j < stroke.points.length - 1; j++) {
-        const a = stroke.points[j];
-        const b = stroke.points[j + 1];
-        if (distanceToSegment(px, py, a.x * rect.width, a.y * rect.height, b.x * rect.width, b.y * rect.height) <= half) {
-          return stroke.id ?? null;
+      let hit = false;
+      // Single-point strokes (a stroke that started and ended at the same
+      // point) have only one entry. Treat that as a circle around the point.
+      if (stroke.points.length === 1) {
+        const a = stroke.points[0];
+        if (distanceToSegment(px, py, a.x * rect.width, a.y * rect.height, a.x * rect.width, a.y * rect.height) <= half) {
+          hit = true;
+        }
+      } else {
+        for (let j = 0; j < stroke.points.length - 1; j++) {
+          const a = stroke.points[j];
+          const b = stroke.points[j + 1];
+          if (distanceToSegment(px, py, a.x * rect.width, a.y * rect.height, b.x * rect.width, b.y * rect.height) <= half) {
+            hit = true;
+            break;
+          }
         }
       }
+      if (hit) hits.push(stroke.id);
     }
-    return null;
+    return hits;
   }, [eraserWidth]);
 
   const eraseStrokeAt = useCallback((nx: number, ny: number) => {
-    const id = hitStrokeAt(nx, ny);
-    if (!id || erasedDuringDragRef.current.has(id)) return;
-    erasedDuringDragRef.current.add(id);
-    strokesRef.current = strokesRef.current.filter(s => s.id !== id);
-    if (socket) socket.emit('draw_delete_stroke', { roomId, strokeId: id });
-    renderStrokes();
-  }, [hitStrokeAt, socket, roomId, renderStrokes]);
+    const ids = hitStrokesAt(nx, ny);
+    if (ids.length === 0) return;
+    let changed = false;
+    for (const id of ids) {
+      if (erasedDuringDragRef.current.has(id)) continue;
+      erasedDuringDragRef.current.add(id);
+      strokesRef.current = strokesRef.current.filter(s => s.id !== id);
+      if (socket) socket.emit('draw_delete_stroke', { roomId, strokeId: id });
+      changed = true;
+    }
+    if (changed) renderStrokes();
+  }, [hitStrokesAt, socket, roomId, renderStrokes]);
+
+  // Interpolate erase between two pointer-move samples. A fast trackpad
+  // swipe can fire moves 50+ canvas-px apart; without sub-point interpolation
+  // a thin stroke between those samples gets skipped entirely. Step size is
+  // tuned to the eraser tolerance — sample at ~1/3 of the tolerance so we
+  // can't possibly miss a stroke that crosses our path.
+  const lastErasePointRef = useRef<{ x: number; y: number } | null>(null);
+  const eraseDragTo = useCallback((nx: number, ny: number) => {
+    const canvas = canvasRef.current;
+    const rect = canvas?.getBoundingClientRect();
+    const last = lastErasePointRef.current;
+    if (!last || !rect) {
+      lastErasePointRef.current = { x: nx, y: ny };
+      eraseStrokeAt(nx, ny);
+      return;
+    }
+    const tol = Math.max(ERASER_HIT_FLOOR_PX, eraserWidth / 2);
+    const stepPx = Math.max(8, tol * 0.6);
+    const stepNx = stepPx / rect.width;
+    const stepNy = stepPx / rect.height;
+    // Choose the larger axis to pick step count.
+    const dx = nx - last.x;
+    const dy = ny - last.y;
+    const distNorm = Math.hypot(dx / stepNx, dy / stepNy);
+    const steps = Math.max(1, Math.ceil(distNorm));
+    for (let i = 1; i <= steps; i++) {
+      const t = i / steps;
+      eraseStrokeAt(last.x + dx * t, last.y + dy * t);
+    }
+    lastErasePointRef.current = { x: nx, y: ny };
+  }, [eraseStrokeAt, eraserWidth]);
 
   // ── Drawing handlers (Pointer Events — supports mouse, pen tablet, and touch) ──
   const startDraw = (e: React.PointerEvent<HTMLCanvasElement>) => {
@@ -439,7 +514,9 @@ export default function AnnotationLayer({
       if (eraserMode === 'stroke') {
         isErasingRef.current = 'stroke';
         erasedDuringDragRef.current = new Set();
-        eraseStrokeAt(pt.x, pt.y);
+        // Reset the drag-interpolation anchor at gesture start.
+        lastErasePointRef.current = null;
+        eraseDragTo(pt.x, pt.y);
       } else {
         // Pixel eraser: draw a stroke tagged 'eraser-pixel'
         isErasingRef.current = 'pixel';
@@ -469,7 +546,9 @@ export default function AnnotationLayer({
     }
     if (isErasingRef.current === 'stroke') {
       const pt = getCanvasCoords(e);
-      eraseStrokeAt(pt.x, pt.y);
+      // Use the interpolating erase so a fast drag doesn't skip thin
+      // strokes between successive pointermove samples.
+      eraseDragTo(pt.x, pt.y);
       return;
     }
     if (isErasingRef.current === 'pixel') {
@@ -531,6 +610,7 @@ export default function AnnotationLayer({
     if (isErasingRef.current === 'stroke') {
       isErasingRef.current = false;
       erasedDuringDragRef.current = new Set();
+      lastErasePointRef.current = null;
       return;
     }
     if (!isDrawingRef.current) return;
@@ -576,7 +656,7 @@ export default function AnnotationLayer({
         className="absolute inset-0 w-full h-full"
         style={{
           cursor: interactive
-            ? (shapeActive ? 'crosshair' : eraserActive ? 'cell' : drawMode ? 'crosshair' : laserMode ? 'none' : 'default')
+            ? (shapeActive ? 'crosshair' : eraserActive ? ERASER_CURSOR : drawMode ? 'crosshair' : laserMode ? 'none' : 'default')
             : 'default',
           pointerEvents: interactive && (drawMode || laserMode || eraserActive || shapeActive) ? 'auto' : 'none',
           touchAction: 'none',
