@@ -160,6 +160,7 @@ export default function StudentView() {
 
   // ── Teacher Status ──
   const [teacherDisconnected, setTeacherDisconnected] = useState(false);
+  const teacherDisconnectedRef = useRef(false);
 
   // ── Join Error ──
   const [joinError, setJoinError] = useState<string | null>(null);
@@ -543,16 +544,22 @@ export default function StudentView() {
     });
 
     // ── Teacher Disconnected ──
+    // AUTONOMOUS: track current "is teacher disconnected" state via a ref
+    // so the user_list listener doesn't capture a stale value. Without
+    // this, "Teacher reconnected!" toast never fired because the listener's
+    // closure saw teacherDisconnected = false from mount.
     newSocket.on("teacher_disconnected", () => {
       setTeacherDisconnected(true);
+      teacherDisconnectedRef.current = true;
       showNotification("⚠️ Teacher disconnected — waiting for reconnection...");
     });
 
     // Clear teacher disconnected when a new user list arrives with a teacher
     newSocket.on("user_list", (list: Array<{ role: string }>) => {
       const hasTeacher = list.some(u => u.role === 'teacher');
-      if (hasTeacher && teacherDisconnected) {
+      if (hasTeacher && teacherDisconnectedRef.current) {
         setTeacherDisconnected(false);
+        teacherDisconnectedRef.current = false;
         showNotification("✅ Teacher reconnected!");
       }
     });

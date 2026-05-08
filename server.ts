@@ -56,6 +56,15 @@ interface RoomData {
   // the whiteboard saw the "Waiting for teacher" placeholder forever
   // because the room had no lastRunHtml to deliver.
   whiteboardMode: boolean;
+  // AUTONOMOUS: Grace-period state when teacher's socket disconnects.
+  // Holds a setTimeout handle; if the same-name teacher reconnects
+  // before the timer fires, the seat is restored transparently and no
+  // teacher_disconnected announcement is made.
+  pendingTeacherDisconnect?: {
+    socketId: string;
+    expectedName: string | undefined;
+    timer: ReturnType<typeof setTimeout>;
+  };
   lastTeacherScroll: any | null;
   zoomLevel: number;
 }
@@ -99,6 +108,18 @@ async function startServer() {
   const io = new Server(httpServer, {
     cors: { origin: '*' },
     maxHttpBufferSize: 5e6, // 5MB for large HTML files
+    // AUTONOMOUS: Survive backgrounded tabs.
+    // Browsers heavily throttle setInterval/setTimeout (and therefore
+    // Socket.IO's heartbeats) on tabs that aren't focused. With Socket.IO's
+    // default pingTimeout=20s + pingInterval=25s, a teacher who alt-tabs
+    // away for 45 seconds gets disconnected — server then declares
+    // "teacher left", clears room.teacherSocketId, and any student who
+    // joins during that window sees "Waiting for teacher" forever.
+    // Bumping the timeout to 60s + interval to 25s gives a generous
+    // buffer for Chrome's 1-minute background-throttle pulse before we
+    // give up on the client.
+    pingTimeout: 60_000,
+    pingInterval: 25_000,
   });
 
   const rooms = new Map<string, RoomData>();
@@ -576,23 +597,48 @@ async function startServer() {
       }
 
       if (role === 'teacher') {
+        const previousTeacherSocketId = room.teacherSocketId;
+
+        // AUTONOMOUS: Cancel any pending teacher-disconnect timer if
+        // this is the same teacher rejoining (after a tab switch).
+        // The grace timer scheduled in the disconnecting handler would
+        // have fired teacher_disconnected to all students otherwise.
+        const wasPendingDisconnect =
+          !!room.pendingTeacherDisconnect &&
+          room.pendingTeacherDisconnect.expectedName === safeName;
+        if (wasPendingDisconnect && room.pendingTeacherDisconnect) {
+          clearTimeout(room.pendingTeacherDisconnect.timer);
+          room.pendingTeacherDisconnect = undefined;
+          console.log(`✅ Teacher ${safeName} returned within grace period — seat restored, no disconnect announced`);
+        }
+
         // AUTONOMOUS: Tell the previous teacher socket (if it's still
         // alive — same name, different tab) that it's been deposed.
         // Without this notification, the old window had every
         // teacher-only emit silently fail the requireTeacher check on
-        // the server; the tutor saw cursor cards still updating and
-        // assumed everything was fine, but new HTML files / shape
-        // edits / pause toggles never propagated. They'd think "sync
-        // is broken" when actually they were just on the wrong tab.
-        const previousTeacherSocketId = room.teacherSocketId;
+        // the server.
         room.teacherSocketId = socket.id;
         if (previousTeacherSocketId && previousTeacherSocketId !== socket.id) {
           io.to(previousTeacherSocketId).emit('teacher_replaced', { takenOverBySocketId: socket.id });
         }
+
+        // AUTONOMOUS: On teacher reconnect (any kind — fresh tab, grace
+        // recovery, page refresh) push the current HTML state to every
+        // student in the room. Students who joined while the teacher was
+        // gone may have seen "Waiting for teacher" placeholder; this is
+        // their unblock. Idempotent on the client (setCurrentHtml is
+        // value-equality-checked, won't rebuild iframe needlessly).
+        if (room.lastRunHtml && room.activeFileId) {
+          io.to(roomId).emit('run_preview', {
+            fileId: room.activeFileId,
+            html: room.lastRunHtml,
+            revision: room.revision,
+          });
+          console.log(`📺 Re-broadcast HTML on teacher reconnect: room=${roomId} fileId=${room.activeFileId}`);
+        }
+
         // Reconnecting teacher: re-request a fresh DOM snapshot for any
         // student who was waiting for one when the previous socket dropped.
-        // (Pending students were tied to the old socket; they would have hung
-        // forever otherwise.)
         if (room.pendingSyncStudents.size > 0) {
           io.to(socket.id).emit('request_html_sync', { requestId: `reconnect-${Date.now()}`, reason: 'teacher_reconnect' });
         }
@@ -623,9 +669,31 @@ async function startServer() {
         socket.emit('interaction', room.lastTeacherScroll);
       }
 
-      // Immediately push content to the joining student so they don't stay on "Waiting for teacher"
-      if (role === 'student' && room.lastRunHtml && room.activeFileId) {
-        socket.emit('run_preview', { fileId: room.activeFileId, html: room.lastRunHtml, revision: room.revision });
+      // AUTONOMOUS: Immediately push content to the joining student so
+      // they don't stay on "Waiting for teacher".
+      //
+      // Previously this required BOTH lastRunHtml AND activeFileId. If
+      // the room was restored from disk after a server restart and
+      // activeFileId got dropped (or if the teacher had never explicitly
+      // hit Run, only uploaded), the student would see the placeholder
+      // forever.
+      //
+      // Now: emit if we have ANY usable HTML — last-run, live snapshot,
+      // OR the source HTML of any file. The fallback chain mirrors the
+      // session_state's effectiveHtml computation. fileId can be null
+      // (the client tolerates it).
+      if (role === 'student') {
+        const fallbackFile = room.activeFileId ? null : (room.files[0] || null);
+        const fileId = room.activeFileId || fallbackFile?.id || null;
+        const html =
+          room.lastRunHtml ||
+          room.liveSnapshotHtml ||
+          (fallbackFile ? fallbackFile.html : null) ||
+          (room.activeFileId ? room.files.find(f => f.id === room.activeFileId)?.html : null) ||
+          null;
+        if (html) {
+          socket.emit('run_preview', { fileId, html, revision: room.revision });
+        }
       }
 
       // If temp explanation content is active, send it to the joining student
@@ -1593,9 +1661,49 @@ async function startServer() {
           io.to(roomId).emit('user_left', { userId: socket.id, userName: user?.name || 'Unknown' });
 
           if (room.teacherSocketId === socket.id) {
-            room.teacherSocketId = null;
-            // Notify students that teacher disconnected
-            io.to(roomId).emit('teacher_disconnected');
+            // AUTONOMOUS: Grace period before declaring "teacher left".
+            //
+            // The most common reason for this disconnect is a tab switch:
+            // browser throttles the backgrounded tab, Socket.IO heartbeat
+            // misses, server gets `disconnecting`. The teacher is still
+            // sitting at their desk; they'll be back in seconds.
+            //
+            // If we IMMEDIATELY emit teacher_disconnected and null the
+            // teacherSocketId, any student who joins during the gap sees
+            // "Waiting for teacher" with no recovery once teacher returns
+            // (because their reconnect generates a NEW socketId and
+            // existing students don't re-fetch).
+            //
+            // Now: the slot is held for GRACE_MS (45s — a bit longer than
+            // the new pingTimeout). If the same-named teacher reconnects
+            // within the grace window, the timer is cancelled and no
+            // disconnect notification is ever sent. Truly-gone teachers
+            // still get cleaned up, just delayed.
+            const TEACHER_DISCONNECT_GRACE_MS = 45_000;
+            const expectedTeacherName = user?.name;
+            const oldSocketId = socket.id;
+            // Mark the slot as "pending-disconnect" but don't null it yet —
+            // join_room's takeover gate uses teacherSocketId existence,
+            // and we want a same-name reconnect to slip in transparently.
+            // If a previous grace timer was running, replace it.
+            if (room.pendingTeacherDisconnect?.timer) clearTimeout(room.pendingTeacherDisconnect.timer);
+            room.pendingTeacherDisconnect = {
+              socketId: oldSocketId,
+              expectedName: expectedTeacherName,
+              timer: setTimeout(() => {
+                // Grace expired — teacher really did leave. Clear the
+                // seat and notify students NOW.
+                const r = rooms.get(roomId);
+                if (!r) return;
+                if (r.teacherSocketId === oldSocketId) {
+                  r.teacherSocketId = null;
+                  io.to(roomId).emit('teacher_disconnected');
+                  console.log(`👋 Teacher ${expectedTeacherName} declared gone after ${TEACHER_DISCONNECT_GRACE_MS}ms grace`);
+                }
+                r.pendingTeacherDisconnect = undefined;
+              }, TEACHER_DISCONNECT_GRACE_MS),
+            };
+            console.log(`⏳ Teacher ${expectedTeacherName} disconnected — holding seat for ${TEACHER_DISCONNECT_GRACE_MS / 1000}s`);
           }
 
           // Check if any students remain — if not, start the 2hr expiry countdown
