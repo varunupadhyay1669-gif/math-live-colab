@@ -1896,6 +1896,102 @@ body {
   justify-content: center;
 }
 
+/* AUTONOMOUS: "My saved boards" panel — appears below the mode picker
+   on Home when this browser has any locally-saved (claimed) rooms.
+   Glass card on the dark home background; each row a clickable open
+   action with a small × to remove. */
+.ml-dark-saved {
+  margin-top: 32px;
+  width: 100%;
+  max-width: 520px;
+  padding: 16px 18px 14px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  border-radius: 16px;
+  backdrop-filter: blur(8px);
+  text-align: left;
+}
+.ml-dark-saved-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.10em;
+  text-transform: uppercase;
+  color: rgba(255,255,255,0.66);
+  margin-bottom: 10px;
+}
+.ml-dark-saved-count {
+  background: rgba(99,102,241,0.22);
+  color: #C7D2FE;
+  border-radius: 10px;
+  padding: 2px 9px;
+  font-size: 10.5px;
+  letter-spacing: 0.04em;
+}
+.ml-dark-saved-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.ml-dark-saved-item {
+  display: flex;
+  align-items: stretch;
+  background: rgba(255,255,255,0.03);
+  border-radius: 10px;
+  overflow: hidden;
+  transition: background 0.15s ease;
+}
+.ml-dark-saved-item:hover {
+  background: rgba(99,102,241,0.10);
+}
+.ml-dark-saved-open {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  padding: 10px 12px;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  color: #fff;
+  text-align: left;
+}
+.ml-dark-saved-label {
+  font-size: 14px;
+  font-weight: 600;
+  margin-bottom: 2px;
+}
+.ml-dark-saved-meta {
+  font-size: 11.5px;
+  color: rgba(255,255,255,0.50);
+  font-family: ui-monospace, SFMono-Regular, monospace;
+}
+.ml-dark-saved-remove {
+  background: transparent;
+  border: none;
+  color: rgba(255,255,255,0.45);
+  font-size: 18px;
+  width: 36px;
+  cursor: pointer;
+  padding: 0;
+  transition: color 0.15s ease, background 0.15s ease;
+}
+.ml-dark-saved-remove:hover {
+  color: #FCA5A5;
+  background: rgba(248,113,113,0.08);
+}
+.ml-dark-saved-more {
+  margin-top: 8px;
+  font-size: 11.5px;
+  color: rgba(255,255,255,0.45);
+  text-align: center;
+}
+
 /* Buttons */
 .ml-dark-btn {
   display: inline-flex;
