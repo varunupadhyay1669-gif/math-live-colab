@@ -1762,6 +1762,118 @@ export default function Room() {
 
             {/* Iframe or Whiteboard */}
             <div className="flex-1 relative overflow-hidden m-3 rounded-xl preview-frame">
+              {/* AUTONOMOUS: Quick-access cluster on the HTML view.
+                  The Whiteboard + Explanation buttons live in the teacher
+                  toolbar too, but the toolbar is horizontally scrollable
+                  and on smaller screens these critical actions get pushed
+                  off-screen. Surfacing them here as floating pills makes
+                  them discoverable: while explaining HTML the teacher can
+                  one-click drop into the whiteboard for a quick math step,
+                  or layer another HTML explanation on top of an example,
+                  without hunting through the toolbar.
+                  Hidden when the surface is already whiteboard or temp
+                  content — those modes have their own affordances. */}
+              {iframeUrl && !showTempContent && !whiteboardMode && (
+                <div className="absolute top-2 left-2 z-20 flex items-center gap-2">
+                  <button
+                    onClick={toggleWhiteboardMode}
+                    className="px-3 py-1.5 rounded-lg text-xs font-semibold shadow-md flex items-center gap-1.5"
+                    style={{
+                      background: 'rgba(255,255,255,0.95)',
+                      color: '#4F46E5',
+                      border: '1px solid rgba(79,70,229,0.25)',
+                    }}
+                    title="Open the shared whiteboard temporarily — your HTML is paused but kept loaded"
+                  >
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      <rect x="3" y="4" width="18" height="13" rx="1.6" />
+                      <path d="M8 21l4-4 4 4" />
+                      <path d="M7 12l3-3 3 2 4-4" />
+                    </svg>
+                    Whiteboard
+                  </button>
+                  <button
+                    onClick={() => tempFileInputRef.current?.click()}
+                    className="px-3 py-1.5 rounded-lg text-xs font-semibold shadow-md flex items-center gap-1.5"
+                    style={{
+                      background: 'rgba(255,255,255,0.95)',
+                      color: '#B45309',
+                      border: '1px solid rgba(245,158,11,0.30)',
+                    }}
+                    title="Upload an HTML explainer to overlay on top of the current example"
+                  >
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      <path d="M4 4h6a3 3 0 013 3v13a2 2 0 00-2-2H4z" />
+                      <path d="M20 4h-6a3 3 0 00-3 3v13a2 2 0 012-2h7z" />
+                    </svg>
+                    Explain over this
+                  </button>
+                </div>
+              )}
+
+              {/* AUTONOMOUS: When showing temp explanation content,
+                  surface a quick "Back to main" button and a "Whiteboard"
+                  shortcut. Without these, the teacher had to scroll the
+                  toolbar to find the Exit / Whiteboard pills. */}
+              {showTempContent && tempContent && !whiteboardMode && (
+                <div className="absolute top-2 left-2 z-20 flex items-center gap-2">
+                  <button
+                    onClick={clearTempContent}
+                    className="px-3 py-1.5 rounded-lg text-xs font-semibold shadow-md flex items-center gap-1.5"
+                    style={{
+                      background: '#0F172A',
+                      color: '#fff',
+                      border: '1px solid rgba(255,255,255,0.12)',
+                    }}
+                    title={`Showing: ${tempContent.name} — click to return to the main HTML`}
+                  >
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      <path d="M19 12H5" /><path d="M12 19l-7-7 7-7" />
+                    </svg>
+                    Back to main
+                  </button>
+                  <button
+                    onClick={toggleWhiteboardMode}
+                    className="px-3 py-1.5 rounded-lg text-xs font-semibold shadow-md flex items-center gap-1.5"
+                    style={{
+                      background: 'rgba(255,255,255,0.95)',
+                      color: '#4F46E5',
+                      border: '1px solid rgba(79,70,229,0.25)',
+                    }}
+                    title="Open the shared whiteboard"
+                  >
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      <rect x="3" y="4" width="18" height="13" rx="1.6" />
+                      <path d="M8 21l4-4 4 4" />
+                      <path d="M7 12l3-3 3 2 4-4" />
+                    </svg>
+                    Whiteboard
+                  </button>
+                </div>
+              )}
+
+              {/* AUTONOMOUS: When the whiteboard is open, surface a quick
+                  "Back to HTML" pill (top-left) so the teacher can return
+                  to the simulation without scrolling the toolbar. Only
+                  shows if there's an HTML to return to. */}
+              {whiteboardMode && iframeUrl && (
+                <button
+                  onClick={toggleWhiteboardMode}
+                  className="absolute top-2 left-2 z-30 px-3 py-1.5 rounded-lg text-xs font-semibold shadow-md flex items-center gap-1.5"
+                  style={{
+                    background: '#0F172A',
+                    color: '#fff',
+                    border: '1px solid rgba(255,255,255,0.12)',
+                  }}
+                  title="Return to the HTML simulation — your whiteboard work is saved"
+                >
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <path d="M19 12H5" /><path d="M12 19l-7-7 7-7" />
+                  </svg>
+                  Back to HTML
+                </button>
+              )}
+
               {/* Dual View toggle — appears once content is loaded */}
               {iframeUrl && !showTempContent && !whiteboardMode && (
                 <button
