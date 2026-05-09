@@ -94,10 +94,24 @@ export default function Room() {
   // and disables all write actions on the dethroned tab until the
   // user reloads.
   const [teacherReplaced, setTeacherReplaced] = useState(false);
+  // AUTONOMOUS: Tracks whether we've successfully connected at least once.
+  // The "connect" event fires on initial connect AND on every reconnect;
+  // we want to distinguish them to drive the re-seed-server-with-cached-
+  // HTML logic (only re-seed on reconnects, not the first connect).
+  const hasEverConnectedRef = useRef(false);
+  // Refs that mirror state we need to read from inside the socket
+  // setup useEffect (which has a small dep list and would otherwise
+  // see stale closure values).
+  const previewHtmlRef = useRef('');
+  const activeFileIdRef = useRef<string | null>(null);
   const [files, setFiles] = useState<FileEntry[]>([]);
   const [activeFileId, setActiveFileId] = useState<string | null>(null);
   const [htmlCode, setHtmlCode] = useState("");
   const [previewHtml, setPreviewHtml] = useState("");
+  // AUTONOMOUS: keep ref in sync so the connect handler can read the
+  // current value without going stale.
+  useEffect(() => { previewHtmlRef.current = previewHtml; }, [previewHtml]);
+  useEffect(() => { activeFileIdRef.current = activeFileId; }, [activeFileId]);
   const [iframeUrl, setIframeUrl] = useState("");
   const [users, setUsers] = useState<UserInfo[]>([]);
   const [cursors, setCursors] = useState<Record<string, Cursor>>({});
@@ -391,12 +405,32 @@ export default function Room() {
     setSocket(newSocket);
 
     newSocket.on("connect", () => {
+      const wasReconnect = hasEverConnectedRef.current;
+      hasEverConnectedRef.current = true;
       setConnected(true);
       // Re-claim the teacher seat on (re)connect. If a different tab is
       // already in the room we'll be allowed (same name) and that other
       // tab will receive a `teacher_replaced` notification.
       setTeacherReplaced(false);
       newSocket.emit("join_room", { roomId, userName: teacherName, role: 'teacher' });
+
+      // AUTONOMOUS: On a reconnect (NOT the initial connect), re-seed the
+      // server with our cached HTML state. Render's free tier filesystem
+      // is ephemeral — between teacher upload and student join, a
+      // redeploy can wipe the .rooms/ JSON and the server has no record
+      // of the lesson HTML, while THIS browser still has it loaded.
+      // Re-emitting run_preview after reconnect makes the teacher's
+      // local state the source of truth for the server. Idempotent —
+      // bumps revision and broadcasts; students with the same content
+      // already see no change (setPreviewHtml is value-equality
+      // checked).
+      if (wasReconnect && activeFileIdRef.current && previewHtmlRef.current) {
+        newSocket.emit("run_preview", {
+          fileId: activeFileIdRef.current,
+          html: previewHtmlRef.current,
+        });
+        console.info('[reconnect] re-seeded server with cached HTML');
+      }
     });
     newSocket.on("disconnect", () => setConnected(false));
 
