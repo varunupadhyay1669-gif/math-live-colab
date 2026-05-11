@@ -141,6 +141,14 @@ export default function Room() {
   const [isDragging, setIsDragging] = useState(false);
   const [showPasteModal, setShowPasteModal] = useState(false);
   const [pasteCode, setPasteCode] = useState("");
+  // AUTONOMOUS: "Explain over this" can be a file OR pasted HTML.
+  // showExplainModal opens a small chooser; the user picks file or
+  // types HTML into the inline textarea. Separate from the main paste
+  // flow (showPasteModal) because that flow adds to room.files,
+  // whereas explanation submits via show_temp_content.
+  const [showExplainModal, setShowExplainModal] = useState(false);
+  const [explainHtml, setExplainHtml] = useState("");
+  const [explainName, setExplainName] = useState("");
   const [pasteFileName, setPasteFileName] = useState("");
 
   // ── Drawing & Annotation ──
@@ -1284,18 +1292,31 @@ export default function Room() {
   };
 
   // ── Temporary Explanation Content ──
+  // AUTONOMOUS: Single commit path for both file-uploaded and pasted
+  // explanation content. Used by handleUploadExplanation (file) and the
+  // Explain modal's "Show" button (paste). Keeps behaviour identical
+  // between the two paths and ensures any future change (eg
+  // additional payload fields, validation) only needs one update.
+  const submitExplanation = (html: string, name: string) => {
+    if (!socket) return;
+    const trimmed = html.trim();
+    if (!trimmed) return;
+    const safeName = name.trim() || `Explanation-${new Date().toLocaleTimeString()}`;
+    setTempContent({ html: trimmed, name: safeName });
+    socket.emit('show_temp_content', { roomId, html: trimmed, name: safeName });
+    setShowTempContent(true);
+    showNotif(`📚 Showing explanation: ${safeName}`);
+  };
+
   const handleUploadExplanation = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (!file || !socket) return;
+    if (!file) return;
     if (file.size > 2 * 1024 * 1024) { showNotif(`⚠️ File too large (max 2MB)`); return; }
     const reader = new FileReader();
     reader.onload = (event) => {
       const content = String(event.target?.result || '');
       const name = file.name.replace(/\.html?$/i, '');
-      setTempContent({ html: content, name });
-      socket.emit('show_temp_content', { roomId, html: content, name });
-      setShowTempContent(true);
-      showNotif(`📚 Showing explanation: ${name}`);
+      submitExplanation(content, name);
     };
     reader.readAsText(file);
     e.target.value = '';
@@ -1809,7 +1830,7 @@ export default function Room() {
               whiteboardMode={whiteboardMode}
               explanationActive={showTempContent && !!tempContent}
               explanationName={tempContent?.name ?? null}
-              onUploadExplanation={() => tempFileInputRef.current?.click()}
+              onUploadExplanation={() => setShowExplainModal(true)}
               onExitExplanation={clearTempContent}
               eraserMode={eraserMode}
               onSetEraserMode={setEraserMode}
@@ -1883,14 +1904,14 @@ export default function Room() {
                     Whiteboard
                   </button>
                   <button
-                    onClick={() => tempFileInputRef.current?.click()}
+                    onClick={() => setShowExplainModal(true)}
                     className="px-3 py-1.5 rounded-lg text-xs font-semibold shadow-md flex items-center gap-1.5"
                     style={{
                       background: 'rgba(255,255,255,0.95)',
                       color: '#B45309',
                       border: '1px solid rgba(245,158,11,0.30)',
                     }}
-                    title="Upload an HTML explainer to overlay on top of the current example"
+                    title="Upload an HTML explainer or paste HTML code to overlay on top of the current example"
                   >
                     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                       <path d="M4 4h6a3 3 0 013 3v13a2 2 0 00-2-2H4z" />
@@ -2272,6 +2293,82 @@ export default function Room() {
                 <button onClick={handlePasteSubmit} disabled={!pasteCode.trim()}
                   className="btn-primary disabled:opacity-40">
                   Add & Run ▶
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* AUTONOMOUS: EXPLAIN OVER THIS modal — file OR paste path.
+          Previously the Explain button jumped straight to the OS file
+          picker; the user reported they wanted to paste HTML code
+          directly too. This modal offers both: a primary textarea for
+          paste, with a secondary "Choose a file" button. The two paths
+          flow through the same submitExplanation() helper so behaviour
+          is identical from there on. Name input is optional — falls
+          back to a timestamp label. */}
+      {showExplainModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4"
+          style={{ background: 'rgba(0,0,0,0.3)', backdropFilter: 'blur(4px)' }}>
+          <div className="w-full max-w-2xl animate-bounce-in"
+            style={{ background: 'var(--bg-card)', borderRadius: 'var(--radius-xl)', border: '1px solid var(--border-subtle)', boxShadow: 'var(--shadow-xl)' }}>
+            <div className="flex items-center justify-between p-5 pb-0">
+              <h3 className="font-display text-lg font-bold">📚 Explain Over This</h3>
+              <button
+                onClick={() => { setShowExplainModal(false); setExplainHtml(''); setExplainName(''); }}
+                style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '20px' }}
+              >✕</button>
+            </div>
+            <div className="p-5 space-y-4">
+              <p style={{ color: 'var(--text-muted)', fontSize: 13, margin: 0 }}>
+                Layer an HTML explainer on top of the current example. Paste the code below, or pick a file.
+              </p>
+              <input
+                value={explainName}
+                onChange={(e) => setExplainName(e.target.value)}
+                placeholder="Title (optional, e.g. Step-by-step quadratic)"
+                className="input-field text-sm"
+              />
+              <textarea
+                value={explainHtml}
+                onChange={(e) => setExplainHtml(e.target.value)}
+                placeholder="Paste your HTML code here..."
+                className="input-field code-editor"
+                style={{ minHeight: '250px', resize: 'vertical', lineHeight: '1.6', background: 'var(--bg-code)', color: '#D4D4D8' }}
+              />
+              <div className="flex gap-3 justify-end items-center">
+                <button
+                  onClick={() => {
+                    // "Or choose a file" — trigger the existing file
+                    // input. The picker's onChange handler routes to
+                    // submitExplanation just like the textarea path.
+                    setShowExplainModal(false);
+                    setExplainHtml('');
+                    setExplainName('');
+                    tempFileInputRef.current?.click();
+                  }}
+                  className="btn-secondary"
+                  title="Pick an .html file from your computer instead"
+                >
+                  Or choose a file…
+                </button>
+                <div style={{ flex: 1 }} />
+                <button
+                  onClick={() => { setShowExplainModal(false); setExplainHtml(''); setExplainName(''); }}
+                  className="btn-secondary"
+                >Cancel</button>
+                <button
+                  onClick={() => {
+                    submitExplanation(explainHtml, explainName);
+                    setShowExplainModal(false);
+                    setExplainHtml('');
+                    setExplainName('');
+                  }}
+                  disabled={!explainHtml.trim()}
+                  className="btn-primary disabled:opacity-40"
+                >
+                  Show explainer ▶
                 </button>
               </div>
             </div>
