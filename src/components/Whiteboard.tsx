@@ -1,5 +1,87 @@
 import React, { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import { Socket } from 'socket.io-client';
+import katex from 'katex';
+
+// AUTONOMOUS: KaTeX render helper. Safe-fails on invalid LaTeX (returns
+// the source verbatim wrapped in a soft-error span) so a typo doesn't
+// crash the whiteboard. throwOnError: false keeps KaTeX permissive.
+function renderLatexToHtml(latex: string): string {
+  try {
+    return katex.renderToString(latex, {
+      throwOnError: false,
+      output: 'html',
+      strict: 'ignore',
+      // Display mode for big block math when wrapped in $$ ... $$
+      displayMode: latex.startsWith('$$') && latex.endsWith('$$'),
+    });
+  } catch (err) {
+    return `<span style="color:#DC2626;font-family:monospace;">[invalid: ${
+      String(err).replace(/[<>&]/g, c => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' }[c] || c))
+    }]</span>`;
+  }
+}
+
+// Strip $...$ / $$...$$ delimiters before rendering. KaTeX expects raw
+// LaTeX, not LaTeX-with-delimiters. We let the user type either form.
+function stripMathDelimiters(s: string): string {
+  const trimmed = s.trim();
+  if (trimmed.startsWith('$$') && trimmed.endsWith('$$') && trimmed.length > 4) {
+    return trimmed.slice(2, -2);
+  }
+  if (trimmed.startsWith('$') && trimmed.endsWith('$') && trimmed.length > 2) {
+    return trimmed.slice(1, -1);
+  }
+  return trimmed;
+}
+
+// AUTONOMOUS: KaTeX DOM-overlay component. Absolutely positioned at the
+// label's current screen-space anchor; scales font-size with the board's
+// current zoom so the math grows / shrinks naturally.
+// `pointer-events: none` so canvas pointer handlers still fire underneath
+// (drag/select/draw lands on the canvas, not the math overlay).
+// onMeasure reports rendered pixel size back to the parent so hit-testing
+// can use real bbox dimensions instead of guessing.
+// AUTONOMOUS: types loose because this codebase has no @types/react;
+// React's reserved `key` prop is rejected by strict component-prop types.
+// Same workaround as ErrorBoundary.tsx / ShortcutsOverlay.tsx.
+function MathLabel(props: any) {
+  const latex: string = props.latex;
+  const x: number = props.x;
+  const y: number = props.y;
+  const cssFontSize: number = props.cssFontSize;
+  const color: string = props.color;
+  const onMeasure: ((w: number, h: number) => void) | undefined = props.onMeasure;
+  const ref = useRef<HTMLDivElement>(null);
+  const html = renderLatexToHtml(latex);
+  useEffect(() => {
+    if (!ref.current || !onMeasure) return;
+    // Defer to next frame so KaTeX has painted before we measure.
+    const handle = requestAnimationFrame(() => {
+      if (!ref.current) return;
+      onMeasure(ref.current.offsetWidth, ref.current.offsetHeight);
+    });
+    return () => cancelAnimationFrame(handle);
+  }, [html, cssFontSize, onMeasure]);
+  return (
+    <div
+      ref={ref}
+      style={{
+        position: 'absolute',
+        left: `${x}px`,
+        top: `${y}px`,
+        color,
+        fontSize: `${cssFontSize}px`,
+        pointerEvents: 'none',
+        userSelect: 'none',
+        // Match KaTeX's default line-height so the bbox lines up with
+        // what the user expects. KaTeX itself sets line-height inside.
+        lineHeight: 1.2,
+        whiteSpace: 'nowrap',
+      }}
+      dangerouslySetInnerHTML={{ __html: html }}
+    />
+  );
+}
 
 interface WhiteboardProps {
   socket: Socket | null;
@@ -134,6 +216,12 @@ interface BoardText {
   // does not. So editing an old label doesn't suddenly bring it to the
   // front of everything painted on top of it.
   createdAt?: number;
+  // AUTONOMOUS: Math mode. When true, `text` is treated as LaTeX source
+  // and rendered via KaTeX as a DOM overlay positioned in board space.
+  // When false (default), it's plain text rendered on canvas as before.
+  // Stored explicitly (not auto-detected) so a teacher writing "$2" in
+  // plain text doesn't suddenly render as math.
+  latex?: boolean;
 }
 
 interface BoardView {
@@ -322,6 +410,7 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
       value: string;
       fontSize: number;
       color: string;
+      latex: boolean;        // toggle: plain text vs KaTeX-rendered math
     } | null>(null);
     const textEditorRef = useRef<HTMLTextAreaElement>(null);
     const [currentStroke, setCurrentStroke] = useState<DrawPoint[]>([]);
@@ -674,7 +763,22 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
     // maximum. Height is fontSize * lineHeightRatio per line. The bbox
     // origin is the text's top-left (text.x, text.y).
     const measureTextRef = useRef<HTMLCanvasElement | null>(null);
+    // AUTONOMOUS: Per-id cache of rendered math bbox. The DOM-overlay
+    // math text component reports its rendered size back via this map
+    // after KaTeX paints; hit-testing reads from here. board-space units.
+    const mathBboxesRef = useRef<Map<string, { w: number; h: number }>>(new Map());
+
     const measureText = useCallback((text: BoardText): { x: number; y: number; w: number; h: number; lines: string[] } => {
+      // For LaTeX text, use the cached bbox reported by the KaTeX DOM
+      // overlay. If we don't have one yet (e.g. brand-new text not yet
+      // mounted), use a rough estimate so the marquee/selection chrome
+      // doesn't collapse to zero.
+      if (text.latex) {
+        const cached = mathBboxesRef.current.get(text.id);
+        const w = cached?.w ?? Math.max(120, text.text.length * text.fontSize * 0.45);
+        const h = cached?.h ?? text.fontSize * 1.4;
+        return { x: text.x, y: text.y, w, h, lines: [text.text] };
+      }
       if (!measureTextRef.current) {
         measureTextRef.current = document.createElement('canvas');
       }
@@ -754,6 +858,7 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
         value: existing?.text ?? '',
         fontSize: existing?.fontSize ?? textFontSize,
         color: existing?.color ?? color,
+        latex: existing?.latex ?? false,
       });
     }, [color, textFontSize]);
 
@@ -802,6 +907,7 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
           color: ed.color,
           createdAt: existing?.createdAt ?? Date.now(),
           updatedAt: Date.now(),
+          latex: ed.latex,
         };
         updateText(after);
         if (before) {
@@ -821,6 +927,7 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
           color: ed.color,
           createdAt: now,
           updatedAt: now,
+          latex: ed.latex,
         };
         addText(t);
         recordAction({
@@ -1501,8 +1608,11 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
       // ── Text labels ──
       // The currently-being-edited text (if any) is rendered transparently
       // so it doesn't overlap the textarea overlay.
+      // AUTONOMOUS: LaTeX (math) labels are rendered as DOM overlays (see
+      // the JSX below); the canvas pass skips them so we don't double-render.
       const drawText = (t: BoardText) => {
         if (textEditor && textEditor.id === t.id) return; // hidden during edit
+        if (t.latex) return; // rendered as a DOM overlay, not on canvas
         ctx.save();
         ctx.fillStyle = t.color;
         ctx.font = `${t.fontSize}px ${TEXT_FONT_FAMILY}`;
@@ -3163,60 +3273,165 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
             const screenY = textEditor.boardY * view.boardScale + view.boardOffsetY;
             const cssFontSize = Math.max(8, textEditor.fontSize * view.boardScale);
             return (
-              <textarea
-                ref={textEditorRef}
-                autoFocus
-                value={textEditor.value}
-                onChange={(e) => setTextEditor(ed => ed ? { ...ed, value: e.target.value } : ed)}
-                onBlur={commitTextEditor}
-                onKeyDown={(e) => {
-                  if (e.key === 'Escape') {
-                    e.preventDefault();
-                    cancelTextEditor();
-                  } else if (e.key === 'Enter' && !e.shiftKey) {
-                    // Enter commits; Shift+Enter inserts a newline.
-                    e.preventDefault();
-                    commitTextEditor();
-                  }
-                  // Stop the global key handler from also acting on these keys
-                  // while the editor is open (Backspace would delete selected
-                  // shapes otherwise).
-                  e.stopPropagation();
-                }}
+              <div
                 style={{
                   position: 'absolute',
                   left: `${screenX}px`,
                   top: `${screenY}px`,
-                  // Important: padding/border 0 so what the user types lines
-                  // up exactly with where the committed text will render.
-                  margin: 0,
-                  padding: 0,
-                  border: 'none',
-                  outline: '2px solid #2563eb',
-                  outlineOffset: '2px',
-                  background: 'rgba(255,255,255,0.95)',
-                  color: textEditor.color,
-                  fontFamily: TEXT_FONT_FAMILY,
-                  fontSize: `${cssFontSize}px`,
-                  lineHeight: TEXT_LINE_HEIGHT_RATIO,
-                  // Width grows with content; height auto-fits via rows
-                  minWidth: `${Math.max(80, cssFontSize * 6)}px`,
-                  width: 'auto',
-                  resize: 'none',
-                  overflow: 'hidden',
-                  whiteSpace: 'pre',
                   zIndex: 40,
-                  caretColor: textEditor.color,
-                  boxShadow: '0 4px 14px rgba(15,23,42,0.18)',
-                  borderRadius: 4,
+                  display: 'flex',
+                  flexDirection: 'column',
+                  alignItems: 'flex-start',
                 }}
-                rows={Math.max(1, textEditor.value.split('\n').length)}
-                // Auto-grow horizontally too (best effort — relies on
-                // the textarea's intrinsic width with whiteSpace: 'pre').
-                cols={Math.max(8, ...textEditor.value.split('\n').map(l => l.length + 1))}
-              />
+              >
+                {/* AUTONOMOUS: Math-mode toggle anchored just above the
+                    textarea. Click "ƒx" → text is rendered as KaTeX on
+                    commit. While in math mode the textarea shows a live
+                    rendered preview below it so the teacher can see the
+                    result as they type. */}
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 6,
+                    marginBottom: 4,
+                    fontSize: 11,
+                    fontWeight: 600,
+                  }}
+                  // Don't steal focus from the textarea on click of the
+                  // toggle — onMouseDown preventDefault keeps the cursor
+                  // inside the textarea so blur-commit doesn't fire.
+                  onMouseDown={(e) => e.preventDefault()}
+                >
+                  <button
+                    onClick={(e) => {
+                      e.preventDefault();
+                      setTextEditor(ed => ed ? { ...ed, latex: !ed.latex } : ed);
+                      // Re-focus the textarea so typing continues.
+                      requestAnimationFrame(() => textEditorRef.current?.focus());
+                    }}
+                    style={{
+                      padding: '3px 10px',
+                      borderRadius: 6,
+                      border: textEditor.latex ? '1px solid #4F46E5' : '1px solid #D4D4D8',
+                      background: textEditor.latex ? '#4F46E5' : '#fff',
+                      color: textEditor.latex ? '#fff' : '#4F46E5',
+                      cursor: 'pointer',
+                      fontFamily: 'ui-serif, Georgia, serif',
+                      fontStyle: 'italic',
+                      fontWeight: 700,
+                      fontSize: 13,
+                      boxShadow: '0 2px 5px rgba(15,23,42,0.10)',
+                    }}
+                    title={textEditor.latex ? 'Math mode ON — type LaTeX (eg. x^2, \\frac{a}{b})' : 'Switch to math mode — render typed LaTeX as proper equations'}
+                  >
+                    ƒx
+                  </button>
+                  {textEditor.latex && (
+                    <span style={{ color: '#6B7280', fontSize: 10.5 }}>
+                      LaTeX · Enter to commit
+                    </span>
+                  )}
+                </div>
+                <textarea
+                  ref={textEditorRef}
+                  autoFocus
+                  value={textEditor.value}
+                  onChange={(e) => setTextEditor(ed => ed ? { ...ed, value: e.target.value } : ed)}
+                  onBlur={commitTextEditor}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Escape') {
+                      e.preventDefault();
+                      cancelTextEditor();
+                    } else if (e.key === 'Enter' && !e.shiftKey) {
+                      // Enter commits; Shift+Enter inserts a newline.
+                      e.preventDefault();
+                      commitTextEditor();
+                    }
+                    // Stop the global key handler from also acting on these keys
+                    // while the editor is open (Backspace would delete selected
+                    // shapes otherwise).
+                    e.stopPropagation();
+                  }}
+                  style={{
+                    // Important: padding/border 0 so what the user types lines
+                    // up exactly with where the committed text will render.
+                    margin: 0,
+                    padding: 0,
+                    border: 'none',
+                    outline: '2px solid #2563eb',
+                    outlineOffset: '2px',
+                    background: 'rgba(255,255,255,0.95)',
+                    color: textEditor.color,
+                    fontFamily: textEditor.latex ? 'ui-monospace, SFMono-Regular, monospace' : TEXT_FONT_FAMILY,
+                    fontSize: `${cssFontSize}px`,
+                    lineHeight: TEXT_LINE_HEIGHT_RATIO,
+                    // Width grows with content; height auto-fits via rows
+                    minWidth: `${Math.max(80, cssFontSize * 6)}px`,
+                    width: 'auto',
+                    resize: 'none',
+                    overflow: 'hidden',
+                    whiteSpace: 'pre',
+                    caretColor: textEditor.color,
+                    boxShadow: '0 4px 14px rgba(15,23,42,0.18)',
+                    borderRadius: 4,
+                  }}
+                  rows={Math.max(1, textEditor.value.split('\n').length)}
+                  cols={Math.max(8, ...textEditor.value.split('\n').map(l => l.length + 1))}
+                />
+                {/* AUTONOMOUS: Live KaTeX preview while editing in math
+                    mode. Shows below the source textarea so the teacher
+                    can see the rendered equation as they type. */}
+                {textEditor.latex && textEditor.value.trim() && (
+                  <div
+                    style={{
+                      marginTop: 8,
+                      padding: '6px 10px',
+                      background: '#FAFAF9',
+                      border: '1px solid #E5E7EB',
+                      borderRadius: 6,
+                      color: textEditor.color,
+                      fontSize: `${cssFontSize}px`,
+                      lineHeight: 1.2,
+                      maxWidth: 600,
+                    }}
+                    dangerouslySetInnerHTML={{ __html: renderLatexToHtml(stripMathDelimiters(textEditor.value)) }}
+                  />
+                )}
+              </div>
             );
           })()}
+
+          {/* AUTONOMOUS: KaTeX-rendered math labels as DOM overlays.
+              Plain text labels render on canvas (via redrawCanvas);
+              latex labels render here so KaTeX HTML is honoured.
+              Each math label is absolutely positioned in board space:
+              left/top mapped through current view, font-size scaled with
+              boardScale so the math grows/shrinks with the canvas. */}
+          {texts.map(t => {
+            if (!t.latex) return null;
+            if (textEditor && textEditor.id === t.id) return null; // hidden during edit
+            const screenX = t.x * view.boardScale + view.boardOffsetX;
+            const screenY = t.y * view.boardScale + view.boardOffsetY;
+            const cssFontSize = Math.max(8, t.fontSize * view.boardScale);
+            return (
+              <MathLabel
+                key={t.id}
+                latex={stripMathDelimiters(t.text)}
+                x={screenX}
+                y={screenY}
+                cssFontSize={cssFontSize}
+                color={t.color}
+                onMeasure={(w, h) => {
+                  // Convert measured pixel size to board-space and cache.
+                  mathBboxesRef.current.set(t.id, {
+                    w: w / view.boardScale,
+                    h: h / view.boardScale,
+                  });
+                }}
+              />
+            );
+          })}
 
           <div className="whiteboard-hint">
             Space + drag pans. Wheel zooms. Select image or stroke, then press Delete.
