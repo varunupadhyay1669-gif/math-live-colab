@@ -2,7 +2,17 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- AUTONOMOUS: iPad/iOS — disable browser pinch-zoom and double-tap
+         zoom so the canvas owns all gesture input. Without
+         user-scalable=no + maximum-scale=1, iOS Safari hijacks
+         two-finger pinch and double-tap, which made the whiteboard
+         drawing surface unusable on iPad. The canvas has its own
+         pan/zoom gestures (wheel/trackpad) — we don't want the page
+         to zoom underneath them. -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta name="format-detection" content="telephone=no" />
     <meta name="description" content="Live interactive maths classroom — upload HTML simulations and collaborate with students in real-time." />
     <meta name="theme-color" content="#FAFBFC" />
     <title>MathsLive — Interactive Teaching Platform</title>

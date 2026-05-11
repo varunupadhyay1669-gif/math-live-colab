@@ -2676,6 +2676,44 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
       };
     }, [isActive]);
 
+    // AUTONOMOUS: [iPad fix] - Native non-passive touch listeners.
+    //
+    // Students on iPad reported they couldn't draw on the whiteboard.
+    // touch-action:none on the canvas SHOULD prevent the browser from
+    // hijacking touch as scroll/zoom, but iOS Safari has a long history
+    // of being inconsistent about it — especially for non-Pencil touches
+    // where the first move event sometimes reverts to scroll behaviour
+    // before the canvas's pointermove handler fires.
+    //
+    // Safest fix: attach native non-passive touch listeners that always
+    // preventDefault(). React's synthetic onPointer* handlers still
+    // drive the actual drawing logic (handlePointerDown/Move/Up), but
+    // these belt-and-braces listeners ensure iOS never gets a chance
+    // to interpret the touch as a page gesture.
+    useEffect(() => {
+      if (!isActive) return;
+      const canvas = canvasRef.current;
+      const wrap = containerRef.current;
+      if (!canvas || !wrap) return;
+      // Multi-finger touches (pinch) should also not zoom the page.
+      // touch-action:none on the canvas only covers the canvas pixels —
+      // a pinch starting on the wrap padding/border could otherwise
+      // bleed through to the browser's gesture handler.
+      const blockTouch = (e: TouchEvent) => {
+        e.preventDefault();
+      };
+      canvas.addEventListener('touchstart', blockTouch, { passive: false });
+      canvas.addEventListener('touchmove', blockTouch, { passive: false });
+      wrap.addEventListener('touchstart', blockTouch, { passive: false });
+      wrap.addEventListener('touchmove', blockTouch, { passive: false });
+      return () => {
+        canvas.removeEventListener('touchstart', blockTouch);
+        canvas.removeEventListener('touchmove', blockTouch);
+        wrap.removeEventListener('touchstart', blockTouch);
+        wrap.removeEventListener('touchmove', blockTouch);
+      };
+    }, [isActive]);
+
     // AUTONOMOUS: [ORDER-1 CRITICAL] - Page-wide guard against browser zoom
     // while the whiteboard is mounted.
     //
@@ -3069,7 +3107,16 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
             ref={canvasRef}
             className="absolute inset-0"
             style={{
+              // AUTONOMOUS: [iPad fix] - Belt-and-braces CSS for iOS.
+              // touch-action:none should stop browser-side gestures, but
+              // we also explicitly disable Safari's text-selection /
+              // callout / touch-highlight behaviours that can interfere
+              // with drawing on iPad.
               touchAction: 'none',
+              WebkitUserSelect: 'none',
+              WebkitTouchCallout: 'none',
+              WebkitTapHighlightColor: 'transparent',
+              userSelect: 'none',
               cursor:
                 tool === 'pan' || spacePan ? HAND_CURSOR :
                 tool === 'select' ? 'default' :

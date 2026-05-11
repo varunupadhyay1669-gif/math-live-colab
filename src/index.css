@@ -1251,6 +1251,16 @@ body {
   position: absolute;
   inset: 0;
   overflow: hidden;
+  /* AUTONOMOUS: [iPad fix] - belt-and-braces touch behaviour. The
+     canvas inside already has touch-action:none, but the wrap padding
+     around it (where the rail sits) also needs to refuse browser-level
+     scroll/zoom gestures so a pinch landing on wrap-padding doesn't
+     slip through to iOS Safari's gesture handler. */
+  touch-action: none;
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
 }
 
 .whiteboard-rail {

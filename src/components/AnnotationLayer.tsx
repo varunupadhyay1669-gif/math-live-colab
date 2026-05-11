@@ -360,6 +360,28 @@ export default function AnnotationLayer({
   }, [iframeRef, renderStrokes]);
 
   // Receive remote strokes
+  // AUTONOMOUS: [iPad fix] - Native non-passive touch listener on the
+  // annotation canvas. Same reasoning as the Whiteboard component —
+  // iOS Safari can hijack touch as scroll/zoom even with
+  // touch-action:none. We only block touch when the canvas is actually
+  // accepting input (draw/laser/eraser/shape active) so non-drawing
+  // touches pass through to the iframe behind for normal interaction.
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const inputActive = interactive && (drawMode || laserMode || eraserActive || shapeActive);
+    if (!inputActive) return;
+    const blockTouch = (e: TouchEvent) => {
+      e.preventDefault();
+    };
+    canvas.addEventListener('touchstart', blockTouch, { passive: false });
+    canvas.addEventListener('touchmove', blockTouch, { passive: false });
+    return () => {
+      canvas.removeEventListener('touchstart', blockTouch);
+      canvas.removeEventListener('touchmove', blockTouch);
+    };
+  }, [interactive, drawMode, laserMode, eraserActive, shapeActive]);
+
   useEffect(() => {
     if (!socket) return;
     const handleStroke = (data: { id?: string; points: Array<{ x: number; y: number }>; color: string; width: number; transient?: boolean; kind?: StrokeKind; scrollX?: number; scrollY?: number }) => {
@@ -660,6 +682,13 @@ export default function AnnotationLayer({
             : 'default',
           pointerEvents: interactive && (drawMode || laserMode || eraserActive || shapeActive) ? 'auto' : 'none',
           touchAction: 'none',
+          // AUTONOMOUS: [iPad fix] - Disable Safari's text-selection /
+          // callout / touch-highlight on touch — they interfere with
+          // freehand drawing on iPad.
+          WebkitUserSelect: 'none',
+          WebkitTouchCallout: 'none',
+          WebkitTapHighlightColor: 'transparent',
+          userSelect: 'none',
           zIndex: 10,
         }}
         onPointerDown={startDraw}
