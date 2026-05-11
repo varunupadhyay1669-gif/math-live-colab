@@ -73,4 +73,43 @@ export const prefs = {
 export const PREF_KEYS = {
   userName: 'userName',
   soundMuted: 'soundMuted',
+  savedBoards: 'savedBoards',
 } as const;
+
+// AUTONOMOUS: Saved-boards helpers (Miro-style "Save to my boards").
+//
+// We store a per-browser list of room ids the user explicitly claimed.
+// localStorage is the right scope for now: identity is name-only and
+// per-browser anyway; cross-device portability needs real auth (Phase 3).
+// Stored as a JSON array of {roomId, name, claimedAt, label} so Home
+// can render a "My boards" section without a server round-trip.
+export interface SavedBoard {
+  roomId: string;
+  name: string;          // the user's chosen display name at claim time
+  claimedAt: number;     // ms epoch
+  label?: string;        // optional human-friendly board title
+}
+
+export const savedBoards = {
+  list(): SavedBoard[] {
+    // Cast through unknown — see add() comment for the type rationale.
+    const raw = prefs.getJson(PREF_KEYS.savedBoards, [] as unknown as Json);
+    return (Array.isArray(raw) ? raw : []) as unknown as SavedBoard[];
+  },
+  add(entry: SavedBoard): void {
+    const current = savedBoards.list().filter(b => b.roomId !== entry.roomId);
+    current.unshift(entry); // newest first
+    // Cap to 50 to avoid localStorage bloat — older entries fall off.
+    // Cast through `unknown`: SavedBoard is json-serializable but the
+    // strict Json type requires an index signature we'd rather not add
+    // to the public interface (it would weaken the field types).
+    prefs.setJson(PREF_KEYS.savedBoards, current.slice(0, 50) as unknown as Json);
+  },
+  remove(roomId: string): void {
+    const current = savedBoards.list().filter(b => b.roomId !== roomId);
+    prefs.setJson(PREF_KEYS.savedBoards, current as unknown as Json);
+  },
+  has(roomId: string): boolean {
+    return savedBoards.list().some(b => b.roomId === roomId);
+  },
+};

@@ -65,6 +65,18 @@ interface RoomData {
     expectedName: string | undefined;
     timer: ReturnType<typeof setTimeout>;
   };
+  // AUTONOMOUS: Miro-style "save to my boards" model.
+  //   claimed = false → 24h auto-expiry from createdAt (anonymous board)
+  //   claimed = true  → 30d expiry (much longer; effectively "saved")
+  // The full forever-persistence promise needs Postgres + auth (Phases
+  // 2-3); this gives the right UX today on a constrained backend.
+  claimed: boolean;
+  // Display name of the person who claimed it (the teacher's name at
+  // claim time). Used to populate the "saved by" hint in the UI. Not
+  // used for auth — anyone with the room id can still join. The proper
+  // ownership model arrives with auth.
+  claimedBy?: string | null;
+  claimedAt?: number | null;
   lastTeacherScroll: any | null;
   zoomLevel: number;
 }
@@ -96,6 +108,13 @@ interface SessionStatePayload {
     texts?: any[];
   };
   whiteboardMode: boolean;
+  // AUTONOMOUS: claim status surfaced to clients so the UI can render
+  // the "X hours left to save" countdown banner (anonymous) or hide it
+  // (claimed). expiresAt is server-authoritative — clients display it
+  // but never compute it themselves.
+  claimed: boolean;
+  claimedBy: string | null;
+  expiresAt: number;
   lastTeacherScroll: any | null;
   zoomLevel: number;
 }
@@ -126,17 +145,18 @@ async function startServer() {
 
   // ─── MEMORY MANAGEMENT ───
   // Sweep every 10 minutes:
-  //  - Rooms inactive for > 48 hours (no activity at all)
+  //  - Rooms past their claim-aware TTL (24h anonymous OR 30d claimed)
   //  - Rooms where last student left > 2 hours ago AND no students currently connected
   setInterval(() => {
     const now = Date.now();
-    const absoluteExpiryMs = 48 * 60 * 60 * 1000; // 48 hours hard cap
     const studentLeftExpiryMs = 2 * 60 * 60 * 1000; // 2 hours after last student leaves
     let deletedCount = 0;
 
     for (const [roomId, room] of rooms.entries()) {
-      // Hard expiry: 48 hours of no activity at all
-      if (now - room.lastActivityAt > absoluteExpiryMs) {
+      // AUTONOMOUS: Claim-aware expiry. Anonymous rooms die at
+      // createdAt+24h; claimed rooms get 30 days. Mirrors Miro.
+      const expiresAt = computeExpiresAt(room);
+      if (now > expiresAt) {
         rooms.delete(roomId);
         deletedCount++;
         continue;
@@ -213,9 +233,31 @@ async function startServer() {
       revision: 0,
       whiteboard: { objects: [], strokes: [], shapes: [], view: null, gridMode: 'grid', instruments: [], texts: [] },
       whiteboardMode: false,
+      // AUTONOMOUS: anonymous by default. Becomes true the moment any
+      // user clicks "Save to my boards" — the room then gets a 30-day
+      // window instead of 24h.
+      claimed: false,
+      claimedBy: null,
+      claimedAt: null,
       lastTeacherScroll: null,
       zoomLevel: 1,
     };
+  }
+
+  // AUTONOMOUS: Compute when this room expires.
+  //   anonymous → createdAt + 24h (Miro's "save your board" framing)
+  //   claimed   → claimedAt + 30 days (effectively "saved" until Postgres
+  //               + auth let us promise true forever-persistence)
+  // The lastActivityAt-based 48h hard cap from earlier remains as a
+  // safety net for genuinely-abandoned rooms; whichever expires sooner
+  // wins. Returns ms-since-epoch.
+  const ANON_TTL_MS = 24 * 60 * 60 * 1000;
+  const CLAIMED_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+  function computeExpiresAt(room: RoomData): number {
+    if (room.claimed && room.claimedAt) {
+      return room.claimedAt + CLAIMED_TTL_MS;
+    }
+    return room.createdAt + ANON_TTL_MS;
   }
 
   // ─── ROOM PERSISTENCE ───
@@ -246,6 +288,9 @@ async function startServer() {
       liveSnapshotHtml: room.liveSnapshotHtml,
       whiteboard: room.whiteboard,
       whiteboardMode: room.whiteboardMode,
+      claimed: !!room.claimed,
+      claimedBy: room.claimedBy ?? null,
+      claimedAt: room.claimedAt ?? null,
       lastTeacherScroll: room.lastTeacherScroll,
       zoomLevel: room.zoomLevel,
     };
@@ -351,6 +396,12 @@ async function startServer() {
           // so a server restart leaves the teacher and any rejoining student
           // on the same surface they were on before.
           room.whiteboardMode = !!raw.whiteboardMode;
+          // AUTONOMOUS: Restore claim status. Anonymous rooms older
+          // than 24h would have been swept but were missed if the
+          // server was down — the next sweep will catch them.
+          room.claimed = !!raw.claimed;
+          room.claimedBy = raw.claimedBy ?? null;
+          room.claimedAt = raw.claimedAt ?? null;
           room.lastTeacherScroll = raw.lastTeacherScroll || null;
           room.zoomLevel = raw.zoomLevel || 1;
           rooms.set(raw.roomId, room);
@@ -477,6 +528,10 @@ async function startServer() {
       tempContent: room.tempContent,
       whiteboard: room.whiteboard,
       whiteboardMode: room.whiteboardMode,
+      // AUTONOMOUS: Claim status + expiry surfaced for the countdown banner.
+      claimed: !!room.claimed,
+      claimedBy: room.claimedBy ?? null,
+      expiresAt: computeExpiresAt(room),
       lastTeacherScroll: room.lastTeacherScroll,
       zoomLevel: room.zoomLevel,
     };
@@ -1607,6 +1662,32 @@ async function startServer() {
     // lastRunHtml) so teachers don't lose their lesson material. The effect is
     // "start from the beginning": chat cleared, steps reset, gates/scores cleared,
     // scroll to top, unpaused.
+    // AUTONOMOUS: Miro-style "Save to my boards" claim.
+    // Anyone in the room can claim it (anyone with the link can already
+    // edit anyway — the takeover gate from PR #42 protects against
+    // teacher-role abuse). The claim flips expiry from 24h → 30d and
+    // records claimedBy so the UI can show "saved by NAME". Real
+    // ownership semantics (only-original-owner-can-claim, transferable)
+    // arrive with auth in Phase 3.
+    socket.on('claim_room', ({ roomId, name }: { roomId: string; name: string }) => {
+      const room = rooms.get(roomId);
+      if (!isMember(room, socket.id)) return;
+      const safeName = sanitizeString(name, MAX_USERNAME_LENGTH) || 'Anonymous';
+      if (!room.claimed) {
+        room.claimed = true;
+        room.claimedAt = Date.now();
+        room.claimedBy = safeName;
+        console.log(`💾 Room ${roomId} claimed by ${safeName} → 30-day TTL`);
+      }
+      // Always re-broadcast the (possibly-updated) expiry so the banner
+      // disappears for everyone in the room, not just the claimer.
+      io.to(roomId).emit('room_claimed', {
+        claimed: true,
+        claimedBy: room.claimedBy,
+        expiresAt: computeExpiresAt(room),
+      });
+    });
+
     socket.on('hard_reset', ({ roomId }: { roomId: string }) => {
       const room = rooms.get(roomId);
       if (!requireTeacher(room, socket.id)) return; // Only teacher

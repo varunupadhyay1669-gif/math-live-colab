@@ -6,6 +6,8 @@ import { injectedSyncScript } from "../lib/syncScript";
 import { stepLockScript } from "../lib/stepLockScript";
 import { sessionRecorder } from "../lib/sessionRecorder";
 import { sounds } from "../lib/sounds";
+import { savedBoards } from "../lib/prefs";
+import SaveBoardBanner from "../components/SaveBoardBanner";
 
 // ── Components ──
 import TeacherControls from "../components/TeacherControls";
@@ -94,6 +96,14 @@ export default function Room() {
   // and disables all write actions on the dethroned tab until the
   // user reloads.
   const [teacherReplaced, setTeacherReplaced] = useState(false);
+  // AUTONOMOUS: Miro-style claim status.
+  // claimed=false → 24h auto-expiry; banner shows "X left to save".
+  // claimed=true  → 30d expiry; banner hidden.
+  // expiresAt is server-authoritative; we just countdown locally.
+  const [claimed, setClaimed] = useState(false);
+  const [claimedBy, setClaimedBy] = useState<string | null>(null);
+  const [expiresAt, setExpiresAt] = useState<number | null>(null);
+  const [savingBoard, setSavingBoard] = useState(false);
   // AUTONOMOUS: Tracks whether we've successfully connected at least once.
   // The "connect" event fires on initial connect AND on every reconnect;
   // we want to distinguish them to drive the re-seed-server-with-cached-
@@ -338,6 +348,10 @@ export default function Room() {
     // Whiteboard mode is server-persisted; restore on reconnect so the
     // teacher lands on the same surface they were on before disconnect.
     if (typeof state.whiteboardMode === 'boolean') setWhiteboardMode(state.whiteboardMode);
+    // AUTONOMOUS: Claim status — drives the "X hours left to save" banner.
+    if (typeof state.claimed === 'boolean') setClaimed(state.claimed);
+    if (state.claimedBy !== undefined) setClaimedBy(state.claimedBy);
+    if (typeof state.expiresAt === 'number') setExpiresAt(state.expiresAt);
     const html = state.effectiveHtml || state.liveSnapshotHtml || state.lastRunHtml || state.sourceHtml;
     if (html) {
       setHtmlCode(state.sourceHtml || html);
@@ -439,6 +453,16 @@ export default function Room() {
     // or close the tab automatically; the user might want to read what
     // they had open. Just block writes (UI-side) and tell them clearly.
     newSocket.on("teacher_replaced", () => setTeacherReplaced(true));
+
+    // AUTONOMOUS: Room claim broadcast — fires when ANYONE in the room
+    // clicks "Save to my boards". Banner hides for everyone (the room is
+    // now safe for 30 days), expiry advances accordingly.
+    newSocket.on("room_claimed", (data: { claimed: boolean; claimedBy: string | null; expiresAt: number }) => {
+      setClaimed(!!data.claimed);
+      setClaimedBy(data.claimedBy ?? null);
+      if (typeof data.expiresAt === 'number') setExpiresAt(data.expiresAt);
+      setSavingBoard(false);
+    });
 
     newSocket.on("room_state", (state: any) => {
       applySessionState(state);
@@ -1607,6 +1631,38 @@ export default function Room() {
           >
             Reload
           </button>
+        </div>
+      )}
+
+      {/* AUTONOMOUS: Miro-style "Save to my boards" banner.
+          Shown when the room is anonymous (claimed=false) — counts down
+          to expiry and offers a single-click save. Once saved (claimed)
+          the banner hides for everyone. */}
+      {!claimed && expiresAt && (
+        <SaveBoardBanner
+          expiresAt={expiresAt}
+          saving={savingBoard}
+          onSave={() => {
+            if (!socket) return;
+            setSavingBoard(true);
+            socket.emit('claim_room', { roomId, name: teacherName });
+            // Persist locally so Home's "My boards" can list it.
+            try {
+              savedBoards.add({
+                roomId: roomId!,
+                name: teacherName,
+                claimedAt: Date.now(),
+                label: activeFile?.name || (whiteboardMode ? 'Whiteboard board' : 'Untitled board'),
+              });
+            } catch { /* localStorage failure is non-fatal */ }
+          }}
+        />
+      )}
+      {claimed && claimedBy && (
+        <div className="px-4 py-1.5 flex items-center justify-center gap-2 text-xs font-semibold"
+          style={{ background: '#ECFDF5', color: '#065F46', borderBottom: '1px solid rgba(16,185,129,0.18)' }}>
+          <span>✓ Saved by {claimedBy}</span>
+          <span style={{ opacity: 0.7 }}>· This board will keep working for the next 30 days</span>
         </div>
       )}
 

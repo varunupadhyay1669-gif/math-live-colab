@@ -1,8 +1,24 @@
 import React, { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { v4 as uuidv4 } from "uuid";
+import { savedBoards, type SavedBoard } from "../lib/prefs";
 
 type Mode = null | "teacher" | "student";
+
+// Tiny "5m ago" / "2h ago" / "yesterday" helper. Avoid depending on a
+// date library for one little label.
+function formatRelativeTime(ts: number): string {
+  const diff = Date.now() - ts;
+  const minutes = Math.floor(diff / 60_000);
+  if (minutes < 1) return 'just now';
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  if (days === 1) return 'yesterday';
+  if (days < 7) return `${days}d ago`;
+  return `${Math.floor(days / 7)}w ago`;
+}
 
 export default function Home() {
   const navigate = useNavigate();
@@ -10,6 +26,18 @@ export default function Home() {
   const [studentName, setStudentName] = useState("");
   const [roomCode, setRoomCode] = useState("");
   const [mode, setMode] = useState<Mode>(null);
+  // AUTONOMOUS: Read saved-boards on first render and on every mode flip.
+  // (Refs/state set on actions stay correct; the initial read covers the
+  // common case of opening Home and seeing the list.)
+  const [boards, setBoards] = useState<SavedBoard[]>(() => savedBoards.list());
+
+  const removeBoard = (roomId: string) => {
+    savedBoards.remove(roomId);
+    setBoards(savedBoards.list());
+  };
+  const openBoard = (board: SavedBoard) => {
+    navigate(`/room/${board.roomId}?name=${encodeURIComponent(board.name)}`);
+  };
 
   const createRoom = () => {
     const name = teacherName.trim();
@@ -56,28 +84,69 @@ export default function Home() {
 
           {/* Initial mode picker */}
           {mode === null && (
-            <div className="ml-dark-mode-row">
-              <button
-                className="ml-dark-btn ml-dark-btn-primary"
-                onClick={() => setMode("teacher")}
-                autoFocus
-              >
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                  <path d="M15 3h4a2 2 0 012 2v14a2 2 0 01-2 2h-4M10 17l5-5-5-5M13.8 12H3" />
-                </svg>
-                Start teaching
-              </button>
-              <button
-                className="ml-dark-btn ml-dark-btn-glass"
-                onClick={() => setMode("student")}
-              >
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                  <path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2" />
-                  <circle cx="9" cy="7" r="4" />
-                </svg>
-                Join a room
-              </button>
-            </div>
+            <>
+              <div className="ml-dark-mode-row">
+                <button
+                  className="ml-dark-btn ml-dark-btn-primary"
+                  onClick={() => setMode("teacher")}
+                  autoFocus
+                >
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <path d="M15 3h4a2 2 0 012 2v14a2 2 0 01-2 2h-4M10 17l5-5-5-5M13.8 12H3" />
+                  </svg>
+                  Start teaching
+                </button>
+                <button
+                  className="ml-dark-btn ml-dark-btn-glass"
+                  onClick={() => setMode("student")}
+                >
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2" />
+                    <circle cx="9" cy="7" r="4" />
+                  </svg>
+                  Join a room
+                </button>
+              </div>
+
+              {/* AUTONOMOUS: Miro-style "My boards" — saved rooms from
+                  this browser. Hidden when empty so first-time users
+                  see the clean landing page. */}
+              {boards.length > 0 && (
+                <div className="ml-dark-saved">
+                  <div className="ml-dark-saved-head">
+                    <span>My saved boards</span>
+                    <span className="ml-dark-saved-count">{boards.length}</span>
+                  </div>
+                  <ul className="ml-dark-saved-list">
+                    {boards.slice(0, 6).map(b => (
+                      <li key={b.roomId} className="ml-dark-saved-item">
+                        <button
+                          className="ml-dark-saved-open"
+                          onClick={() => openBoard(b)}
+                          title={`Open ${b.label || b.roomId}`}
+                        >
+                          <span className="ml-dark-saved-label">{b.label || 'Untitled board'}</span>
+                          <span className="ml-dark-saved-meta">
+                            {b.roomId} · saved {formatRelativeTime(b.claimedAt)}
+                          </span>
+                        </button>
+                        <button
+                          className="ml-dark-saved-remove"
+                          onClick={() => removeBoard(b.roomId)}
+                          aria-label={`Remove ${b.roomId}`}
+                          title="Remove from my boards"
+                        >
+                          ×
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                  {boards.length > 6 && (
+                    <div className="ml-dark-saved-more">+{boards.length - 6} more</div>
+                  )}
+                </div>
+              )}
+            </>
           )}
 
           {/* Teacher form */}
