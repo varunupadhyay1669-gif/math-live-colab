@@ -681,13 +681,27 @@ export default function StudentView() {
   }, [roomId, currentHtml, socket, connected]);
 
   useEffect(() => {
-    // If we're connected but have no content after 2 seconds, try HTTP fallback
-    if (connected && !currentHtml) {
-      httpFallbackRef.current = setTimeout(() => {
-        fetchContentViaHttp();
-      }, 2000);
-    }
-    return () => { if (httpFallbackRef.current) clearTimeout(httpFallbackRef.current); };
+    // AUTONOMOUS: Aggressive retry ladder for stuck students.
+    //
+    // When a student joins and the server has no HTML yet (post-redeploy,
+    // teacher's iframe slow to respond, etc), they sit on "Waiting for
+    // teacher" with no recovery. The previous code tried ONE HTTP
+    // fallback at 2s; if that returned 204 (server had nothing yet) the
+    // student stayed stuck forever.
+    //
+    // Now: retry at 2s, 5s, 10s, 20s. Each attempt re-emits
+    // request_content via socket (which makes the server re-ping the
+    // teacher) AND tries the HTTP endpoint. As soon as currentHtml is
+    // set, the effect tears down. Total max wait: 20s, then user can
+    // click the Retry Loading button manually.
+    if (!connected || currentHtml) return;
+    const retries = [2000, 5000, 10000, 20000];
+    const timers = retries.map(ms => setTimeout(() => {
+      // Re-check currentHtml inside the callback in case a prior attempt
+      // landed during the wait.
+      fetchContentViaHttp();
+    }, ms));
+    return () => { timers.forEach(t => clearTimeout(t)); };
   }, [connected, currentHtml, fetchContentViaHttp]);
 
   // ── Helper: safely post message to iframe (queues if not ready) ──

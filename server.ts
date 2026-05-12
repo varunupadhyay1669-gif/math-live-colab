@@ -888,7 +888,15 @@ async function startServer() {
 
     socket.on('sync_html_update', ({ roomId, html, requestId }: { roomId: string; html: string; requestId?: string }) => {
       const room = rooms.get(roomId);
-      if (!requireTeacher(room, socket.id) || !room.activeFileId) return;
+      // AUTONOMOUS: dropped the `!room.activeFileId` guard. Previously we
+      // rejected any DOM snapshot if no file was active server-side. But
+      // after a Render redeploy wipes .rooms/, the server has no
+      // activeFileId — and the teacher's iframe is still loaded with
+      // content. Rejecting the snapshot left students stuck on "Waiting
+      // for teacher." Now: accept the HTML; if the room has no active
+      // file yet, the html still lands in liveSnapshotHtml so a student
+      // join's HTML-delivery fallback can use it.
+      if (!requireTeacher(room, socket.id)) return;
       // Same reasoning as in dom_snapshot above: a passive snapshot ack does
       // NOT rewrite lastRunHtml or the persisted file source — only the live
       // snapshot. Otherwise every late-joiner silently corrupts the teacher's
@@ -916,7 +924,11 @@ async function startServer() {
 
     socket.on('dom_snapshot', ({ roomId, html, requestId }: { roomId: string; html: string; requestId?: string }) => {
       const room = rooms.get(roomId);
-      if (!requireTeacher(room, socket.id) || !room.activeFileId) return;
+      // AUTONOMOUS: dropped the `!room.activeFileId` guard, same reasoning
+      // as sync_html_update above. Post-redeploy the teacher's iframe is
+      // still loaded but server has no activeFileId; we want the snapshot
+      // to land so pending students get unblocked.
+      if (!requireTeacher(room, socket.id)) return;
       const isForceSync = requestId?.startsWith('force-');
       // ── Don't corrupt the source HTML on every late-join ack ──
       // `liveSnapshotHtml` is the "current DOM right now" and is meant to
@@ -1865,14 +1877,21 @@ async function startServer() {
       res.status(404).json({ error: 'Room not found' });
       return;
     }
-    if (!room.lastRunHtml) {
+    // AUTONOMOUS: Same permissive fallback as join_room — use any HTML
+    // we have. Previously this only checked lastRunHtml, so a room with
+    // only liveSnapshotHtml (which is what we have post-redeploy when
+    // the teacher's iframe re-seeds) returned 204 and the stuck student
+    // got no fallback.
+    const file = room.activeFileId ? room.files.find(f => f.id === room.activeFileId) : (room.files[0] || null);
+    const html = room.lastRunHtml || room.liveSnapshotHtml || (file ? file.html : null);
+    if (!html) {
       res.status(204).send(); // No content yet
       return;
     }
     res.json({
-      html: room.lastRunHtml,
-      activeFileId: room.activeFileId,
-      fileName: room.files.find(f => f.id === room.activeFileId)?.name || 'Simulation',
+      html,
+      activeFileId: room.activeFileId || (file?.id ?? null),
+      fileName: file?.name || 'Simulation',
       revision: room.revision,
     });
   });
