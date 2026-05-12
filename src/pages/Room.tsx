@@ -6,7 +6,7 @@ import { injectedSyncScript } from "../lib/syncScript";
 import { stepLockScript } from "../lib/stepLockScript";
 import { sessionRecorder } from "../lib/sessionRecorder";
 import { sounds } from "../lib/sounds";
-import { savedBoards } from "../lib/prefs";
+import { savedBoards, templates } from "../lib/prefs";
 import SaveBoardBanner from "../components/SaveBoardBanner";
 
 // ── Components ──
@@ -76,6 +76,12 @@ export default function Room() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const teacherName = searchParams.get('name') || 'Teacher';
+  // AUTONOMOUS: Lesson templates — when arriving with ?template=ID,
+  // we hydrate the fresh room with the saved snapshot from localStorage
+  // (see prefs.ts templates store). Applied at most once per session
+  // via templateAppliedRef.
+  const templateId = searchParams.get('template');
+  const templateAppliedRef = useRef(false);
 
   // ── View Mode ──
   type ViewMode = 'split' | 'code' | 'preview';
@@ -787,6 +793,89 @@ export default function Room() {
 
     return () => { newSocket.disconnect(); };
   }, [roomId, navigate, teacherName]);
+
+  // ── Apply lesson template (one-shot, on fresh-room mount) ──
+  // AUTONOMOUS: When the teacher opens a new room with ?template=ID,
+  // hydrate the fresh canvas with the saved snapshot. We wait for the
+  // initial room_state to land (whiteboardState !== null OR a beat after
+  // connect) so the server has acknowledged our teacher seat — emitting
+  // whiteboard_add_shape etc. before that would be rejected by the
+  // requireTeacher gate on the server.
+  //
+  // Idempotent guards:
+  //   1) templateAppliedRef — apply at most once per page load
+  //   2) "is the whiteboard already populated?" — if shapes/texts/etc
+  //      already exist (eg the user refreshed the URL with ?template=
+  //      still present), do NOT re-apply. Just strip the param.
+  //   3) URL param is cleared after applying so any future refresh of
+  //      this tab is a no-op.
+  useEffect(() => {
+    if (!socket || !connected || !roomId || !templateId) return;
+    if (templateAppliedRef.current) return;
+    // Wait until we've received at least one room_state (lastSyncTime is
+    // set by applySessionState) so we know our teacher seat is registered
+    // server-side. Emitting whiteboard_add_* before that point would be
+    // rejected by the server's requireTeacher gate.
+    if (!lastSyncTime) return;
+
+    templateAppliedRef.current = true; // claim the slot before doing work
+
+    // Always clear the URL param so refresh/share doesn't re-apply.
+    const stripTemplateParam = () => {
+      try {
+        const url = new URL(window.location.href);
+        url.searchParams.delete('template');
+        window.history.replaceState({}, '', url.toString());
+      } catch { /* tolerate non-browser env */ }
+    };
+
+    const tpl = templates.get(templateId);
+    if (!tpl) {
+      // Template not found in this browser's localStorage — perhaps the
+      // user followed a link from another device. Nothing to apply.
+      stripTemplateParam();
+      return;
+    }
+
+    // If the room already has any whiteboard content, don't pile the
+    // template on top. The user either refreshed or someone else
+    // already populated the room — treat as no-op.
+    const wb: any = whiteboardState || {};
+    const hasContent =
+      (wb.objects?.length ?? 0) > 0 ||
+      (wb.strokes?.length ?? 0) > 0 ||
+      (wb.shapes?.length ?? 0) > 0 ||
+      (wb.texts?.length ?? 0) > 0 ||
+      (wb.instruments?.length ?? 0) > 0;
+    if (hasContent) {
+      stripTemplateParam();
+      return;
+    }
+
+    // Apply the template by replaying each item as an add-event. The
+    // server validates and persists each one, then broadcasts to all
+    // members of the room — including ourselves. So our local
+    // whiteboardState catches up via the normal Whiteboard component
+    // listeners, no double-render needed.
+    const snap: any = tpl.whiteboard || {};
+    try {
+      if (snap.gridMode) socket.emit('whiteboard_set_grid_mode', { roomId, gridMode: snap.gridMode });
+      for (const shape of (snap.shapes || [])) socket.emit('whiteboard_add_shape', { roomId, shape });
+      for (const text of (snap.texts || [])) socket.emit('whiteboard_add_text', { roomId, text });
+      for (const inst of (snap.instruments || [])) socket.emit('whiteboard_add_instrument', { roomId, instrument: inst });
+      for (const obj of (snap.objects || [])) socket.emit('whiteboard_add_image', { roomId, object: obj });
+      for (const stroke of (snap.strokes || [])) socket.emit('whiteboard_draw', { roomId, stroke });
+      // Flip into whiteboard mode so the teacher sees the result. The
+      // server broadcasts whiteboard_mode_changed back to us; if we're
+      // already on whiteboard this is a no-op.
+      socket.emit('whiteboard_mode_toggle', { roomId, active: true });
+      showNotif(`📐 Loaded template: ${tpl.name}`);
+    } catch (err) {
+      console.warn('[template] failed to apply', err);
+    } finally {
+      stripTemplateParam();
+    }
+  }, [socket, connected, roomId, templateId, whiteboardState, lastSyncTime]);
 
   // ── Helper: safely post message to mirror iframe (queues if not ready) ──
   const postToMirror = useCallback((msg: any) => {
