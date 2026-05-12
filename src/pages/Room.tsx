@@ -663,7 +663,27 @@ export default function Room() {
 
     // ── Sync ──
     newSocket.on("request_html_sync", ({ requestId }: { requestId?: string } = {}) => {
+      // Primary path: ask the iframe for its current DOM via syncScript.
       postToIframe({ type: 'REQUEST_HTML', requestId: requestId || `teacher-${Date.now()}` });
+
+      // AUTONOMOUS: Belt-and-braces fallback. The iframe might not
+      // respond promptly (still loading, syncScript hasn't injected, the
+      // teacher is on whiteboard mode so no iframe is visible). A
+      // student joining right now is stuck on "Waiting for teacher" until
+      // the chain unwinds. So we ALSO re-emit run_preview from the
+      // teacher's local cache — server stores it as canonical, then
+      // delivers run_preview to every pending student. Idempotent: if
+      // the iframe DOES respond later, the dom_snapshot will overwrite
+      // with the same content.
+      // Edge: only fires when there's actually HTML to send. Teacher on
+      // a blank whiteboard with no HTML uploaded → no fallback needed.
+      if (previewHtmlRef.current && activeFileIdRef.current) {
+        newSocket.emit("run_preview", {
+          fileId: activeFileIdRef.current,
+          html: previewHtmlRef.current,
+        });
+        console.info('[sync] teacher re-seeded HTML from cache in response to request_html_sync');
+      }
     });
     newSocket.on("force_sync_state", (state: any) => {
       if (typeof state.revision === 'number') {
