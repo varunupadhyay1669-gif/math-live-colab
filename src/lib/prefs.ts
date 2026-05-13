@@ -74,6 +74,7 @@ export const PREF_KEYS = {
   userName: 'userName',
   soundMuted: 'soundMuted',
   savedBoards: 'savedBoards',
+  templates: 'templates',
 } as const;
 
 // AUTONOMOUS: Saved-boards helpers (Miro-style "Save to my boards").
@@ -111,5 +112,64 @@ export const savedBoards = {
   },
   has(roomId: string): boolean {
     return savedBoards.list().some(b => b.roomId === roomId);
+  },
+};
+
+// AUTONOMOUS: Lesson templates.
+//
+// A template is a SNAPSHOT of a whiteboard's contents (shapes, texts,
+// instruments, gridMode, optionally strokes/images) that can be
+// re-instantiated as a fresh room. The use-case: a math tutor teaches
+// the Pythagorean theorem 50 times a year — save the diagram once,
+// load it in every new class.
+//
+// Storage: localStorage. Templates are local to the browser; cross-
+// device portability needs real auth (out of scope for now). Each
+// template has a 6-digit slug id so it can be referenced via URL
+// (/room/X?template=ABC123).
+export interface LessonTemplate {
+  id: string;            // short slug
+  name: string;          // human-readable title
+  savedAt: number;       // ms epoch
+  // Whiteboard payload — same shape the server's whiteboard state uses.
+  // Stored as opaque JSON; the room hydrator emits the appropriate
+  // socket events on first load to push these into the new room.
+  whiteboard: any;
+}
+
+const TEMPLATE_MAX = 25;             // cap to keep localStorage from bloating
+const TEMPLATE_ID_ALPHABET = 'abcdefghjkmnpqrstuvwxyz23456789';
+function newTemplateId(): string {
+  let s = '';
+  for (let i = 0; i < 6; i++) s += TEMPLATE_ID_ALPHABET[Math.floor(Math.random() * TEMPLATE_ID_ALPHABET.length)];
+  return s;
+}
+
+export const templates = {
+  list(): LessonTemplate[] {
+    const raw = prefs.getJson(PREF_KEYS.templates, [] as unknown as Json);
+    return (Array.isArray(raw) ? raw : []) as unknown as LessonTemplate[];
+  },
+  get(id: string): LessonTemplate | null {
+    return templates.list().find(t => t.id === id) ?? null;
+  },
+  save(name: string, whiteboard: any): LessonTemplate {
+    const tpl: LessonTemplate = {
+      id: newTemplateId(),
+      name: (name || '').trim() || `Template ${new Date().toLocaleDateString()}`,
+      savedAt: Date.now(),
+      whiteboard,
+    };
+    const current = templates.list();
+    current.unshift(tpl);
+    // Cap to TEMPLATE_MAX with FIFO drop. Templates can be big (lots of
+    // shapes/text) so we keep the cap tight to avoid hitting the ~5MB
+    // localStorage quota.
+    prefs.setJson(PREF_KEYS.templates, current.slice(0, TEMPLATE_MAX) as unknown as Json);
+    return tpl;
+  },
+  remove(id: string): void {
+    const current = templates.list().filter(t => t.id !== id);
+    prefs.setJson(PREF_KEYS.templates, current as unknown as Json);
   },
 };

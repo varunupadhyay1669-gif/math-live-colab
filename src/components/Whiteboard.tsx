@@ -1,6 +1,7 @@
 import React, { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import { Socket } from 'socket.io-client';
 import katex from 'katex';
+import { templates as templatesStore } from '../lib/prefs';
 
 // AUTONOMOUS: KaTeX render helper. Safe-fails on invalid LaTeX (returns
 // the source verbatim wrapped in a soft-error span) so a typo doesn't
@@ -449,6 +450,13 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
     // bakes in its size at creation time, so changing this slider doesn't
     // retroactively resize previous labels. Default = TEXT_DEFAULT_FONT_SIZE.
     const [textFontSize, setTextFontSize] = useState<number>(TEXT_DEFAULT_FONT_SIZE);
+
+    // AUTONOMOUS: Save-as-template modal state.
+    // Inline so the Whiteboard component is self-contained — it has all
+    // the state needed to serialize the snapshot in one place.
+    const [showSaveTemplateModal, setShowSaveTemplateModal] = useState(false);
+    const [saveTemplateName, setSaveTemplateName] = useState('');
+    const [saveTemplateToast, setSaveTemplateToast] = useState<string | null>(null);
 
     const selectedObject = selectedObjectId ? objects.find(obj => obj.id === selectedObjectId) : null;
     const canEdit = interactive;
@@ -3213,6 +3221,25 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
           <button onClick={() => zoomAt(1.2)} className="whiteboard-action">+</button>
           <button onClick={centerSelection} className="whiteboard-action">Center</button>
           <button onClick={downloadBoard} className="whiteboard-action">Export</button>
+          {/* AUTONOMOUS: Save current whiteboard state as a reusable
+              template. Opens a small inline modal for naming; on save
+              the snapshot lands in localStorage and shows up on the
+              Home page's "My templates" panel for one-click reuse in
+              a fresh room. Teacher-only because students don't own
+              the board content; saving from a student view would
+              snapshot whatever they happen to be viewing. */}
+          {canEdit && isTeacher && (
+            <button
+              onClick={() => {
+                setSaveTemplateName('');
+                setShowSaveTemplateModal(true);
+              }}
+              className="whiteboard-action"
+              title="Save the current board as a reusable lesson template"
+            >
+              💾 Save lesson
+            </button>
+          )}
           {canEdit && <button onClick={clearInk} className="whiteboard-action danger">Clear ink</button>}
           {canEdit && <button onClick={clearBoard} className="whiteboard-action danger">Clear board</button>}
         </div>
@@ -3441,6 +3468,145 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
           <div className="whiteboard-hint">
             Space + drag pans. Wheel zooms. Select image or stroke, then press Delete.
           </div>
+
+          {/* AUTONOMOUS: Save-as-template modal. Centered, glass-card
+              style matching the existing room modals. Captures current
+              whiteboard state as a snapshot and pushes it to
+              localStorage. */}
+          {showSaveTemplateModal && (
+            <div
+              onClick={() => setShowSaveTemplateModal(false)}
+              style={{
+                position: 'absolute',
+                inset: 0,
+                background: 'rgba(15,23,42,0.45)',
+                backdropFilter: 'blur(4px)',
+                zIndex: 100,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                padding: 20,
+              }}
+            >
+              <div
+                onClick={(e) => e.stopPropagation()}
+                style={{
+                  background: '#fff',
+                  borderRadius: 14,
+                  padding: '20px 22px',
+                  width: '100%',
+                  maxWidth: 440,
+                  boxShadow: '0 20px 60px rgba(15,23,42,0.30)',
+                  fontFamily: 'ui-sans-serif, system-ui, -apple-system, sans-serif',
+                }}
+              >
+                <h3 style={{ fontSize: 17, fontWeight: 700, margin: '0 0 6px', color: '#0F172A' }}>
+                  💾 Save this board as a template
+                </h3>
+                <p style={{ fontSize: 13, color: '#64748B', margin: '0 0 14px', lineHeight: 1.5 }}>
+                  Save the current shapes, text, and rulers. You'll be able to start a fresh class from this layout in one click — it'll show up on the home page under "My templates".
+                </p>
+                <input
+                  autoFocus
+                  value={saveTemplateName}
+                  onChange={(e) => setSaveTemplateName(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Escape') setShowSaveTemplateModal(false);
+                    if (e.key === 'Enter') {
+                      // Trigger the save action — handled by the button onClick below.
+                      (document.getElementById('wb-save-template-submit') as HTMLButtonElement | null)?.click();
+                    }
+                    e.stopPropagation();
+                  }}
+                  placeholder="Template name (e.g. Pythagorean starter)"
+                  style={{
+                    width: '100%',
+                    padding: '10px 12px',
+                    fontSize: 14,
+                    border: '1px solid #D4D4D8',
+                    borderRadius: 8,
+                    marginBottom: 14,
+                    outline: 'none',
+                  }}
+                />
+                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
+                  <button
+                    onClick={() => setShowSaveTemplateModal(false)}
+                    style={{
+                      padding: '8px 14px',
+                      borderRadius: 8,
+                      border: '1px solid #D4D4D8',
+                      background: '#fff',
+                      color: '#0F172A',
+                      fontWeight: 600,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    id="wb-save-template-submit"
+                    onClick={() => {
+                      // Snapshot the CURRENT whiteboard state. Images are
+                      // included but if the total exceeds the localStorage
+                      // quota the templates.save() will throw — caught
+                      // below with a friendly toast.
+                      try {
+                        const snapshot = {
+                          objects,
+                          strokes,
+                          shapes,
+                          texts,
+                          instruments,
+                          gridMode,
+                          view, // saved so reopened templates use the same zoom/pan baseline
+                        };
+                        const tpl = templatesStore.save(saveTemplateName, snapshot);
+                        setShowSaveTemplateModal(false);
+                        setSaveTemplateToast(`✓ Saved: ${tpl.name}`);
+                        setTimeout(() => setSaveTemplateToast(null), 3000);
+                      } catch (err) {
+                        setSaveTemplateToast(`⚠️ ${String(err)}`);
+                        setTimeout(() => setSaveTemplateToast(null), 5000);
+                      }
+                    }}
+                    style={{
+                      padding: '8px 16px',
+                      borderRadius: 8,
+                      border: 'none',
+                      background: '#4F46E5',
+                      color: '#fff',
+                      fontWeight: 700,
+                      cursor: 'pointer',
+                      boxShadow: '0 2px 6px rgba(79,70,229,0.30)',
+                    }}
+                  >
+                    Save template
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+          {saveTemplateToast && (
+            <div
+              style={{
+                position: 'absolute',
+                top: 14,
+                left: '50%',
+                transform: 'translateX(-50%)',
+                background: '#0F172A',
+                color: '#fff',
+                padding: '8px 16px',
+                borderRadius: 10,
+                fontSize: 13,
+                fontWeight: 600,
+                boxShadow: '0 8px 24px rgba(15,23,42,0.25)',
+                zIndex: 90,
+              }}
+            >
+              {saveTemplateToast}
+            </div>
+          )}
         </div>
       </div>
     );

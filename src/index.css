@@ -2002,6 +2002,20 @@ body {
   text-align: center;
 }
 
+/* AUTONOMOUS: "My templates" panel — same structure as ml-dark-saved
+   but with a purple accent so the user can tell at a glance which
+   panel is "rooms I'm already in" vs "blueprints for new rooms". */
+.ml-dark-templates {
+  margin-top: 16px;
+}
+.ml-dark-templates .ml-dark-saved-count {
+  background: rgba(168,85,247,0.22);
+  color: #E9D5FF;
+}
+.ml-dark-templates .ml-dark-saved-item:hover {
+  background: rgba(168,85,247,0.10);
+}
+
 /* Buttons */
 .ml-dark-btn {
   display: inline-flex;

@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { v4 as uuidv4 } from "uuid";
-import { savedBoards, type SavedBoard } from "../lib/prefs";
+import { savedBoards, templates, type SavedBoard, type LessonTemplate } from "../lib/prefs";
 
 type Mode = null | "teacher" | "student";
 
@@ -30,6 +30,10 @@ export default function Home() {
   // (Refs/state set on actions stay correct; the initial read covers the
   // common case of opening Home and seeing the list.)
   const [boards, setBoards] = useState<SavedBoard[]>(() => savedBoards.list());
+  // AUTONOMOUS: Lesson templates — saved whiteboard snapshots that the
+  // teacher can re-instantiate as a fresh room. Each "Use" opens a new
+  // room and hydrates it from localStorage (see Room.tsx ?template=ID).
+  const [tpls, setTpls] = useState<LessonTemplate[]>(() => templates.list());
 
   const removeBoard = (roomId: string) => {
     savedBoards.remove(roomId);
@@ -37,6 +41,20 @@ export default function Home() {
   };
   const openBoard = (board: SavedBoard) => {
     navigate(`/room/${board.roomId}?name=${encodeURIComponent(board.name)}`);
+  };
+  const useTemplate = (tpl: LessonTemplate) => {
+    // Need a teacher name to enter a fresh room. Fall back to a stored
+    // name if present, else ask the user once.
+    const stored = (localStorage.getItem("mathslive_teacher_name") || "").trim();
+    const name = stored || (window.prompt("What are you teaching today?") || "").trim();
+    if (!name) return;
+    localStorage.setItem("mathslive_teacher_name", name);
+    const newRoomId = uuidv4().slice(0, 8);
+    navigate(`/room/${newRoomId}?name=${encodeURIComponent(name)}&template=${encodeURIComponent(tpl.id)}`);
+  };
+  const removeTemplate = (id: string) => {
+    templates.remove(id);
+    setTpls(templates.list());
   };
 
   const createRoom = () => {
@@ -143,6 +161,47 @@ export default function Home() {
                   </ul>
                   {boards.length > 6 && (
                     <div className="ml-dark-saved-more">+{boards.length - 6} more</div>
+                  )}
+                </div>
+              )}
+
+              {/* AUTONOMOUS: "My templates" panel — saved whiteboard
+                  snapshots the teacher can re-instantiate as fresh
+                  rooms. Hidden when empty so first-time users see the
+                  clean landing page. Parallel structure & styling to
+                  the saved-boards panel above. */}
+              {tpls.length > 0 && (
+                <div className="ml-dark-saved ml-dark-templates">
+                  <div className="ml-dark-saved-head">
+                    <span>My lesson templates</span>
+                    <span className="ml-dark-saved-count">{tpls.length}</span>
+                  </div>
+                  <ul className="ml-dark-saved-list">
+                    {tpls.slice(0, 6).map(t => (
+                      <li key={t.id} className="ml-dark-saved-item">
+                        <button
+                          className="ml-dark-saved-open"
+                          onClick={() => useTemplate(t)}
+                          title={`Start a new class from "${t.name}"`}
+                        >
+                          <span className="ml-dark-saved-label">📐 {t.name}</span>
+                          <span className="ml-dark-saved-meta">
+                            template · saved {formatRelativeTime(t.savedAt)}
+                          </span>
+                        </button>
+                        <button
+                          className="ml-dark-saved-remove"
+                          onClick={() => removeTemplate(t.id)}
+                          aria-label={`Remove ${t.name}`}
+                          title="Remove this template"
+                        >
+                          ×
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                  {tpls.length > 6 && (
+                    <div className="ml-dark-saved-more">+{tpls.length - 6} more</div>
                   )}
                 </div>
               )}
