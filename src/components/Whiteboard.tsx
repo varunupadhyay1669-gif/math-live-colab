@@ -3040,16 +3040,22 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
       // AUTONOMOUS: [ORDER-3 FRICTION] - Eraser used to live at the bottom
       // of a 12-tool rail. On a 13" MacBook the rail overflowed and Eraser
       // was below the viewport with no way to scroll. Reordered:
-      //   - core editing (Select, Pen, Eraser, Highlighter) at the top —
-      //     the most-reached tools
+      //   - core editing (Select, Pen, Eraser, Hand, Highlighter) at the
+      //     top — the most-reached tools
       //   - shapes (Line / Rect / Circle / Arrow) next
       //   - text + math instruments (Compass / Ruler / Protractor)
-      //   - utility (Hand / image upload) at the end
+      //   - image upload at the end
       // Combined with the new scrollable rail (CSS) the user reaches every
       // tool on every screen size.
+      //
+      // AUTONOMOUS: Hand (pan) sits directly under Eraser. When a teacher
+      // erases something, the next thing they usually want to do is
+      // reposition the canvas to keep working — having pan one click away
+      // (instead of buried at the bottom of the rail) shaves real friction.
       { id: 'select', label: 'Select', icon: <path d="M4 4l7 16 2-7 7-2L4 4z" /> },
       { id: 'pen', label: 'Pen', icon: <path d="M17 3a2.8 2.8 0 0 1 4 4L8 20l-5 1 1-5L17 3z" /> },
       { id: 'eraser', label: 'Eraser', icon: <><path d="m7 21-4-4 11-11 4 4L7 21z" /><path d="M14 6l4-4 4 4-4 4" /><path d="M3 21h18" /></> },
+      { id: 'pan', label: 'Hand', icon: <><path d="M18 11V6a2 2 0 0 0-4 0v5" /><path d="M14 10V4a2 2 0 0 0-4 0v8" /><path d="M10 12V6a2 2 0 0 0-4 0v7" /><path d="M6 13c-2 0-3 1-3 3 0 4 4 6 8 6h3c4 0 7-3 7-7v-4a2 2 0 0 0-4 0" /></> },
       // Highlighter — fades after a few seconds. Chunky marker icon.
       { id: 'highlighter', label: 'Highlighter', icon: <><path d="M9 11l-4 4v3h3l4-4" /><path d="M11 9l5-5 4 4-5 5z" /><path d="M14 6l4 4" /></> },
       // Text — typed labels for math (eg "x = 45°", "let n be even"). Click
@@ -3065,7 +3071,6 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
       { id: 'ruler', label: 'Ruler', icon: <><path d="M3 14l11-11 7 7-11 11z" /><path d="M7 10l1 1M10 7l1 1M13 4l1 1M5 16l1 1" /></>, pressed: rulerActive },
       // Protractor — toggle: spawn / remove the protractor instrument.
       { id: 'protractor', label: 'Protractor', icon: <><path d="M3 14a9 9 0 0 1 18 0" /><path d="M3 14h18" /><path d="M12 14v-3" /></>, pressed: protractorActive },
-      { id: 'pan', label: 'Hand', icon: <><path d="M18 11V6a2 2 0 0 0-4 0v5" /><path d="M14 10V4a2 2 0 0 0-4 0v8" /><path d="M10 12V6a2 2 0 0 0-4 0v7" /><path d="M6 13c-2 0-3 1-3 3 0 4 4 6 8 6h3c4 0 7-3 7-7v-4a2 2 0 0 0-4 0" /></> },
     ];
 
     const toolChip =
