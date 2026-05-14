@@ -7,6 +7,7 @@ import { stepLockScript } from "../lib/stepLockScript";
 import { sessionRecorder } from "../lib/sessionRecorder";
 import { sounds } from "../lib/sounds";
 import { savedBoards, templates } from "../lib/prefs";
+import { LESSON_IFRAME_SANDBOX, LESSON_IFRAME_ALLOW } from "../lib/iframeAttrs";
 import SaveBoardBanner from "../components/SaveBoardBanner";
 
 // ── Components ──
@@ -2202,7 +2203,9 @@ export default function Room() {
                   className="w-full h-full border-none"
                   style={{ background: '#ffffff' }}
                   onLoad={handleIframeLoad}
-                  sandbox="allow-scripts allow-same-origin allow-forms allow-modals allow-popups allow-pointer-lock"
+                  sandbox={LESSON_IFRAME_SANDBOX}
+                  allow={LESSON_IFRAME_ALLOW}
+                  allowFullScreen
                 />
               ) : whiteboardMode ? (
                 /* Whiteboard is rendered above (always mounted). When
@@ -2220,7 +2223,9 @@ export default function Room() {
                     <iframe ref={iframeRef} src={iframeUrl} className="w-full h-full border-none"
                       style={{ background: '#ffffff' }}
                       onLoad={handleIframeLoad}
-                      sandbox="allow-scripts allow-same-origin allow-forms allow-modals allow-popups allow-pointer-lock" />
+                      sandbox={LESSON_IFRAME_SANDBOX}
+                      allow={LESSON_IFRAME_ALLOW}
+                      allowFullScreen />
                   </div>
                   {dualView && (
                     <div className="relative flex-1">
@@ -2231,7 +2236,9 @@ export default function Room() {
                       <iframe ref={mirrorIframeRef} src={iframeUrl} className="w-full h-full border-none"
                         style={{ background: '#ffffff' }}
                         onLoad={handleMirrorLoad}
-                        sandbox="allow-scripts allow-same-origin allow-forms allow-modals allow-popups allow-pointer-lock" />
+                        sandbox={LESSON_IFRAME_SANDBOX}
+                        allow={LESSON_IFRAME_ALLOW}
+                        allowFullScreen />
                       {/* Block all pointer interactions inside the mirror so it stays passive */}
                       <div className="absolute inset-0" style={{ pointerEvents: 'auto', cursor: 'not-allowed' }} />
                     </div>
