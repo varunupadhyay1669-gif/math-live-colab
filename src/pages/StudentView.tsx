@@ -5,6 +5,7 @@ import { injectedSyncScript } from "../lib/syncScript";
 import { stepLockScript } from "../lib/stepLockScript";
 import { setupAttentionDetection } from "../lib/attentionDetector";
 import { sounds } from "../lib/sounds";
+import { LESSON_IFRAME_SANDBOX, LESSON_IFRAME_ALLOW } from "../lib/iframeAttrs";
 
 // ── Components ──
 import ChatPanel from "../components/ChatPanel";
@@ -1082,7 +1083,9 @@ export default function StudentView() {
               className="w-full h-full border-none"
               style={{ background: '#ffffff' }}
               onLoad={handleIframeLoad}
-              sandbox="allow-scripts allow-same-origin allow-forms allow-modals allow-popups allow-pointer-lock"
+              sandbox={LESSON_IFRAME_SANDBOX}
+              allow={LESSON_IFRAME_ALLOW}
+              allowFullScreen
             />
           ) : whiteboardMode ? (
             // Whiteboard rendered above (always mounted; isActive controls visibility)
@@ -1095,7 +1098,9 @@ export default function StudentView() {
                 className="w-full h-full border-none"
                 style={{ background: '#ffffff' }}
                 onLoad={handleIframeLoad}
-                sandbox="allow-scripts allow-same-origin allow-forms allow-modals allow-popups allow-pointer-lock"
+                sandbox={LESSON_IFRAME_SANDBOX}
+                allow={LESSON_IFRAME_ALLOW}
+                allowFullScreen
               />
               {/* View-only overlay — blocks pointer events on content when not allowed */}
               {!interactionAllowed && (
