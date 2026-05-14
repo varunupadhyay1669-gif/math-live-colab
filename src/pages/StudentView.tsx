@@ -154,6 +154,26 @@ export default function StudentView() {
   // ── Student Interaction Mode ──
   const [interactionAllowed, setInteractionAllowed] = useState(false);
 
+  // ── Student Annotation Tools ──
+  // AUTONOMOUS: Students can scribble on the HTML overlay the same
+  // way the teacher does. The server's `draw_stroke` handler is
+  // already permissive (no requireTeacher gate), so we only need to
+  // wire up the UI here. Default off so taps still fall through to
+  // the simulation content beneath; the student opts in via the
+  // floating toolbar.
+  //
+  // Independent of `interactionAllowed`: that gate controls whether
+  // clicks reach the iframe content; annotations live in a layer
+  // ABOVE the content and are always permissible.
+  //
+  // Pen colour defaults to rose so the student's strokes are visually
+  // distinct from the teacher's default indigo — a classroom-friendly
+  // convention that makes "who drew this" obvious at a glance.
+  const [studentDrawMode, setStudentDrawMode] = useState(false);
+  const [studentEraser, setStudentEraser] = useState<'off' | 'stroke'>('off');
+  const STUDENT_COLORS = ['#F43F5E', '#F59E0B', '#10B981', '#0EA5E9', '#8B5CF6', '#0F172A'];
+  const [studentPenColor, setStudentPenColor] = useState<string>(STUDENT_COLORS[0]);
+
   // ── Attention Check ──
   const [attentionCheckModal, setAttentionCheckModal] = useState(false);
   const attentionTimeoutRef = useRef<ReturnType<typeof setTimeout>>();
@@ -1116,12 +1136,123 @@ export default function StudentView() {
             </div>
           )}
 
-          {/* Annotation Layer (view-only for students) */}
+          {/* AUTONOMOUS: Student annotation toolbar — small floating
+              vertical strip on the left of the HTML area. Only shows
+              when an HTML lesson is on-surface (not whiteboard, not
+              temp-content) since whiteboard mode has its own rail and
+              the temp-content overlay is meant to be a quick read.
+              The toolbar lets the student opt in to drawing; until
+              they activate a tool, taps still pass through to the
+              simulation. */}
+          {!whiteboardMode && !showTempContent && iframeUrl && (
+            <div
+              role="toolbar"
+              aria-label="Annotation tools"
+              style={{
+                position: 'absolute',
+                left: 10,
+                top: 10,
+                zIndex: 20,
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 4,
+                background: 'rgba(255,255,255,0.95)',
+                border: '1px solid var(--border-subtle)',
+                borderRadius: 10,
+                padding: 5,
+                boxShadow: '0 4px 14px rgba(15,23,42,0.10)',
+                backdropFilter: 'blur(6px)',
+              }}
+            >
+              {/* Pen */}
+              <button
+                onClick={() => {
+                  setStudentDrawMode(prev => !prev);
+                  setStudentEraser('off');
+                }}
+                aria-pressed={studentDrawMode}
+                title={studentDrawMode ? 'Stop drawing' : 'Draw on the lesson'}
+                style={{
+                  width: 36, height: 36,
+                  borderRadius: 8,
+                  border: 'none',
+                  background: studentDrawMode ? studentPenColor : 'transparent',
+                  color: studentDrawMode ? '#fff' : 'var(--text-primary)',
+                  cursor: 'pointer',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  transition: 'background 0.15s ease',
+                }}
+              >
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M17 3a2.8 2.8 0 0 1 4 4L8 20l-5 1 1-5L17 3z" />
+                </svg>
+              </button>
+              {/* Eraser */}
+              <button
+                onClick={() => {
+                  setStudentEraser(prev => prev === 'stroke' ? 'off' : 'stroke');
+                  setStudentDrawMode(false);
+                }}
+                aria-pressed={studentEraser !== 'off'}
+                title={studentEraser !== 'off' ? 'Stop erasing' : 'Erase strokes you drew'}
+                style={{
+                  width: 36, height: 36,
+                  borderRadius: 8,
+                  border: 'none',
+                  background: studentEraser !== 'off' ? '#FBCFE8' : 'transparent',
+                  color: studentEraser !== 'off' ? '#9D174D' : 'var(--text-primary)',
+                  cursor: 'pointer',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                }}
+              >
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="m7 21-4-4 11-11 4 4L7 21z" /><path d="M14 6l4-4 4 4-4 4" /><path d="M3 21h18" />
+                </svg>
+              </button>
+              {/* Colour swatches — only when pen is active, to keep the
+                  toolbar compact for the common "off" state. */}
+              {studentDrawMode && (
+                <>
+                  <div style={{ height: 1, background: 'var(--border-subtle)', margin: '4px 2px' }} />
+                  {STUDENT_COLORS.map(c => (
+                    <button
+                      key={c}
+                      onClick={() => setStudentPenColor(c)}
+                      title={`Switch pen colour to ${c}`}
+                      aria-label={`Pen colour ${c}`}
+                      style={{
+                        width: 26, height: 26,
+                        borderRadius: '50%',
+                        border: studentPenColor === c ? '2.5px solid #0F172A' : '1.5px solid rgba(15,23,42,0.15)',
+                        background: c,
+                        cursor: 'pointer',
+                        margin: '2px auto',
+                        padding: 0,
+                      }}
+                    />
+                  ))}
+                </>
+              )}
+            </div>
+          )}
+
+          {/* AUTONOMOUS: Annotation Layer is now student-writable.
+              `interactive` becomes true while the student has a pen
+              or eraser tool active, capturing pointer events on the
+              overlay so they can scribble. When both are off, the
+              layer falls back to view-only (just renders teacher
+              strokes underneath, taps pass through to the iframe). */}
           <AnnotationLayer
             socket={socket} roomId={roomId!}
-            drawMode={false} laserMode={false}
-            penType="transient" penColor="#6366F1" penWidth={3}
-            iframeRef={iframeRef} interactive={false}
+            drawMode={studentDrawMode}
+            laserMode={false}
+            penType="permanent"
+            penColor={studentPenColor}
+            penWidth={3}
+            eraserMode={studentEraser}
+            eraserWidth={22}
+            iframeRef={iframeRef}
+            interactive={studentDrawMode || studentEraser !== 'off'}
             laserPointer={laserPointer}
           />
 
