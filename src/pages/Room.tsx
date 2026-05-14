@@ -2399,7 +2399,7 @@ export default function Room() {
               <div className="flex gap-3 justify-end">
                 <button onClick={() => { setShowPasteModal(false); setPasteCode(''); setPasteFileName(''); }}
                   className="btn-secondary">Cancel</button>
-                <button onClick={handlePasteSubmit} disabled={!pasteCode.trim()}
+                <button onClick={handlePasteSubmit} disabled={!pasteCode.trim()} title={!pasteCode.trim() ? "Please enter some code first" : ""}
                   className="btn-primary disabled:opacity-40">
                   Add & Run ▶
                 </button>
@@ -2474,7 +2474,7 @@ export default function Room() {
                     setExplainHtml('');
                     setExplainName('');
                   }}
-                  disabled={!explainHtml.trim()}
+                  disabled={!explainHtml.trim()} title={!explainHtml.trim() ? "Please enter an explanation first" : ""}
                   className="btn-primary disabled:opacity-40"
                 >
                   Show explainer ▶
@@ -2508,7 +2508,7 @@ export default function Room() {
               )}
               <div className="flex gap-3">
                 <button onClick={() => { setShowQuizModal(false); setQuizQuestion(''); }} className="btn-secondary flex-1">Cancel</button>
-                <button onClick={sendQuiz} disabled={!quizQuestion.trim()} className="btn-primary flex-1 disabled:opacity-40">Send Quiz</button>
+                <button onClick={sendQuiz} disabled={!quizQuestion.trim()} title={!quizQuestion.trim() ? "Please enter a question first" : ""} className="btn-primary flex-1 disabled:opacity-40">Send Quiz</button>
               </div>
             </div>
           </div>

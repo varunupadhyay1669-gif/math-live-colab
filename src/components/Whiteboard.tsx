@@ -3212,8 +3212,8 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
           )}
           {canEdit && (
             <>
-              <button onClick={undo} disabled={!canUndo} className="whiteboard-action" title="Undo (Ctrl+Z)">↶ Undo</button>
-              <button onClick={redo} disabled={!canRedo} className="whiteboard-action" title="Redo (Ctrl+Shift+Z)">↷ Redo</button>
+              <button onClick={undo} disabled={!canUndo} className="whiteboard-action" title={!canUndo ? "Nothing to undo" : "Undo (Ctrl+Z)"}>↶ Undo</button>
+              <button onClick={redo} disabled={!canRedo} className="whiteboard-action" title={!canRedo ? "Nothing to redo" : "Redo (Ctrl+Shift+Z)"}>↷ Redo</button>
             </>
           )}
           <button onClick={() => zoomAt(1 / 1.2)} className="whiteboard-action">-</button>

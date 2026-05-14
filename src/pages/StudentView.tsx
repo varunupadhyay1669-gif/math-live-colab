@@ -1219,7 +1219,7 @@ export default function StudentView() {
                   />
                   <div className="flex gap-3">
                     <button onClick={() => setQuizModal(null)} className="btn-secondary flex-1">Skip</button>
-                    <button onClick={submitQuizAnswer} disabled={!quizAnswer.trim()}
+                    <button onClick={submitQuizAnswer} disabled={!quizAnswer.trim()} title={!quizAnswer.trim() ? "Please enter your answer first" : ""}
                       className="btn-primary flex-1 disabled:opacity-40">
                       Submit Answer
                     </button>
