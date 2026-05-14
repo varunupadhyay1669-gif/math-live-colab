@@ -1,0 +1,3 @@
+## 2024-05-14 - Icon-only buttons with custom tooltips need explicit ARIA labels
+**Learning:** This application frequently uses a custom `data-tip` attribute for tooltips on icon-only buttons instead of the standard `title` attribute. However, standard tooltips and `data-tip` attributes do not guarantee an accessible name for screen readers. Icon-only buttons relying on `data-tip` for visual hover information were failing to provide an accessible name for screen reader users.
+**Action:** Always ensure that icon-only buttons with `data-tip` (or any custom tooltip) have an explicitly defined `aria-label` attribute. Additionally, ensure any inner `<svg>` elements on these buttons have `aria-hidden="true"` to prevent redundant or confusing announcements.
