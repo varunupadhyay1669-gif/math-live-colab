@@ -1,0 +1,3 @@
+## 2024-03-05 - Accessibility for icon-only buttons with tooltips
+**Learning:** When using custom `data-tip` attributes for tooltips on icon-only buttons, the `data-tip` attribute itself is not consistently read by screen readers. Furthermore, if the icon is an inline `<svg>`, the screen reader might try to read generic, unhelpful fallback content (like "image" or raw SVG properties).
+**Action:** Always add an explicit `aria-label` attribute (typically matching the `data-tip` or `title`) to icon-only buttons, and ensure any inner `<svg>` elements have `aria-hidden="true"` to prevent redundant or confusing screen reader announcements.
