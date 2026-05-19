@@ -50,6 +50,16 @@ interface RoomData {
     instruments?: any[];
     texts?: any[];
   };
+  // AUTONOMOUS: HTML-overlay annotations (the pen strokes that go on
+  // top of the iframe lesson, not the whiteboard's own strokes).
+  // Previously these were fire-and-forget — broadcast on draw_stroke
+  // but never stored — so a student who joined late saw zero of the
+  // teacher's earlier annotations. Now persisted server-side just
+  // like whiteboard.strokes, replayed on join via session_state.
+  // Each entry carries senderId so a per-stroke eraser can scope to
+  // "only delete strokes I drew" for students (teachers can delete
+  // any). Capped at 2000 strokes per room to bound memory.
+  annotations: Array<{ senderId: string; stroke: any }>;
   // Is the teacher currently showing the whiteboard (vs an HTML simulation)?
   // Persisted server-side so a late-joining student can land on the right
   // surface — without this, students who joined while the teacher was on
@@ -107,6 +117,10 @@ interface SessionStatePayload {
     instruments?: any[];
     texts?: any[];
   };
+  // Persisted HTML-overlay annotation strokes. Each entry is
+  // `{ senderId, stroke }` server-side; clients only need to read the
+  // stroke part for rendering.
+  annotations: Array<{ senderId: string; stroke: any }>;
   whiteboardMode: boolean;
   // AUTONOMOUS: claim status surfaced to clients so the UI can render
   // the "X hours left to save" countdown banner (anonymous) or hide it
@@ -232,6 +246,7 @@ async function startServer() {
       liveSnapshotHtml: null,
       revision: 0,
       whiteboard: { objects: [], strokes: [], shapes: [], view: null, gridMode: 'grid', instruments: [], texts: [] },
+      annotations: [],
       whiteboardMode: false,
       // AUTONOMOUS: anonymous by default. Becomes true the moment any
       // user clicks "Save to my boards" — the room then gets a 30-day
@@ -287,6 +302,7 @@ async function startServer() {
       revision: room.revision,
       liveSnapshotHtml: room.liveSnapshotHtml,
       whiteboard: room.whiteboard,
+      annotations: room.annotations,
       whiteboardMode: room.whiteboardMode,
       claimed: !!room.claimed,
       claimedBy: room.claimedBy ?? null,
@@ -392,6 +408,13 @@ async function startServer() {
                 texts: raw.whiteboard.texts || [],
               }
             : { objects: [], strokes: [], shapes: [], view: null };
+          // AUTONOMOUS: Restore HTML-overlay annotations on server restart
+          // too. Defensively coerce to array — old persisted rooms (before
+          // this field existed) will be `undefined` and would crash the
+          // first draw_stroke push without this guard.
+          room.annotations = Array.isArray(raw.annotations)
+            ? raw.annotations.filter((s: any) => s && typeof s === 'object' && s.senderId && s.stroke)
+            : [];
           // Whiteboard mode (teacher on whiteboard surface vs HTML) — persist
           // so a server restart leaves the teacher and any rejoining student
           // on the same surface they were on before.
@@ -527,6 +550,10 @@ async function startServer() {
       gates: room.gates,
       tempContent: room.tempContent,
       whiteboard: room.whiteboard,
+      // AUTONOMOUS: HTML-overlay annotations replayed on join so a
+      // late-joining student sees the same markup the teacher's been
+      // building up over the class so far.
+      annotations: room.annotations,
       whiteboardMode: room.whiteboardMode,
       // AUTONOMOUS: Claim status + expiry surfaced for the countdown banner.
       claimed: !!room.claimed,
@@ -1116,24 +1143,77 @@ async function startServer() {
     });
 
     // ─── DRAWING / ANNOTATION (overlay over the iframe simulation) ───
-    // The payload now flows through unchanged so future fields (id, tool
+    // The payload flows through unchanged so future fields (id, tool
     // variants, shape kinds) reach the other clients automatically.
+    //
+    // AUTONOMOUS: Annotations are now PERSISTED in room.annotations.
+    // Previously they were fire-and-forget, which meant a student who
+    // joined 5 minutes into a class saw zero of the teacher's earlier
+    // markup. Persisting them lets session_state replay the full
+    // overlay on join. Transient strokes (the fading laser-pointer
+    // trail) are NOT persisted — by definition they disappear, and
+    // replaying them on join would be visual noise from a long-ago
+    // moment.
+    const MAX_ANNOTATIONS = 2000;
     socket.on('draw_stroke', ({ roomId, ...rest }: any) => {
+      const room = rooms.get(roomId);
+      if (!isMember(room, socket.id)) return;
+      if (!rest || !Array.isArray(rest.points) || rest.points.length === 0) return;
+      // Validate every point — one bad coord would corrupt the persisted state
+      for (const p of rest.points) {
+        if (!p || typeof p.x !== 'number' || typeof p.y !== 'number' ||
+            !Number.isFinite(p.x) || !Number.isFinite(p.y)) return;
+      }
+      // Persist non-transient strokes only.
+      if (!rest.transient) {
+        room!.annotations.push({ senderId: socket.id, stroke: { ...rest } });
+        // Bound memory — drop the oldest if we overflow.
+        if (room!.annotations.length > MAX_ANNOTATIONS) {
+          room!.annotations = room!.annotations.slice(-MAX_ANNOTATIONS);
+        }
+      }
       socket.to(roomId).emit('draw_stroke', { ...rest, senderId: socket.id });
     });
 
     // Delete a single annotation stroke by id (used by the per-stroke
     // eraser; pixel-eraser strokes are drawn with destination-out and use
     // the regular draw_stroke path).
+    //
+    // AUTONOMOUS: Scope the delete. Teachers can erase anything.
+    // Students can only erase strokes THEY drew — otherwise a curious
+    // student could click and delete the teacher's diagram out from
+    // under them. The senderId on each persisted entry is the
+    // authoritative check; falling through to broadcast also requires
+    // the stroke actually exists in our persisted list (so a malicious
+    // client can't make up an id).
     socket.on('draw_delete_stroke', ({ roomId, strokeId }: { roomId: string; strokeId: string }) => {
-      if (!isMember(rooms.get(roomId), socket.id)) return;
+      const room = rooms.get(roomId);
+      if (!isMember(room, socket.id)) return;
       if (typeof strokeId !== 'string') return;
+      const isTeacher = room!.teacherSocketId === socket.id;
+      const idx = room!.annotations.findIndex(a => a.stroke?.id === strokeId);
+      if (idx >= 0) {
+        const entry = room!.annotations[idx];
+        if (!isTeacher && entry.senderId !== socket.id) {
+          // Student trying to erase the teacher's (or another student's)
+          // stroke — reject silently. The client's optimistic erase will
+          // self-correct on the next session_state.
+          return;
+        }
+        room!.annotations.splice(idx, 1);
+      } else if (!isTeacher) {
+        // Stroke not in our persisted list and the caller isn't the
+        // teacher — could be a stale id from a prior reset. Don't broadcast
+        // a delete the server can't authoritatively confirm.
+        return;
+      }
       socket.to(roomId).emit('draw_delete_stroke', { strokeId });
     });
 
     socket.on('draw_clear', ({ roomId }: { roomId: string }) => {
       const room = rooms.get(roomId);
       if (!requireTeacher(room, socket.id)) return;
+      room!.annotations = [];
       // Broadcast to the FULL room including sender — the teacher who
       // pressed Clear also needs their own canvas cleared.
       io.to(roomId).emit('draw_clear');
