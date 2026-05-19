@@ -226,6 +226,11 @@ export default function Room() {
   const [whiteboardScrollX, setWhiteboardScrollX] = useState(0);
   const [whiteboardScrollY, setWhiteboardScrollY] = useState(0);
   const [whiteboardState, setWhiteboardState] = useState<any>(null);
+  // AUTONOMOUS: Persisted HTML-overlay annotations. Snapshot arrives
+  // with room_state / session_state / sync_full_state; AnnotationLayer
+  // re-seeds its strokes from this on every update so a reconnect or
+  // late-join shows the canonical canvas.
+  const [annotations, setAnnotations] = useState<Array<{ senderId: string; stroke: any }> | undefined>(undefined);
   const whiteboardRef = useRef<import('../components/Whiteboard').WhiteboardRef>(null);
 
   // ── Student Interaction Mode ──
@@ -360,6 +365,7 @@ export default function Room() {
       setShowTempContent(false);
     }
     if (state.whiteboard) setWhiteboardState(state.whiteboard);
+    if (Array.isArray(state.annotations)) setAnnotations(state.annotations);
     // Whiteboard mode is server-persisted; restore on reconnect so the
     // teacher lands on the same surface they were on before disconnect.
     if (typeof state.whiteboardMode === 'boolean') setWhiteboardMode(state.whiteboardMode);
@@ -2332,6 +2338,7 @@ export default function Room() {
                   // sometimes not."
                   eraserWidth={Math.max(penWidth * 4, 32)}
                   shapeTool={shapeTool}
+                  initialAnnotations={annotations}
                 />
               )}
 

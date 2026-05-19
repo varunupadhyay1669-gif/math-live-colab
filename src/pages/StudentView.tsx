@@ -123,6 +123,10 @@ export default function StudentView() {
   const [whiteboardScrollX, setWhiteboardScrollX] = useState(0);
   const [whiteboardScrollY, setWhiteboardScrollY] = useState(0);
   const [whiteboardState, setWhiteboardState] = useState<any>(null);
+  // AUTONOMOUS: HTML-overlay annotations (server-persisted). Snapshot
+  // arrives on join via session_state so a late-joining student sees
+  // the same markup the teacher built up earlier in the class.
+  const [annotations, setAnnotations] = useState<Array<{ senderId: string; stroke: any }> | undefined>(undefined);
   const whiteboardRef = useRef<import('../components/Whiteboard').WhiteboardRef>(null);
 
   // ── Follow Teacher Clicks ──
@@ -211,6 +215,7 @@ export default function StudentView() {
     if (typeof state.zoomLevel === 'number') setZoomLevel(state.zoomLevel);
     if (state.chat) setChatMessages(state.chat);
     if (state.whiteboard) setWhiteboardState(state.whiteboard);
+    if (Array.isArray(state.annotations)) setAnnotations(state.annotations);
     // Whiteboard mode (teacher is on the whiteboard surface, not HTML) is
     // server-persisted so a late-joining student lands on the right surface.
     // Without this, a student joining mid-lesson would sit on "Waiting for
@@ -1259,6 +1264,7 @@ export default function StudentView() {
             iframeRef={iframeRef}
             interactive={studentDrawMode || studentEraser !== 'off'}
             laserPointer={laserPointer}
+            initialAnnotations={annotations}
           />
 
           {/* Teacher Cursor */}

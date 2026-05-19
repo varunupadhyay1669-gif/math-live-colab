@@ -30,6 +30,16 @@ interface AnnotationLayerProps {
   // Click and drag to commit a shape stroke using the current pen colour
   // and width.
   shapeTool?: 'off' | 'line' | 'rect' | 'circle' | 'arrow';
+  // ── Initial strokes (annotation persistence)
+  // AUTONOMOUS: HTML-overlay annotations are now persisted server-side
+  // (room.annotations) and replayed on join via session_state. The
+  // page hands us this snapshot the first time room_state lands so a
+  // late-joining student doesn't see a blank canvas — they see all
+  // the markup the teacher has accumulated so far. Updates after the
+  // initial hydration flow through the regular draw_stroke socket
+  // events. Each item is the server-side `{ senderId, stroke }` shape;
+  // we only read `stroke` for rendering.
+  initialAnnotations?: Array<{ senderId: string; stroke: any }>;
 }
 
 type ShapeKind = 'shape-line' | 'shape-rect' | 'shape-circle' | 'shape-arrow';
@@ -97,6 +107,7 @@ export default function AnnotationLayer({
   iframeRef, interactive, laserPointer,
   eraserMode = 'off', eraserWidth = 18,
   shapeTool = 'off',
+  initialAnnotations,
 }: AnnotationLayerProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const currentStrokeRef = useRef<Array<{ x: number; y: number }>>([]);
@@ -381,6 +392,36 @@ export default function AnnotationLayer({
       canvas.removeEventListener('touchmove', blockTouch);
     };
   }, [interactive, drawMode, laserMode, eraserActive, shapeActive]);
+
+  // AUTONOMOUS: Hydrate from server-persisted annotations. Fires when
+  // the parent hands us a fresh snapshot — initially on join, then on
+  // every session_state / sync_full_state. We replace strokesRef
+  // wholesale (with server truth) so a late-join student picks up the
+  // teacher's prior markup, and a reconnecting client snaps back to
+  // the canonical state.
+  //
+  // A live local stroke that hasn't yet been echoed by the server may
+  // be momentarily dropped here, but the next session_state (or the
+  // server's broadcast for that very stroke) will restore it. Within
+  // ~1 RTT.
+  useEffect(() => {
+    if (!initialAnnotations) return;
+    strokesRef.current = initialAnnotations
+      .map(a => a?.stroke)
+      .filter(Boolean)
+      .map(s => ({
+        id: s.id ?? newStrokeId(),
+        points: s.points || [],
+        color: s.color,
+        width: s.width,
+        transient: s.transient,
+        kind: s.kind,
+        time: s.time ?? Date.now(),
+        scrollX: s.scrollX,
+        scrollY: s.scrollY,
+      }));
+    renderStrokes();
+  }, [initialAnnotations, renderStrokes]);
 
   useEffect(() => {
     if (!socket) return;
