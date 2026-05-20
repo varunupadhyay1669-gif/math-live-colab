@@ -3061,8 +3061,14 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
       void ingestImageBlob(file);
     };
 
+    // AUTONOMOUS: Anyone who can mutate images can paste them. Previously
+    // gated to isTeacher, which excluded students in interactive mode —
+    // but the upload BUTTON in the rail was open to them. The asymmetry
+    // meant a student could upload a homework photo from disk but not
+    // paste the same photo from clipboard. The mutation gate is the
+    // canonical permission (canMutateImages); use it here too.
     useEffect(() => {
-      if (!isActive || !isTeacher) return;
+      if (!isActive || !canMutateImages) return;
       const handlePaste = (e: ClipboardEvent) => {
         const item = Array.from(e.clipboardData?.items || []).find(i => i.type.startsWith('image/'));
         const blob = item?.getAsFile();
@@ -3072,7 +3078,87 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
       };
       window.addEventListener('paste', handlePaste);
       return () => window.removeEventListener('paste', handlePaste);
-    }, [isActive, isTeacher, ingestImageBlob]);
+    }, [isActive, canMutateImages, ingestImageBlob]);
+
+    // AUTONOMOUS: Drag-and-drop image support on the whiteboard.
+    //
+    // Workflow this unlocks: teacher drags a screenshot/diagram from
+    // Finder/Explorer (or a downloaded image from a download tray)
+    // straight onto the canvas. Previously the only way to attach an
+    // image was: open file picker → navigate to file → confirm. Three
+    // friction steps vs. one drag.
+    //
+    // We accept ALL image files in the drop. Multiple files are
+    // ingested sequentially; ingestImageBlob handles each one
+    // individually (downscale, broadcast, place on board).
+    //
+    // Visual cue: while a drag with files is active over the canvas,
+    // we show a soft overlay "Drop image to add" so the user knows the
+    // drop is captured here and not by the browser (which would
+    // otherwise navigate to the file URL).
+    const [dragOverActive, setDragOverActive] = useState(false);
+    useEffect(() => {
+      if (!isActive || !canMutateImages) return;
+      const wrap = containerRef.current;
+      if (!wrap) return;
+      // hasImageFiles: only show the overlay (and call preventDefault)
+      // when the drag actually carries image data. Pure text/link drags
+      // are passed through to the browser as-is.
+      const hasImageFiles = (e: DragEvent): boolean => {
+        const types = e.dataTransfer?.types;
+        if (!types) return false;
+        for (let i = 0; i < types.length; i++) {
+          if (types[i] === 'Files') return true;
+        }
+        return false;
+      };
+      const onDragEnter = (e: DragEvent) => {
+        if (!hasImageFiles(e)) return;
+        e.preventDefault();
+        setDragOverActive(true);
+      };
+      const onDragOver = (e: DragEvent) => {
+        if (!hasImageFiles(e)) return;
+        // Required so the drop event actually fires — without this the
+        // browser interprets the drop as "navigate to file URL".
+        e.preventDefault();
+        if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
+      };
+      const onDragLeave = (e: DragEvent) => {
+        // Only clear on leave of the wrap itself, not a child. relatedTarget
+        // is the element we're entering; if it's still inside the wrap, ignore.
+        if (e.relatedTarget && wrap.contains(e.relatedTarget as Node)) return;
+        setDragOverActive(false);
+      };
+      const onDrop = (e: DragEvent) => {
+        if (!hasImageFiles(e)) return;
+        e.preventDefault();
+        setDragOverActive(false);
+        const files = Array.from(e.dataTransfer?.files || []).filter(f => f.type.startsWith('image/'));
+        // Ingest serially — each call eventually calls socket.emit which is
+        // cheap, but the canvas positioning logic assumes single-image at
+        // a time. Serial keeps placement predictable.
+        (async () => {
+          for (const file of files) {
+            try {
+              await ingestImageBlob(file);
+            } catch (err) {
+              console.warn('[whiteboard] image drop failed', err);
+            }
+          }
+        })();
+      };
+      wrap.addEventListener('dragenter', onDragEnter);
+      wrap.addEventListener('dragover', onDragOver);
+      wrap.addEventListener('dragleave', onDragLeave);
+      wrap.addEventListener('drop', onDrop);
+      return () => {
+        wrap.removeEventListener('dragenter', onDragEnter);
+        wrap.removeEventListener('dragover', onDragOver);
+        wrap.removeEventListener('dragleave', onDragLeave);
+        wrap.removeEventListener('drop', onDrop);
+      };
+    }, [isActive, canMutateImages, ingestImageBlob]);
 
     const clearInk = () => {
       setStrokes([]);
@@ -3581,8 +3667,37 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
           })}
 
           <div className="whiteboard-hint">
-            Space + drag pans. Wheel zooms. Select image or stroke, then press Delete.
+            Space + drag pans. Wheel zooms. Drag an image onto the board. Select image or stroke, then press Delete.
           </div>
+
+          {/* AUTONOMOUS: Drop-zone overlay shown while a file drag is
+              hovering. Pointer-events:none so it doesn't swallow the
+              drag itself — the overlay is purely visual feedback.
+              Centred message + dashed border so the user knows the
+              drop will land here, not be navigated to. */}
+          {dragOverActive && (
+            <div
+              style={{
+                position: 'absolute',
+                inset: 8,
+                border: '3px dashed #4F46E5',
+                borderRadius: 14,
+                background: 'rgba(99,102,241,0.10)',
+                pointerEvents: 'none',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                zIndex: 80,
+                color: '#312E81',
+                fontWeight: 700,
+                fontSize: 18,
+                letterSpacing: '0.01em',
+                backdropFilter: 'blur(2px)',
+              }}
+            >
+              <span>📎 Drop image to add to the board</span>
+            </div>
+          )}
 
           {/* AUTONOMOUS: Save-as-template modal. Centered, glass-card
               style matching the existing room modals. Captures current
