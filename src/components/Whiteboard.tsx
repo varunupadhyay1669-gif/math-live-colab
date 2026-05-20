@@ -2794,43 +2794,158 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
       };
     }, [isActive]);
 
-    // AUTONOMOUS: [iPad fix] - Native non-passive touch listeners.
+    // AUTONOMOUS: [iPad fix] - Native non-passive touch listeners that
+    // also implement two-finger pinch-zoom.
     //
-    // Students on iPad reported they couldn't draw on the whiteboard.
-    // touch-action:none on the canvas SHOULD prevent the browser from
-    // hijacking touch as scroll/zoom, but iOS Safari has a long history
-    // of being inconsistent about it — especially for non-Pencil touches
-    // where the first move event sometimes reverts to scroll behaviour
-    // before the canvas's pointermove handler fires.
+    // History:
+    //   1. Students on iPad couldn't DRAW because iOS treated single-
+    //      finger touch as scroll. Fixed earlier by attaching native
+    //      non-passive `touchstart`/`touchmove` listeners that always
+    //      preventDefault.
+    //   2. That fix was too aggressive: it also blocked two-finger
+    //      pinch, but nothing replaced it — so students on iPad
+    //      reported they couldn't ZOOM either. (The reported symptom.)
     //
-    // Safest fix: attach native non-passive touch listeners that always
-    // preventDefault(). React's synthetic onPointer* handlers still
-    // drive the actual drawing logic (handlePointerDown/Move/Up), but
-    // these belt-and-braces listeners ensure iOS never gets a chance
-    // to interpret the touch as a page gesture.
+    // This handler does both jobs:
+    //   - 1 finger touch → preventDefault to stop iOS hijacking as
+    //     scroll; React's onPointer* handlers drive the draw.
+    //   - 2 finger touch → preventDefault to stop browser-level pinch-
+    //     zoom, AND drive the whiteboard's own pinch-zoom (anchored to
+    //     the midpoint between the fingers, exactly like wheel-zoom is
+    //     anchored to the cursor). Also pans by the midpoint delta so
+    //     the user can reposition while pinching.
+    //
+    // When a second finger lands during a stroke, we abandon the
+    // in-progress draw (null dragRef, clear currentStrokeRef, clear
+    // the live-stroke preview) so the user doesn't accidentally
+    // commit a stray scribble on pinch start.
     useEffect(() => {
       if (!isActive) return;
       const canvas = canvasRef.current;
       const wrap = containerRef.current;
       if (!canvas || !wrap) return;
-      // Multi-finger touches (pinch) should also not zoom the page.
-      // touch-action:none on the canvas only covers the canvas pixels —
-      // a pinch starting on the wrap padding/border could otherwise
-      // bleed through to the browser's gesture handler.
-      const blockTouch = (e: TouchEvent) => {
+
+      // ── Pinch state ────────────────────────────────────────────
+      let pinchActive = false;
+      let lastDist = 0;
+      let lastMidX = 0;
+      let lastMidY = 0;
+
+      const midpoint = (t: TouchList) => ({
+        x: (t[0].clientX + t[1].clientX) / 2,
+        y: (t[0].clientY + t[1].clientY) / 2,
+      });
+      const distance = (t: TouchList) => {
+        const dx = t[0].clientX - t[1].clientX;
+        const dy = t[0].clientY - t[1].clientY;
+        return Math.hypot(dx, dy);
+      };
+
+      const onTouchStart = (e: TouchEvent) => {
+        // Always preventDefault: stops iOS from interpreting touches
+        // as scroll / native pinch-zoom before we get a chance.
         e.preventDefault();
+        if (e.touches.length >= 2) {
+          // Begin (or update) a pinch. Abandon any single-finger draw
+          // already in progress so it doesn't commit on pinch end.
+          dragRef.current = null;
+          currentStrokeRef.current = [];
+          setLiveStroke([]);
+          pinchActive = true;
+          lastDist = distance(e.touches);
+          const m = midpoint(e.touches);
+          lastMidX = m.x;
+          lastMidY = m.y;
+        }
       };
-      canvas.addEventListener('touchstart', blockTouch, { passive: false });
-      canvas.addEventListener('touchmove', blockTouch, { passive: false });
-      wrap.addEventListener('touchstart', blockTouch, { passive: false });
-      wrap.addEventListener('touchmove', blockTouch, { passive: false });
+
+      const onTouchMove = (e: TouchEvent) => {
+        e.preventDefault();
+        if (pinchActive && e.touches.length >= 2) {
+          const newDist = distance(e.touches);
+          const m = midpoint(e.touches);
+          // Avoid div-by-zero on the very first move if fingers
+          // landed at the same point.
+          if (lastDist > 1) {
+            const factor = newDist / lastDist;
+            // zoomAt does the math: keeps the pinch midpoint anchored
+            // in BOARD space across the zoom (same trick as wheel-zoom
+            // anchoring to the cursor).
+            if (Math.abs(factor - 1) > 0.001) {
+              zoomAt(factor, m.x, m.y);
+            }
+          }
+          // Two-finger PAN: shift the board by however far the
+          // midpoint moved. Composes naturally with the zoom — the
+          // user can drag and pinch in one fluid gesture.
+          const dx = m.x - lastMidX;
+          const dy = m.y - lastMidY;
+          if (dx !== 0 || dy !== 0) {
+            // Read view through the ref-style setter to avoid stale
+            // closure on the captured `view`.
+            setView(prev => ({
+              boardScale: prev.boardScale,
+              boardOffsetX: prev.boardOffsetX + dx,
+              boardOffsetY: prev.boardOffsetY + dy,
+            }));
+          }
+          lastDist = newDist;
+          lastMidX = m.x;
+          lastMidY = m.y;
+        }
+      };
+
+      const onTouchEnd = (e: TouchEvent) => {
+        // When fingers drop below 2, the pinch is over. We don't
+        // preventDefault here — touchend doesn't need to suppress
+        // anything and preventing it can swallow follow-up taps.
+        if (e.touches.length < 2) {
+          pinchActive = false;
+          lastDist = 0;
+        }
+      };
+
+      // iOS Safari ALSO fires legacy gesture* events alongside touch*
+      // for multi-finger gestures. Default action is to zoom the
+      // PAGE — we already handle pinch ourselves, so block these
+      // outright. Non-standard but still respected by Safari.
+      const blockGesture = (e: Event) => e.preventDefault();
+
+      // Listeners on BOTH canvas (where draws land) and wrap (so a
+      // pinch beginning on the padding/border doesn't slip through to
+      // the browser's gesture handler). All non-passive so
+      // preventDefault actually works.
+      canvas.addEventListener('touchstart', onTouchStart, { passive: false });
+      canvas.addEventListener('touchmove', onTouchMove, { passive: false });
+      canvas.addEventListener('touchend', onTouchEnd);
+      canvas.addEventListener('touchcancel', onTouchEnd);
+      canvas.addEventListener('gesturestart', blockGesture as EventListener);
+      canvas.addEventListener('gesturechange', blockGesture as EventListener);
+      canvas.addEventListener('gestureend', blockGesture as EventListener);
+      wrap.addEventListener('touchstart', onTouchStart, { passive: false });
+      wrap.addEventListener('touchmove', onTouchMove, { passive: false });
+      wrap.addEventListener('touchend', onTouchEnd);
+      wrap.addEventListener('touchcancel', onTouchEnd);
+      wrap.addEventListener('gesturestart', blockGesture as EventListener);
+      wrap.addEventListener('gesturechange', blockGesture as EventListener);
+      wrap.addEventListener('gestureend', blockGesture as EventListener);
       return () => {
-        canvas.removeEventListener('touchstart', blockTouch);
-        canvas.removeEventListener('touchmove', blockTouch);
-        wrap.removeEventListener('touchstart', blockTouch);
-        wrap.removeEventListener('touchmove', blockTouch);
+        canvas.removeEventListener('touchstart', onTouchStart);
+        canvas.removeEventListener('touchmove', onTouchMove);
+        canvas.removeEventListener('touchend', onTouchEnd);
+        canvas.removeEventListener('touchcancel', onTouchEnd);
+        canvas.removeEventListener('gesturestart', blockGesture as EventListener);
+        canvas.removeEventListener('gesturechange', blockGesture as EventListener);
+        canvas.removeEventListener('gestureend', blockGesture as EventListener);
+        wrap.removeEventListener('touchstart', onTouchStart);
+        wrap.removeEventListener('touchmove', onTouchMove);
+        wrap.removeEventListener('touchend', onTouchEnd);
+        wrap.removeEventListener('touchcancel', onTouchEnd);
+        wrap.removeEventListener('gesturestart', blockGesture as EventListener);
+        wrap.removeEventListener('gesturechange', blockGesture as EventListener);
+        wrap.removeEventListener('gestureend', blockGesture as EventListener);
       };
-    }, [isActive]);
+    }, [isActive, zoomAt, setLiveStroke]);
 
     // AUTONOMOUS: [ORDER-1 CRITICAL] - Page-wide guard against browser zoom
     // while the whiteboard is mounted.
