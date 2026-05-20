@@ -313,6 +313,18 @@ export default function StudentView() {
       showNotification("✅ Reconnected!");
     });
 
+    // AUTONOMOUS: The server forcibly disconnected us because another
+    // tab joined with the same name. The new tab is now the
+    // authoritative session; this stale one should not keep emitting.
+    // Tell the user with a friendly notification, then disconnect
+    // ourselves so the auto-reconnect loop doesn't immediately rejoin
+    // and kick the user OUT of their good tab.
+    newSocket.on("session_taken_over" as any, () => {
+      showNotification("📱 Your session moved to another tab.");
+      newSocket.io.opts.reconnection = false;
+      newSocket.disconnect();
+    });
+
     newSocket.on("room_state", (state: any) => {
       applySessionState(state);
       setFiles(state.files || []);
@@ -751,6 +763,14 @@ export default function StudentView() {
     for (const msg of pending) {
       iframeRef.current?.contentWindow?.postMessage(msg, '*');
     }
+    // AUTONOMOUS: ALWAYS re-push SET_INTERACTION_MODE on every iframe
+    // load. The injected sync script defaults interactionBlocked=false
+    // in fresh iframes, BUT in a hot iframe (same iframe element, page
+    // navigated internally) the script's state may be stale from a
+    // prior SET_INTERACTION_MODE message. Re-pushing the current value
+    // makes the iframe's filter state authoritative from the client's
+    // last-known truth, not from whatever the iframe happened to be in.
+    iframeRef.current?.contentWindow?.postMessage({ type: 'SET_INTERACTION_MODE', allowed: interactionAllowed }, '*');
     // Re-send current state
     iframeRef.current?.contentWindow?.postMessage({ type: 'SET_SCROLL_SYNC', enabled: scrollSyncEnabled }, '*');
     if (currentStep < 999) {
@@ -760,7 +780,7 @@ export default function StudentView() {
       // Use REMOTE_ZOOM on student side so it applies silently without echoing back
       iframeRef.current?.contentWindow?.postMessage({ type: 'REMOTE_ZOOM', zoom: zoomLevel }, '*');
     }
-  }, [scrollSyncEnabled, currentStep, zoomLevel]);
+  }, [scrollSyncEnabled, currentStep, zoomLevel, interactionAllowed]);
 
   // Re-push zoom when level changes
   useEffect(() => {

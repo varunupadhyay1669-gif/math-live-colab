@@ -670,6 +670,46 @@ async function startServer() {
         }
       }
 
+      // AUTONOMOUS: [ORDER-1 CRITICAL] - Dedupe same-name student sockets.
+      //
+      // Real-world bug: a student opens the room on a tab, sync works, then
+      // they switch to another tab (or rejoin via a copy of the link). The
+      // new tab gets a fresh socket and `join_room` runs — but the OLD
+      // socket is still half-alive (browser hasn't dropped it, Socket.IO
+      // hasn't yet hit pingTimeout). The room now contains TWO student
+      // entries for the same person.
+      //
+      // Symptoms the teacher sees: the student's typing stops appearing.
+      // Cause: events from BOTH sockets get serverSeq-stamped and
+      // broadcast, but the teacher's UI keys cursors by socket.id, the
+      // user_list shows two students under one name, and worse, the
+      // old socket's lingering events confuse client-side state machines
+      // that expect a single identity.
+      //
+      // Fix: when a student with the same name is already a member,
+      // disconnect the old socket BEFORE adding the new one. The new
+      // tab becomes the authoritative socket and the teacher's sync
+      // continues uninterrupted.
+      if (role === 'student') {
+        for (const [otherId, otherUser] of room.users.entries()) {
+          if (otherId === socket.id) continue;
+          if (otherUser.role === 'student' && otherUser.name === safeName) {
+            console.log(`👤 Same-name student "${safeName}" rejoined; disconnecting stale socket ${otherId}`);
+            // Drop from our records FIRST so the disconnecting handler
+            // doesn't double-emit user_left.
+            room.users.delete(otherId);
+            room.pendingSyncStudents.delete(otherId);
+            const stale = io.sockets.sockets.get(otherId);
+            if (stale) {
+              // Notify the old tab so it can gracefully tear down rather
+              // than ghost-emit events for another 60s until pingTimeout.
+              stale.emit('session_taken_over', { reason: 'Same name joined from another tab' });
+              stale.disconnect(true);
+            }
+          }
+        }
+      }
+
       socket.join(roomId);
       room.users.set(socket.id, { name: safeName, role, joinedAt: Date.now(), whiteboardSync: true });
 
@@ -1650,16 +1690,37 @@ async function startServer() {
         // Teacher → broadcast to all students (one-way sync)
         socket.to(roomId).emit('interaction', event);
       } else if (user?.role === 'student') {
+        // AUTONOMOUS: Defensive teacher-socket lookup. The cached
+        // room.teacherSocketId can briefly point to a stale socket
+        // (teacher tab switched, mid-grace-window, etc.). When that
+        // happens, io.to(staleId).emit() silently routes nowhere and
+        // student events vanish — the teacher reports "sync broke after
+        // student rejoined." Fall back to scanning room.users for the
+        // CURRENT live teacher socket so the routing self-heals.
+        const resolveTeacherSocketId = (): string | null => {
+          const cached = room.teacherSocketId;
+          if (cached && room.users.get(cached)?.role === 'teacher') return cached;
+          for (const [sid, u] of room.users.entries()) {
+            if (u.role === 'teacher') {
+              // Heal the cache while we're here.
+              room.teacherSocketId = sid;
+              return sid;
+            }
+          }
+          return null;
+        };
         // Student → only relay if interaction is allowed, and only cursor to teacher
         if (event.type === 'SYNC_CURSOR') {
           // Always allow cursor so teacher can see where students are looking
-          if (room.teacherSocketId) {
-            io.to(room.teacherSocketId).emit('interaction', event);
+          const teacherId = resolveTeacherSocketId();
+          if (teacherId) {
+            io.to(teacherId).emit('interaction', event);
           }
         } else if (room.studentInteractionAllowed) {
           // Student interactions → only to teacher (not other students)
-          if (room.teacherSocketId) {
-            io.to(room.teacherSocketId).emit('interaction', event);
+          const teacherId = resolveTeacherSocketId();
+          if (teacherId) {
+            io.to(teacherId).emit('interaction', event);
           }
         }
         // When not allowed: student events are silently dropped (view-only mode)
