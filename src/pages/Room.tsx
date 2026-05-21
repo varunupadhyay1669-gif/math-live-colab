@@ -517,6 +517,12 @@ export default function Room() {
       setFiles(prev => [...prev, file]);
       sounds.tick();
     });
+    // Server flips whiteboardMode off on upload so the new HTML actually
+    // reaches the student — mirror it locally so the teacher's own surface
+    // also follows the file, instead of staying stuck on the whiteboard.
+    newSocket.on("whiteboard_mode_changed", ({ active }: { active: boolean }) => {
+      setWhiteboardMode(active);
+    });
     newSocket.on("upload_error", ({ message }: { message: string }) => {
       showNotif(`⚠️ Upload failed: ${message}`);
     });

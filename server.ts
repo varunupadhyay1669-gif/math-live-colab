@@ -890,9 +890,19 @@ async function startServer() {
       room.activeFileId = file.id;
       room.lastRunHtml = file.html;
       room.liveSnapshotHtml = null;
+      // Uploading a new HTML file is an unambiguous "show this to the
+      // student" intent. If the teacher was on the whiteboard surface,
+      // exit whiteboard mode so the broadcast iframe actually surfaces
+      // for students (otherwise the student render branch falls through
+      // to the whiteboard and the new HTML is invisible to them).
+      const wasWhiteboardMode = room.whiteboardMode;
+      if (wasWhiteboardMode) room.whiteboardMode = false;
       const revision = bumpRevision(room);
       io.to(roomId).emit('file_uploaded', file);
       io.to(roomId).emit('active_file_changed', { fileId: file.id, fileName: file.name, html: file.html, currentStep: room.currentStep, revision });
+      if (wasWhiteboardMode) {
+        io.to(roomId).emit('whiteboard_mode_changed', { active: false });
+      }
       broadcastFullState(roomId, room, 'run_preview');
       // Auto-push HTML to all connected clients immediately
       io.to(roomId).emit('run_preview', { fileId: file.id, html: file.html, revision });
