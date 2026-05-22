@@ -96,11 +96,18 @@ export default function ChatPanel({
           <input
             value={chatInput}
             onChange={(e) => setChatInput(e.target.value)}
+            aria-label="Chat message"
             placeholder="Message..."
             className="input-field text-[13px]"
             style={{ height: 36, padding: "0 12px" }}
           />
-          <button type="submit" className="ml-btn ml-btn-primary ml-btn-sm" aria-label="Send message">
+          <button
+            type="submit"
+            className="ml-btn ml-btn-primary ml-btn-sm"
+            disabled={!chatInput.trim()}
+            title={!chatInput.trim() ? "Enter a message to send" : "Send message"}
+            aria-label="Send message"
+          >
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
               <path d="m22 2-7 20-4-9-9-4 20-7Z" />
               <path d="M22 2 11 13" />
