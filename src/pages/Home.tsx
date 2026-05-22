@@ -214,6 +214,7 @@ export default function Home() {
               <input
                 autoFocus
                 className="ml-dark-input"
+                aria-label="What are you teaching today?"
                 placeholder="What are you teaching today?"
                 value={teacherName}
                 onChange={(e) => setTeacherName(e.target.value)}
@@ -223,6 +224,7 @@ export default function Home() {
                 className="ml-dark-btn ml-dark-btn-primary"
                 onClick={createRoom}
                 disabled={!teacherName.trim()}
+                title={!teacherName.trim() ? "Enter a topic to create a room" : "Create room"}
                 style={{ width: "100%" }}
               >
                 Create room
@@ -247,12 +249,14 @@ export default function Home() {
               <input
                 autoFocus
                 className="ml-dark-input"
+                aria-label="Your name"
                 placeholder="Your name"
                 value={studentName}
                 onChange={(e) => setStudentName(e.target.value)}
               />
               <input
                 className="ml-dark-input ml-dark-input-mono"
+                aria-label="Room code"
                 placeholder="abc123de"
                 value={roomCode}
                 onChange={(e) => setRoomCode(e.target.value)}
@@ -261,6 +265,7 @@ export default function Home() {
                 type="submit"
                 className="ml-dark-btn ml-dark-btn-primary"
                 disabled={!roomCode.trim() || !studentName.trim()}
+                title={(!roomCode.trim() || !studentName.trim()) ? "Enter your name and room code to join" : "Join room"}
                 style={{ width: "100%" }}
               >
                 Join room
