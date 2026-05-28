@@ -75,6 +75,7 @@ export default function StepGate({ socket, roomId, mode, step, onSave, onClose, 
 
             <textarea value={question} onChange={e => setQuestion(e.target.value)}
               placeholder="Enter your question..."
+              aria-label="Gate question"
               className="input-field mb-4" style={{ minHeight: '70px', resize: 'vertical' }} />
 
             <div className="space-y-2 mb-4">
@@ -82,6 +83,7 @@ export default function StepGate({ socket, roomId, mode, step, onSave, onClose, 
               {options.map((opt, i) => (
                 <div key={i} className="flex items-center gap-2">
                   <button onClick={() => setCorrectIndex(i)}
+                    aria-label={`Mark Option ${i + 1} as correct`}
                     className="w-6 h-6 rounded-full shrink-0 flex items-center justify-center transition-all"
                     style={{
                       border: correctIndex === i ? '2px solid var(--accent-emerald)' : '2px solid var(--border-default)',
@@ -96,6 +98,7 @@ export default function StepGate({ socket, roomId, mode, step, onSave, onClose, 
                     setOptions(updated);
                   }}
                     placeholder={`Option ${i + 1}`}
+                    aria-label={`Option ${i + 1}`}
                     className="input-field text-sm" style={{ padding: '6px 10px' }} />
                 </div>
               ))}

@@ -97,6 +97,7 @@ export default function ChatPanel({
             value={chatInput}
             onChange={(e) => setChatInput(e.target.value)}
             placeholder="Message..."
+            aria-label="Type your message"
             className="input-field text-[13px]"
             style={{ height: 36, padding: "0 12px" }}
           />

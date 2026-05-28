@@ -105,9 +105,11 @@ export default function SimulationLibrary({ isOpen, onClose, onLoad, currentHtml
               <div className="space-y-2 animate-slide-down">
                 <input value={saveName} onChange={e => setSaveName(e.target.value)}
                   placeholder={currentName || 'Simulation name'}
+                  aria-label="Simulation name"
                   className="input-field text-sm" style={{ padding: '7px 10px' }} />
                 <div className="flex gap-2">
                   <select value={saveTopic} onChange={e => setSaveTopic(e.target.value)}
+                    aria-label="Simulation topic"
                     className="input-field text-sm flex-1" style={{ padding: '7px 10px' }}>
                     {TOPICS.map(t => <option key={t} value={t}>{t}</option>)}
                   </select>
