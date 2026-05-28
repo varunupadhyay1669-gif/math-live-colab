@@ -1888,6 +1888,7 @@ export default function Room() {
                   <textarea
                     value={htmlCode}
                     onChange={(e) => setHtmlCode(e.target.value)}
+                    aria-label="HTML Code Editor"
                     className="flex-1 w-full p-4 resize-none focus:outline-none code-editor"
                     style={{
                       background: 'var(--bg-code)', color: '#D4D4D8',
@@ -1966,6 +1967,7 @@ export default function Room() {
               ref={tempFileInputRef}
               type="file"
               accept=".html,.htm"
+              aria-label="Upload explanation HTML file"
               onChange={handleUploadExplanation}
               className="hidden"
             />
@@ -1976,6 +1978,7 @@ export default function Room() {
             <input
               type="file"
               accept=".html,.htm"
+              aria-label="Upload simulation HTML file"
               ref={fileInputRef}
               onChange={uploadFileFromInput}
               className="hidden"
@@ -2411,9 +2414,11 @@ export default function Room() {
             <div className="p-5 space-y-4">
               <input value={pasteFileName} onChange={(e) => setPasteFileName(e.target.value)}
                 placeholder="File name (optional, e.g. fractions-sim)"
+                aria-label="Paste file name"
                 className="input-field text-sm" />
               <textarea value={pasteCode} onChange={(e) => setPasteCode(e.target.value)}
                 placeholder="Paste your HTML code here..."
+                aria-label="Paste HTML code"
                 className="input-field code-editor"
                 style={{ minHeight: '250px', resize: 'vertical', lineHeight: '1.6', background: 'var(--bg-code)', color: '#D4D4D8' }} />
               <div className="flex gap-3 justify-end">
@@ -2457,12 +2462,14 @@ export default function Room() {
                 value={explainName}
                 onChange={(e) => setExplainName(e.target.value)}
                 placeholder="Title (optional, e.g. Step-by-step quadratic)"
+                aria-label="Explanation title"
                 className="input-field text-sm"
               />
               <textarea
                 value={explainHtml}
                 onChange={(e) => setExplainHtml(e.target.value)}
                 placeholder="Paste your HTML code here..."
+                aria-label="Explanation HTML code"
                 className="input-field code-editor"
                 style={{ minHeight: '250px', resize: 'vertical', lineHeight: '1.6', background: 'var(--bg-code)', color: '#D4D4D8' }}
               />
@@ -2515,6 +2522,7 @@ export default function Room() {
               <h3 className="font-display text-lg font-bold mb-4">🎯 Pop Quiz</h3>
               <textarea value={quizQuestion} onChange={(e) => setQuizQuestion(e.target.value)}
                 placeholder="Type your question... e.g. What is 3/4 + 1/2?"
+                aria-label="Pop quiz question"
                 className="input-field mb-4" style={{ minHeight: '90px', resize: 'vertical' }} />
               {quizAnswers.length > 0 && (
                 <div className="mb-4 p-3 rounded-xl" style={{ background: 'var(--bg-surface)' }}>

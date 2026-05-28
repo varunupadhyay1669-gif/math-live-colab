@@ -1,0 +1,3 @@
+## 2024-05-27 - Input Accessibility using aria-label instead of placeholder
+**Learning:** Found an accessibility issue pattern specific to this app's components where inputs and textareas relied exclusively on `placeholder` attributes without an explicitly defined `aria-label` or visual `<label>` tag. This makes them less accessible to screen readers, which might not read placeholder text reliably.
+**Action:** When designing forms and interactive inputs in the future, do not rely exclusively on `placeholder` attributes. Ensure all input elements explicitly include an `aria-label` attribute (or a properly associated `<label>`) so that the field's purpose is accurately communicated to assistive technology.
