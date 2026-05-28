@@ -215,6 +215,7 @@ export default function Home() {
                 autoFocus
                 className="ml-dark-input"
                 placeholder="What are you teaching today?"
+                aria-label="What are you teaching today?"
                 value={teacherName}
                 onChange={(e) => setTeacherName(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && createRoom()}
@@ -248,12 +249,14 @@ export default function Home() {
                 autoFocus
                 className="ml-dark-input"
                 placeholder="Your name"
+                aria-label="Your name"
                 value={studentName}
                 onChange={(e) => setStudentName(e.target.value)}
               />
               <input
                 className="ml-dark-input ml-dark-input-mono"
                 placeholder="abc123de"
+                aria-label="Room code"
                 value={roomCode}
                 onChange={(e) => setRoomCode(e.target.value)}
               />
