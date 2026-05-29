@@ -25,6 +25,10 @@ export default function Home() {
   const [teacherName, setTeacherName] = useState(() => localStorage.getItem("mathslive_teacher_name") || "");
   const [studentName, setStudentName] = useState("");
   const [roomCode, setRoomCode] = useState("");
+  // Optional fixed/permanent room code. When the teacher names a class, the
+  // same link (/room/<code> for them, /live/<code> for students) works every
+  // time — no need to resend a new code each session.
+  const [classCode, setClassCode] = useState("");
   const [mode, setMode] = useState<Mode>(null);
   // AUTONOMOUS: Read saved-boards on first render and on every mode flip.
   // (Refs/state set on actions stay correct; the initial read covers the
@@ -57,11 +61,24 @@ export default function Home() {
     setTpls(templates.list());
   };
 
+  // Turn a free-text class name into a valid, stable room id. Must satisfy
+  // the server's isValidRoomId rule: /^[a-zA-Z0-9_-]+$/. Capped so the link
+  // stays tidy and well within MAX_ROOM_ID_LENGTH.
+  const slugifyCode = (s: string) =>
+    s.trim().toLowerCase()
+      .replace(/[^a-z0-9_-]+/g, "-")
+      .replace(/-+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 32);
+
   const createRoom = () => {
     const name = teacherName.trim();
     if (!name) return;
     localStorage.setItem("mathslive_teacher_name", name);
-    const newRoomId = uuidv4().slice(0, 8);
+    // Use the teacher's chosen permanent code when given; otherwise fall back
+    // to a fresh random id (the previous always-random behaviour).
+    const custom = slugifyCode(classCode);
+    const newRoomId = custom || uuidv4().slice(0, 8);
     navigate(`/room/${newRoomId}?name=${encodeURIComponent(name)}`);
   };
 
@@ -217,6 +234,13 @@ export default function Home() {
                 placeholder="What are you teaching today?"
                 value={teacherName}
                 onChange={(e) => setTeacherName(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && createRoom()}
+              />
+              <input
+                className="ml-dark-input ml-dark-input-mono"
+                placeholder="Permanent room code (optional) — e.g. varun-grade5"
+                value={classCode}
+                onChange={(e) => setClassCode(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && createRoom()}
               />
               <button

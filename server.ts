@@ -172,6 +172,7 @@ async function startServer() {
       const expiresAt = computeExpiresAt(room);
       if (now > expiresAt) {
         rooms.delete(roomId);
+        void roomStore.remove(roomId).catch(() => {});
         deletedCount++;
         continue;
       }
@@ -182,6 +183,7 @@ async function startServer() {
         const hasStudents = Array.from(room.users.values()).some(u => u.role === 'student');
         if (!hasStudents) {
           rooms.delete(roomId);
+          void roomStore.remove(roomId).catch(() => {});
           deletedCount++;
           continue;
         }
@@ -293,6 +295,117 @@ async function startServer() {
   // Ensure persist directory exists
   try { if (!fs.existsSync(PERSIST_DIR)) fs.mkdirSync(PERSIST_DIR, { recursive: true }); } catch {}
 
+  // ─── DURABLE STORE ADAPTER ─────────────────────────────────────────────
+  // Each room persists as one JSON blob. Locally (and on hosts without a
+  // configured database) we keep using the .rooms/ directory exactly as
+  // before. When Upstash Redis REST credentials are present we use those
+  // instead, so rooms survive cold-starts, redeploys and ephemeral
+  // filesystems — the requirement for "permanent" class links that work
+  // every time, even before the teacher arrives.
+  //
+  // The Redis path talks to Upstash's plain REST API over global fetch
+  // (Node 20+), so there is NO new npm dependency — the feature is purely
+  // env-var activated and cannot break the existing deploy.
+  interface RoomStore {
+    readonly kind: string;
+    save(roomId: string, data: object, ttlSeconds: number): Promise<void>;
+    load(roomId: string): Promise<any | null>;
+    loadAll(): Promise<Array<{ roomId: string; data: any }>>;
+    remove(roomId: string): Promise<void>;
+  }
+
+  const fileRoomStore: RoomStore = {
+    kind: 'file',
+    async save(roomId, data) {
+      await fs.promises.writeFile(path.join(PERSIST_DIR, `${roomId}.json`), JSON.stringify(data), 'utf-8');
+    },
+    async load(roomId) {
+      try {
+        const raw = await fs.promises.readFile(path.join(PERSIST_DIR, `${roomId}.json`), 'utf-8');
+        return JSON.parse(raw);
+      } catch { return null; }
+    },
+    async loadAll() {
+      const out: Array<{ roomId: string; data: any }> = [];
+      try {
+        if (!fs.existsSync(PERSIST_DIR)) return out;
+        const files = (await fs.promises.readdir(PERSIST_DIR)).filter(f => f.endsWith('.json'));
+        for (const file of files) {
+          try {
+            const raw = await fs.promises.readFile(path.join(PERSIST_DIR, file), 'utf-8');
+            out.push({ roomId: file.replace(/\.json$/, ''), data: JSON.parse(raw) });
+          } catch (err) {
+            // Quarantine corrupt files (preserve recovery) rather than delete.
+            console.error(`Failed to read ${file}:`, err);
+            try { await fs.promises.rename(path.join(PERSIST_DIR, file), path.join(PERSIST_DIR, file + '.corrupt')); } catch {}
+          }
+        }
+      } catch (err) { console.error('loadAll failed:', err); }
+      return out;
+    },
+    async remove(roomId) {
+      try { await fs.promises.unlink(path.join(PERSIST_DIR, `${roomId}.json`)); } catch {}
+    },
+  };
+
+  function makeRedisRoomStore(restUrl: string, token: string): RoomStore {
+    const base = restUrl.replace(/\/+$/, '');
+    async function cmd(args: (string | number)[]): Promise<any> {
+      const res = await fetch(base, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(args),
+      });
+      if (!res.ok) throw new Error(`Upstash ${String(args[0])} failed: HTTP ${res.status}`);
+      const json = (await res.json()) as { result?: any; error?: string };
+      if (json.error) throw new Error(`Upstash error: ${json.error}`);
+      return json.result;
+    }
+    const key = (roomId: string) => `room:${roomId}`;
+    return {
+      kind: 'redis',
+      async save(roomId, data, ttlSeconds) {
+        const ttl = Math.max(60, Math.floor(ttlSeconds));
+        await cmd(['SET', key(roomId), JSON.stringify(data), 'EX', ttl]);
+      },
+      async load(roomId) {
+        const result = await cmd(['GET', key(roomId)]);
+        if (result == null) return null;
+        try { return typeof result === 'string' ? JSON.parse(result) : result; } catch { return null; }
+      },
+      async loadAll() {
+        const out: Array<{ roomId: string; data: any }> = [];
+        let cursor = '0';
+        do {
+          const scan = (await cmd(['SCAN', cursor, 'MATCH', 'room:*', 'COUNT', 100])) as [string, string[]];
+          cursor = scan[0];
+          for (const k of scan[1] || []) {
+            try {
+              const result = await cmd(['GET', k]);
+              if (result != null) {
+                const data = typeof result === 'string' ? JSON.parse(result) : result;
+                out.push({ roomId: k.replace(/^room:/, ''), data });
+              }
+            } catch (err) { console.error(`Failed to load ${k}:`, err); }
+          }
+        } while (cursor !== '0');
+        return out;
+      },
+      async remove(roomId) { await cmd(['DEL', key(roomId)]); },
+    };
+  }
+
+  const UPSTASH_URL = process.env.UPSTASH_REDIS_REST_URL;
+  const UPSTASH_TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN;
+  const roomStore: RoomStore = (UPSTASH_URL && UPSTASH_TOKEN)
+    ? makeRedisRoomStore(UPSTASH_URL, UPSTASH_TOKEN)
+    : fileRoomStore;
+  console.log(
+    roomStore.kind === 'redis'
+      ? '🗄️  Room store: Upstash Redis — durable rooms enabled'
+      : '🗄️  Room store: .rooms/ files — set UPSTASH_REDIS_REST_URL + UPSTASH_REDIS_REST_TOKEN for durable rooms'
+  );
+
   function serializeRoom(roomId: string, room: RoomData): object {
     return {
       roomId,
@@ -338,6 +451,7 @@ async function startServer() {
     if (saveInFlight) return;
     saveInFlight = true;
     try {
+      const now = Date.now();
       const writes: Promise<void>[] = [];
       let attempted = 0;
       for (const [roomId, room] of rooms.entries()) {
@@ -356,104 +470,106 @@ async function startServer() {
           (room.whiteboard?.texts?.length ?? 0) > 0;
         if (!hasContent) continue;
         attempted++;
-        const data = JSON.stringify(serializeRoom(roomId, room));
+        // TTL mirrors the room's claim-aware expiry so the durable store
+        // self-cleans even for rooms that are only ever lazy-loaded (never
+        // resident in memory for the in-process sweep to catch).
+        const ttlSeconds = Math.max(60, Math.floor((computeExpiresAt(room) - now) / 1000));
         writes.push(
-          fs.promises.writeFile(path.join(PERSIST_DIR, `${roomId}.json`), data, 'utf-8')
+          roomStore.save(roomId, serializeRoom(roomId, room), ttlSeconds)
             .catch(err => {
               console.error(`Failed to persist room ${roomId}:`, err);
             })
         );
       }
       await Promise.all(writes);
-      if (attempted > 0) console.log(`💾 Persisted ${attempted} rooms (parallel, non-blocking)`);
+      if (attempted > 0) console.log(`💾 Persisted ${attempted} rooms → ${roomStore.kind}`);
     } finally {
       saveInFlight = false;
     }
   }
 
-  function restoreRooms() {
+  // Build an in-memory RoomData from a persisted blob. Shared by the eager
+  // boot restore AND the lazy on-join restore, so both paths hydrate rooms
+  // identically.
+  function hydrateRoom(raw: any): RoomData {
+    const now = Date.now();
+    const room = createRoom();
+    room.files = raw.files || [];
+    room.activeFileId = raw.activeFileId || null;
+    room.lastRunHtml = raw.lastRunHtml || null;
+    room.isPaused = false; // Always start unpaused
+    room.createdAt = raw.createdAt || now;
+    room.lastActivityAt = raw.lastActivityAt || now;
+    room.chat = raw.chat || [];
+    room.currentStep = raw.currentStep || 1;
+    room.gates = raw.gates || {};
+    room.scrollSyncEnabled = raw.scrollSyncEnabled !== false;
+    room.studentInteractionAllowed = !!raw.studentInteractionAllowed;
+    room.password = raw.password || null;
+    room.scores = raw.scores || {};
+    room.revision = raw.revision || 0;
+    room.liveSnapshotHtml = raw.liveSnapshotHtml || null;
+    room.whiteboard = raw.whiteboard
+      ? {
+          objects: raw.whiteboard.objects || [],
+          strokes: raw.whiteboard.strokes || [],
+          shapes: raw.whiteboard.shapes || [],
+          view: raw.whiteboard.view ?? null,
+          // gridMode and instruments were added later — restore them too
+          // so a server restart doesn't silently reset the teacher's
+          // graph-mode choice or wipe rulers/protractors off the board.
+          gridMode: raw.whiteboard.gridMode || 'grid',
+          instruments: raw.whiteboard.instruments || [],
+          texts: raw.whiteboard.texts || [],
+        }
+      : { objects: [], strokes: [], shapes: [], view: null };
+    // AUTONOMOUS: Restore HTML-overlay annotations on server restart
+    // too. Defensively coerce to array — old persisted rooms (before
+    // this field existed) will be `undefined` and would crash the
+    // first draw_stroke push without this guard.
+    room.annotations = Array.isArray(raw.annotations)
+      ? raw.annotations.filter((s: any) => s && typeof s === 'object' && s.senderId && s.stroke)
+      : [];
+    // Whiteboard mode (teacher on whiteboard surface vs HTML) — persist
+    // so a server restart leaves the teacher and any rejoining student
+    // on the same surface they were on before.
+    room.whiteboardMode = !!raw.whiteboardMode;
+    // AUTONOMOUS: Restore claim status. Anonymous rooms older
+    // than 24h would have been swept but were missed if the
+    // server was down — the next sweep will catch them.
+    room.claimed = !!raw.claimed;
+    room.claimedBy = raw.claimedBy ?? null;
+    room.claimedAt = raw.claimedAt ?? null;
+    room.lastTeacherScroll = raw.lastTeacherScroll || null;
+    room.zoomLevel = raw.zoomLevel || 1;
+    return room;
+  }
+
+  async function restoreRooms() {
+    // Durable stores (Redis) lazy-load rooms on join — see join_room — so we
+    // skip the eager boot scan: it would burn commands and add cold-start
+    // latency, and it races a fast first joiner anyway. The file store is
+    // cheap to scan eagerly and keeps the in-memory expiry sweep populated.
+    if (roomStore.kind !== 'file') {
+      console.log('📂 Durable store active — rooms lazy-load on join');
+      return;
+    }
     try {
-      if (!fs.existsSync(PERSIST_DIR)) return;
-      const files = fs.readdirSync(PERSIST_DIR).filter(f => f.endsWith('.json'));
+      const entries = await roomStore.loadAll();
       const now = Date.now();
       let restored = 0;
       let cleaned = 0;
-      for (const file of files) {
-        const filePath = path.join(PERSIST_DIR, file);
+      for (const { roomId, data: raw } of entries) {
         try {
-          const raw = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
-          // Clean up old files
           if (raw.lastActivityAt && (now - raw.lastActivityAt > PERSIST_MAX_AGE)) {
-            fs.unlinkSync(filePath);
+            await roomStore.remove(roomId);
             cleaned++;
             continue;
           }
-          const room = createRoom();
-          room.files = raw.files || [];
-          room.activeFileId = raw.activeFileId || null;
-          room.lastRunHtml = raw.lastRunHtml || null;
-          room.isPaused = false; // Always start unpaused
-          room.createdAt = raw.createdAt || now;
-          room.lastActivityAt = raw.lastActivityAt || now;
-          room.chat = raw.chat || [];
-          room.currentStep = raw.currentStep || 1;
-          room.gates = raw.gates || {};
-          room.scrollSyncEnabled = raw.scrollSyncEnabled !== false;
-          room.studentInteractionAllowed = !!raw.studentInteractionAllowed;
-          room.password = raw.password || null;
-          room.scores = raw.scores || {};
-          room.revision = raw.revision || 0;
-          room.liveSnapshotHtml = raw.liveSnapshotHtml || null;
-          room.whiteboard = raw.whiteboard
-            ? {
-                objects: raw.whiteboard.objects || [],
-                strokes: raw.whiteboard.strokes || [],
-                shapes: raw.whiteboard.shapes || [],
-                view: raw.whiteboard.view ?? null,
-                // gridMode and instruments were added later — restore them too
-                // so a server restart doesn't silently reset the teacher's
-                // graph-mode choice or wipe rulers/protractors off the board.
-                gridMode: raw.whiteboard.gridMode || 'grid',
-                instruments: raw.whiteboard.instruments || [],
-                texts: raw.whiteboard.texts || [],
-              }
-            : { objects: [], strokes: [], shapes: [], view: null };
-          // AUTONOMOUS: Restore HTML-overlay annotations on server restart
-          // too. Defensively coerce to array — old persisted rooms (before
-          // this field existed) will be `undefined` and would crash the
-          // first draw_stroke push without this guard.
-          room.annotations = Array.isArray(raw.annotations)
-            ? raw.annotations.filter((s: any) => s && typeof s === 'object' && s.senderId && s.stroke)
-            : [];
-          // Whiteboard mode (teacher on whiteboard surface vs HTML) — persist
-          // so a server restart leaves the teacher and any rejoining student
-          // on the same surface they were on before.
-          room.whiteboardMode = !!raw.whiteboardMode;
-          // AUTONOMOUS: Restore claim status. Anonymous rooms older
-          // than 24h would have been swept but were missed if the
-          // server was down — the next sweep will catch them.
-          room.claimed = !!raw.claimed;
-          room.claimedBy = raw.claimedBy ?? null;
-          room.claimedAt = raw.claimedAt ?? null;
-          room.lastTeacherScroll = raw.lastTeacherScroll || null;
-          room.zoomLevel = raw.zoomLevel || 1;
-          rooms.set(raw.roomId, room);
+          rooms.set(raw.roomId || roomId, hydrateRoom(raw));
           restored++;
         } catch (err) {
-          // AUTONOMOUS: [ORDER-1 CRITICAL] - was silently fs.unlinkSync.
-          // A corrupt parse used to delete the file with no log, no
-          // recovery path. Now: log the error AND move to a .corrupt
-          // suffix so a human can inspect / recover. Bad bytes shouldn't
-          // erase a teacher's lesson.
-          console.error(`Failed to restore ${file}:`, err);
-          try {
-            const corruptPath = filePath + '.corrupt';
-            fs.renameSync(filePath, corruptPath);
-            console.error(`  → moved to ${corruptPath} for recovery`);
-          } catch (renameErr) {
-            console.error('  → also failed to quarantine:', renameErr);
-          }
-          cleaned++;
+          console.error(`Failed to restore ${roomId}:`, err);
         }
       }
       if (restored > 0) console.log(`📂 Restored ${restored} rooms from disk`);
@@ -463,8 +579,8 @@ async function startServer() {
     }
   }
 
-  // Restore rooms on startup
-  restoreRooms();
+  // Restore rooms on startup (async; durable stores lazy-load on join instead)
+  void restoreRooms().catch(err => console.error('restoreRooms failed:', err));
 
   // Periodic save
   setInterval(saveRooms, PERSIST_INTERVAL);
@@ -637,7 +753,7 @@ async function startServer() {
     });
 
     // ─── JOIN ROOM ───
-    socket.on('join_room', ({ roomId, userName, role, password }: { roomId: string; userName: string; role: 'teacher' | 'student'; password?: string }) => {
+    socket.on('join_room', async ({ roomId, userName, role, password }: { roomId: string; userName: string; role: 'teacher' | 'student'; password?: string }) => {
       // Validate inputs
       if (!isValidRoomId(roomId)) {
         socket.emit('join_error', { message: 'Invalid room code' });
@@ -649,7 +765,26 @@ async function startServer() {
         return;
       }
 
-      const existingRoom = rooms.get(roomId);
+      let existingRoom = rooms.get(roomId);
+      // Durable lazy-restore: if the room isn't live in memory (server
+      // cold-started, was evicted, or this is the first joiner after a
+      // redeploy) try to bring it back from the durable store before deciding
+      // anything. This is the mechanism that lets a student open a *permanent*
+      // class link at any time — even after the server slept and even before
+      // the teacher arrives. Without it the student would hit "Room not found".
+      if (!existingRoom) {
+        try {
+          const raw = await roomStore.load(roomId);
+          const fresh = raw && !(raw.lastActivityAt && Date.now() - raw.lastActivityAt > PERSIST_MAX_AGE);
+          if (fresh) {
+            existingRoom = hydrateRoom(raw);
+            rooms.set(roomId, existingRoom);
+            console.log(`📂 Lazy-restored room ${roomId} from ${roomStore.kind} on join`);
+          }
+        } catch (err) {
+          console.error(`Lazy restore failed for ${roomId}:`, err);
+        }
+      }
       if (!existingRoom && role !== 'teacher') {
         socket.emit('join_error', { message: 'Room not found. Ask the teacher to start the room first.' });
         return;
