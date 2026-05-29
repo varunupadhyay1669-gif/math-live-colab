@@ -207,11 +207,39 @@ export const injectedSyncScript = `
 
     // ── Mouse move for cursors (throttled) ──
     var lastMove = 0;
+    // Track physical button state so we can mirror DRAG gestures. Many math
+    // simulations drag on raw mousedown→mousemove→mouseup (canvas/SVG points,
+    // sliders, rotations) rather than HTML5 drag-and-drop. Previously only the
+    // mousedown and mouseup synced, so the dragged object teleported on the
+    // student's screen. We now stream throttled SYNC_MOUSEMOVE while the button
+    // is held so the student's simulation follows the drag continuously.
+    var pointerDown = false;
+    var lastDragMove = 0;
+    // Safety: if the gesture ends off-iframe (teacher releases outside the
+    // simulation, or the tab loses focus mid-drag) we never see mouseup, so
+    // clear the flag here to avoid a "stuck drag" that streams forever.
+    window.addEventListener('blur', function() { pointerDown = false; });
     document.addEventListener('mousemove', function(e) {
       var now = Date.now();
       if (now - lastMove > 50) {
         lastMove = now;
         window.parent.postMessage({ type: 'SYNC_CURSOR', x: e.clientX / window.innerWidth, y: e.clientY / window.innerHeight }, '*');
+      }
+      // Mirror the drag itself (only for genuine local gestures — never replay
+      // remote events back, never leak from a view-only student). Throttled
+      // tighter than the cursor so the motion stays smooth without flooding.
+      if (pointerDown && !isRemote() && !(interactionBlocked && !presenterMode)) {
+        if (now - lastDragMove > 30) {
+          lastDragMove = now;
+          var dpath = getElementPath(e.target);
+          window.parent.postMessage({
+            type: 'SYNC_MOUSEMOVE',
+            path: dpath,
+            x: e.clientX / window.innerWidth,
+            y: e.clientY / window.innerHeight,
+            buttons: e.buttons
+          }, '*');
+        }
       }
     });
 
@@ -465,6 +493,8 @@ export const injectedSyncScript = `
       if (isRemote()) return;
       if (blockLocalInteraction(e)) return;
       if (!e.isTrusted) return;
+      pointerDown = true;
+      lastDragMove = 0; // allow the first drag-move to fire immediately
       var path = getElementPath(e.target);
       if (path) {
         window.parent.postMessage({ type: 'SYNC_MOUSEDOWN', path: path, x: e.clientX / window.innerWidth, y: e.clientY / window.innerHeight, button: e.button }, '*');
@@ -472,6 +502,9 @@ export const injectedSyncScript = `
     }, true);
 
     document.addEventListener('mouseup', function(e) {
+      // Clear the drag flag before any guard returns so a blocked/remote
+      // mouseup can't leave the gesture stuck "down".
+      pointerDown = false;
       if (isRemote()) return;
       if (blockLocalInteraction(e)) return;
       if (!e.isTrusted) return;
@@ -682,6 +715,20 @@ export const injectedSyncScript = `
           try { el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, clientX: data.x * window.innerWidth, clientY: data.y * window.innerHeight })); }
           finally { exitRemote(); }
         }
+      } else if (data.type === 'REMOTE_MOUSEMOVE') {
+        // Replay a drag movement. Prefer the original target element by path;
+        // fall back to whatever element sits under the mapped point so the
+        // gesture still lands sensibly across different screen sizes.
+        enterRemote();
+        try {
+          var mmx = data.x * window.innerWidth;
+          var mmy = data.y * window.innerHeight;
+          var mmEl = data.path ? findElement(data.path) : null;
+          if (!mmEl) { try { mmEl = document.elementFromPoint(mmx, mmy); } catch(e) {} }
+          (mmEl || document).dispatchEvent(new MouseEvent('mousemove', {
+            bubbles: true, clientX: mmx, clientY: mmy, buttons: data.buttons || 1, view: window
+          }));
+        } finally { exitRemote(); }
       } else if (data.type === 'REMOTE_KEYDOWN') {
         enterRemote();
         try { document.dispatchEvent(new KeyboardEvent('keydown', { key: data.key, code: data.code, bubbles: true, shiftKey: data.shiftKey, ctrlKey: data.ctrlKey, altKey: data.altKey })); }

@@ -200,10 +200,18 @@ async function startServer() {
 
   // ─── RATE LIMITING ───
   const rateLimits = new Map<string, { count: number; resetAt: number }>();
-  const RATE_LIMIT_EVENTS = 200; // max events per second (needs headroom for scroll + cursor + input)
+  const RATE_LIMIT_SOFT = 200;  // soft cap/sec for loss-tolerant events (cursor/scroll/drag-move)
+  const RATE_LIMIT_HARD = 400;  // hard cap/sec — past this even critical events drop (abuse guard)
   const RATE_LIMIT_WINDOW = 1000; // 1 second window
 
-  function checkRateLimit(socketId: string): boolean {
+  // Loss-tolerant high-frequency events (cursor, scroll, drag-move) are
+  // rejected at the soft cap so a flood can never starve sync-critical
+  // discrete events — clicks, inputs, key presses — which pass up to the hard
+  // cap. This keeps teacher↔student state aligned under load: a fast-moving
+  // cursor or drag must not be allowed to drop the click that actually mutates
+  // the simulation. Under normal load (well under 200/s) everything passes,
+  // preserving the original behaviour.
+  function checkRateLimit(socketId: string, lossTolerant: boolean = false): boolean {
     const now = Date.now();
     let entry = rateLimits.get(socketId);
     if (!entry || now > entry.resetAt) {
@@ -211,7 +219,9 @@ async function startServer() {
       rateLimits.set(socketId, entry);
     }
     entry.count++;
-    return entry.count <= RATE_LIMIT_EVENTS;
+    if (entry.count <= RATE_LIMIT_SOFT) return true;
+    if (!lossTolerant && entry.count <= RATE_LIMIT_HARD) return true;
+    return false;
   }
 
   // Clean up rate limit entries periodically
@@ -1680,7 +1690,10 @@ async function startServer() {
 
     // ─── INTERACTION SYNC ───
     socket.on('interaction', ({ roomId, event }: { roomId: string; event: any }) => {
-      if (!checkRateLimit(socket.id)) return; // Rate limited
+      const evtType = event?.type;
+      const lossTolerant = evtType === 'SYNC_CURSOR' || evtType === 'SYNC_SCROLL'
+        || evtType === 'SYNC_DRAG' || evtType === 'SYNC_MOUSEMOVE';
+      if (!checkRateLimit(socket.id, lossTolerant)) return; // Rate limited
       updateRoomActivity(roomId);
       event.userId = socket.id;
       const room = rooms.get(roomId);
