@@ -8,6 +8,7 @@ import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import Home from './pages/Home';
 import ErrorBoundary from './components/ErrorBoundary';
 import ShortcutsOverlay from './components/ShortcutsOverlay';
+import { AuthProvider } from './lib/auth';
 
 // AUTONOMOUS: [ORDER-4 FUTURE-PROOFING] - Code-split the heavy routes.
 // The build was warning that the bundle was >500KB; the Home page only
@@ -51,20 +52,22 @@ export default function App() {
     // page (Home / Room / StudentView) shows a recoverable error instead of
     // a blank white screen.
     <ErrorBoundary>
-      <BrowserRouter>
-        <Suspense fallback={<RouteFallback />}>
-          <Routes>
-            <Route path="/" element={<Home />} />
-            <Route path="/room/:roomId" element={<Room />} />
-            <Route path="/live/:roomId" element={<StudentView />} />
-            {/* Backward compatibility */}
-            <Route path="/student/:roomId" element={<StudentView />} />
-          </Routes>
-        </Suspense>
-        {/* AUTONOMOUS: [ORDER-3 FRICTION] - Mounted once at the root so the
-            `?` shortcut works on every page. Self-contained — no props. */}
-        <ShortcutsOverlay />
-      </BrowserRouter>
+      <AuthProvider>
+        <BrowserRouter>
+          <Suspense fallback={<RouteFallback />}>
+            <Routes>
+              <Route path="/" element={<Home />} />
+              <Route path="/room/:roomId" element={<Room />} />
+              <Route path="/live/:roomId" element={<StudentView />} />
+              {/* Backward compatibility */}
+              <Route path="/student/:roomId" element={<StudentView />} />
+            </Routes>
+          </Suspense>
+          {/* AUTONOMOUS: [ORDER-3 FRICTION] - Mounted once at the root so the
+              `?` shortcut works on every page. Self-contained — no props. */}
+          <ShortcutsOverlay />
+        </BrowserRouter>
+      </AuthProvider>
     </ErrorBoundary>
   );
 }
