@@ -446,40 +446,42 @@ async function startServer() {
   // Concurrency guard: if a save is already in flight, skip the new one
   // instead of stacking saves. This avoids fs contention during a burst of
   // disconnects on shutdown.
+  // Whiteboard-only rooms (no files / lastRunHtml, but with strokes / objects
+  // / shapes) SHOULD persist — otherwise a teacher who teaches purely on the
+  // whiteboard loses their work on every redeploy.
+  function roomHasContent(room: RoomData): boolean {
+    return (
+      room.files.length > 0 ||
+      !!room.lastRunHtml ||
+      !!room.tempContent ||
+      (room.chat?.length ?? 0) > 0 ||
+      (room.whiteboard?.objects?.length ?? 0) > 0 ||
+      (room.whiteboard?.strokes?.length ?? 0) > 0 ||
+      (room.whiteboard?.shapes?.length ?? 0) > 0 ||
+      (room.whiteboard?.texts?.length ?? 0) > 0
+    );
+  }
+
+  // TTL mirrors the room's claim-aware expiry so the durable store self-cleans
+  // even for rooms that are only ever lazy-loaded (never resident in memory
+  // for the in-process sweep to catch).
+  function saveSingleRoom(roomId: string, room: RoomData): Promise<void> {
+    const ttlSeconds = Math.max(60, Math.floor((computeExpiresAt(room) - Date.now()) / 1000));
+    return roomStore.save(roomId, serializeRoom(roomId, room), ttlSeconds)
+      .catch(err => { console.error(`Failed to persist room ${roomId}:`, err); });
+  }
+
   let saveInFlight = false;
   async function saveRooms() {
     if (saveInFlight) return;
     saveInFlight = true;
     try {
-      const now = Date.now();
       const writes: Promise<void>[] = [];
       let attempted = 0;
       for (const [roomId, room] of rooms.entries()) {
-        // Skip rooms with literally nothing in them. Whiteboard-only rooms
-        // (no files, no lastRunHtml, but with strokes / objects / shapes)
-        // SHOULD persist — otherwise a teacher who teaches purely on the
-        // whiteboard loses their work on every redeploy.
-        const hasContent =
-          room.files.length > 0 ||
-          !!room.lastRunHtml ||
-          !!room.tempContent ||
-          (room.chat?.length ?? 0) > 0 ||
-          (room.whiteboard?.objects?.length ?? 0) > 0 ||
-          (room.whiteboard?.strokes?.length ?? 0) > 0 ||
-          (room.whiteboard?.shapes?.length ?? 0) > 0 ||
-          (room.whiteboard?.texts?.length ?? 0) > 0;
-        if (!hasContent) continue;
+        if (!roomHasContent(room)) continue;
         attempted++;
-        // TTL mirrors the room's claim-aware expiry so the durable store
-        // self-cleans even for rooms that are only ever lazy-loaded (never
-        // resident in memory for the in-process sweep to catch).
-        const ttlSeconds = Math.max(60, Math.floor((computeExpiresAt(room) - now) / 1000));
-        writes.push(
-          roomStore.save(roomId, serializeRoom(roomId, room), ttlSeconds)
-            .catch(err => {
-              console.error(`Failed to persist room ${roomId}:`, err);
-            })
-        );
+        writes.push(saveSingleRoom(roomId, room));
       }
       await Promise.all(writes);
       if (attempted > 0) console.log(`💾 Persisted ${attempted} rooms → ${roomStore.kind}`);
@@ -487,6 +489,52 @@ async function startServer() {
       saveInFlight = false;
     }
   }
+
+  // ─── DEBOUNCED PER-ROOM SAVE (near-instant durability) ──────────────────
+  // The 5-min interval + save-on-teacher-disconnect already cover graceful
+  // shutdowns, but a hard crash could lose up to ~5 min of the latest work.
+  // To shrink that window we persist a room a few seconds after any mutating
+  // event. A per-room debounce (skip if one is already scheduled) coalesces
+  // bursts — e.g. a flurry of whiteboard strokes results in ONE write, not
+  // hundreds — keeping us well within Upstash free-tier command budgets.
+  const pendingSaves = new Map<string, ReturnType<typeof setTimeout>>();
+  const SAVE_DEBOUNCE_MS = 3000;
+  async function persistRoom(roomId: string) {
+    const room = rooms.get(roomId);
+    if (!room || !roomHasContent(room)) return;
+    await saveSingleRoom(roomId, room);
+  }
+  function scheduleSave(roomId: string) {
+    if (!roomId || pendingSaves.has(roomId)) return;
+    const timer = setTimeout(() => {
+      pendingSaves.delete(roomId);
+      void persistRoom(roomId);
+    }, SAVE_DEBOUNCE_MS);
+    // Don't let a pending save keep the process alive at shutdown.
+    if (typeof timer.unref === 'function') timer.unref();
+    pendingSaves.set(roomId, timer);
+  }
+
+  // Events that change persisted room state. A mutation in any of these
+  // schedules a debounced save for that room. High-frequency / transient
+  // events (interaction, cursor, laser, pan/zoom view, scroll) are
+  // deliberately excluded — they'd cause save storms and carry no durable
+  // state worth flushing eagerly.
+  const MUTATING_EVENTS = new Set<string>([
+    'set_room_password', 'upload_file', 'update_file', 'delete_file', 'switch_file',
+    'run_preview', 'sync_html_update', 'dom_snapshot',
+    'toggle_scroll_sync', 'toggle_student_interaction', 'zoom_changed',
+    'draw_stroke', 'draw_delete_stroke', 'draw_clear',
+    'whiteboard_draw', 'whiteboard_set_image', 'whiteboard_add_image',
+    'whiteboard_update_object', 'whiteboard_remove_object',
+    'whiteboard_add_shape', 'whiteboard_update_shape', 'whiteboard_remove_shape',
+    'whiteboard_set_grid_mode', 'whiteboard_add_instrument', 'whiteboard_update_instrument',
+    'whiteboard_remove_instrument', 'whiteboard_add_text', 'whiteboard_update_text',
+    'whiteboard_remove_text', 'whiteboard_clear', 'whiteboard_reset',
+    'whiteboard_delete_stroke', 'whiteboard_delete_strokes', 'whiteboard_mode_toggle',
+    'show_temp_content', 'clear_temp_content',
+    'set_step', 'add_gate', 'claim_room', 'hard_reset', 'send_chat',
+  ]);
 
   // Build an in-memory RoomData from a persisted blob. Shared by the eager
   // boot restore AND the lazy on-join restore, so both paths hydrate rooms
@@ -750,6 +798,16 @@ async function startServer() {
     // existing flows because nothing else listens for these events.
     socket.on('ping', (data: { ts: number }) => {
       socket.emit('pong', { ts: data?.ts ?? Date.now() });
+    });
+
+    // Near-instant durability: any mutating event schedules a debounced save
+    // for that room. Single observer — touches no handler logic. Reads roomId
+    // from the (conventional) first-arg payload; non-mutating or roomId-less
+    // events are ignored, and scheduleSave no-ops if the room isn't resident.
+    socket.onAny((eventName: string, ...eventArgs: any[]) => {
+      if (!MUTATING_EVENTS.has(eventName)) return;
+      const rid = eventArgs?.[0]?.roomId;
+      if (typeof rid === 'string') scheduleSave(rid);
     });
 
     // ─── JOIN ROOM ───
