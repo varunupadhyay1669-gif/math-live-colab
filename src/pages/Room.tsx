@@ -357,6 +357,8 @@ export default function Room() {
   const snapshotTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const snapshotRequestRef = useRef<string | null>(null);
   const lastRevisionRef = useRef(0);
+  // Last DOM we broadcast — lets the idle heartbeat skip identical re-sends.
+  const lastSentSnapshotRef = useRef<string>('');
 
   const applySessionState = useCallback((state: any) => {
     if (typeof state.revision === 'number') {
@@ -1010,6 +1012,24 @@ export default function Room() {
     }
   }, []);
 
+  // ── Heartbeat mirror ──
+  // When the teacher is the sole driver and an HTML lesson is loaded, re-snapshot
+  // every 2.5s so a following student converges to the teacher's EXACT screen even
+  // while the teacher is idle — otherwise a student who drifted (or joined on a
+  // different state) stays drifted until the teacher next interacts. The server
+  // forwards this as a flicker-free soft-swap, and the change-detection above
+  // skips identical DOM, so an idle teacher generates ~no traffic.
+  useEffect(() => {
+    if (studentInteractionAllowed || whiteboardMode) return;
+    const id = setInterval(() => {
+      if (!iframeReadyRef.current || !previewHtmlRef.current) return;
+      const requestId = `snap-hb-${Date.now()}`;
+      snapshotRequestRef.current = requestId;
+      postToIframe({ type: 'REQUEST_HTML', requestId });
+    }, 2500);
+    return () => clearInterval(id);
+  }, [studentInteractionAllowed, whiteboardMode, postToIframe]);
+
   // ── Iframe onLoad: flush pending messages ──
   const handleIframeLoad = useCallback(() => {
     iframeReadyRef.current = true;
@@ -1092,6 +1112,12 @@ export default function Room() {
         if (snapshotRequestRef.current && e.data.requestId === snapshotRequestRef.current) {
           const requestId = snapshotRequestRef.current;
           snapshotRequestRef.current = null;
+          // Heartbeat snapshots only need to go out when the DOM actually
+          // changed — skip identical re-sends so an idle teacher costs nothing.
+          if (requestId.startsWith('snap-hb-') && e.data.html === lastSentSnapshotRef.current) {
+            return;
+          }
+          lastSentSnapshotRef.current = e.data.html;
           console.info('[sync]', { eventType: 'snapshot_ack', roomId, requestId, role: 'teacher' });
           socket.emit("dom_snapshot", { roomId, html: e.data.html, requestId });
         } else {
