@@ -115,6 +115,10 @@ export default function Room() {
   // teacher already seated). Surfaces a blocking banner instead of failing
   // silently.
   const [joinErrorMsg, setJoinErrorMsg] = useState<string | null>(null);
+  // Saving the current board to this student's history (Stage 4).
+  const [savingHistory, setSavingHistory] = useState(false);
+  const sessionParam = searchParams.get('session');
+  const sessionAppliedRef = useRef(false);
   // AUTONOMOUS: Miro-style claim status.
   // claimed=false → 24h auto-expiry; banner shows "X left to save".
   // claimed=true  → 30d expiry; banner hidden.
@@ -931,6 +935,58 @@ export default function Room() {
     }
   }, [socket, connected, roomId, templateId, whiteboardState, lastSyncTime]);
 
+  // ── Reopen a saved session (?session=ID) — Stage 4 ──
+  // Once our teacher seat is registered, fetch the saved session and re-seed
+  // this room: the HTML lesson via upload_file (so it syncs to students), and
+  // the whiteboard via the same add-event replay the template hydrator uses.
+  // One-shot, idempotent, clears the URL param.
+  useEffect(() => {
+    if (!socket || !connected || !roomId || !sessionParam || !auth.enabled) return;
+    if (sessionAppliedRef.current) return;
+    if (!lastSyncTime) return;
+    sessionAppliedRef.current = true;
+    const stripParam = () => {
+      try {
+        const url = new URL(window.location.href);
+        url.searchParams.delete('session');
+        window.history.replaceState({}, '', url.toString());
+      } catch { /* tolerate non-browser env */ }
+    };
+    (async () => {
+      try {
+        const { getSession } = await import('../lib/sessions');
+        const s = await getSession(sessionParam);
+        if (!s) { showNotif('⚠️ Saved session not found'); stripParam(); return; }
+        // Re-seed the HTML lesson as a fresh file so it renders + syncs.
+        if (s.html_used) {
+          const fileId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+          socket.emit('upload_file', { roomId, file: { id: fileId, name: s.topic || 'Reopened session', html: s.html_used, uploadedAt: Date.now() } });
+          setPreviewHtml(s.html_used);
+        }
+        // Re-seed the whiteboard only if the room's board is currently empty
+        // (same guard as the template hydrator — never pile on top).
+        const wb: any = whiteboardState || {};
+        const hasContent = (wb.objects?.length ?? 0) > 0 || (wb.strokes?.length ?? 0) > 0 || (wb.shapes?.length ?? 0) > 0 || (wb.texts?.length ?? 0) > 0 || (wb.instruments?.length ?? 0) > 0;
+        const snap: any = s.whiteboard_snapshot || {};
+        const snapHasContent = (snap.objects?.length ?? 0) > 0 || (snap.strokes?.length ?? 0) > 0 || (snap.shapes?.length ?? 0) > 0 || (snap.texts?.length ?? 0) > 0 || (snap.instruments?.length ?? 0) > 0;
+        if (!hasContent && snapHasContent) {
+          if (snap.gridMode) socket.emit('whiteboard_set_grid_mode', { roomId, gridMode: snap.gridMode });
+          for (const shape of (snap.shapes || [])) socket.emit('whiteboard_add_shape', { roomId, shape });
+          for (const text of (snap.texts || [])) socket.emit('whiteboard_add_text', { roomId, text });
+          for (const inst of (snap.instruments || [])) socket.emit('whiteboard_add_instrument', { roomId, instrument: inst });
+          for (const obj of (snap.objects || [])) socket.emit('whiteboard_add_image', { roomId, object: obj });
+          for (const stroke of (snap.strokes || [])) socket.emit('whiteboard_draw', { roomId, stroke });
+        }
+        showNotif(`📂 Reopened: ${s.topic || 'saved session'}`);
+      } catch {
+        showNotif('⚠️ Could not reopen session');
+      } finally {
+        stripParam();
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [socket, connected, roomId, sessionParam, lastSyncTime, auth.enabled]);
+
   // ── Helper: safely post message to mirror iframe (queues if not ready) ──
   const postToMirror = useCallback((msg: any) => {
     if (mirrorReadyRef.current && mirrorIframeRef.current?.contentWindow) {
@@ -1297,6 +1353,28 @@ export default function Room() {
     setPasteFileName("");
     showNotif(`✅ Added: ${name}`);
   };
+
+  // ── Save current board to this student's history (Stage 4) ──
+  const saveToHistory = useCallback(async () => {
+    if (!auth.enabled || !auth.user || !roomId || savingHistory) return;
+    setSavingHistory(true);
+    try {
+      const { findClassIdByRoomCode, saveSession } = await import('../lib/sessions');
+      const classId = await findClassIdByRoomCode(roomId);
+      if (!classId) {
+        showNotif('⚠️ Create a class for this room in your dashboard first to save history.');
+        return;
+      }
+      const topic = files.find(f => f.id === activeFileId)?.name || (whiteboardMode ? 'Whiteboard session' : 'Session');
+      await saveSession({ classId, topic, html: previewHtmlRef.current || null, whiteboard: whiteboardState });
+      showNotif("💾 Saved to this student's history");
+    } catch {
+      showNotif('⚠️ Could not save to history');
+    } finally {
+      setSavingHistory(false);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [auth.enabled, auth.user, roomId, savingHistory, files, activeFileId, whiteboardMode, whiteboardState]);
 
   const runPreview = () => {
     if (!socket || !activeFileId) return;
@@ -1856,6 +1934,19 @@ export default function Room() {
             } catch { /* localStorage failure is non-fatal */ }
           }}
         />
+      )}
+      {auth.enabled && auth.user && (
+        <div className="px-4 py-1.5 flex items-center justify-center gap-2 text-xs font-semibold"
+          style={{ background: '#EEF2FF', color: '#3730A3', borderBottom: '1px solid rgba(99,102,241,0.18)' }}>
+          <span>Keep a record of this lesson for the student</span>
+          <button
+            onClick={saveToHistory}
+            disabled={savingHistory}
+            style={{ padding: '3px 12px', borderRadius: 8, border: '1px solid #6366F1', background: '#fff', color: '#3730A3', fontWeight: 700, cursor: savingHistory ? 'default' : 'pointer' }}
+          >
+            {savingHistory ? 'Saving…' : '💾 Save to history'}
+          </button>
+        </div>
       )}
       {claimed && claimedBy && (
         <div className="px-4 py-1.5 flex items-center justify-center gap-2 text-xs font-semibold"

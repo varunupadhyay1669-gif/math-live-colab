@@ -149,9 +149,11 @@ create policy "sessions owned by teacher" on public.sessions
       `classes` owner; a non-owner is rejected from a registered class. Ad-hoc
       rooms keep legacy behaviour. Activate with the three server env vars
       above.
-- [ ] **Session history:** on session end, write a `sessions` row (date, topic,
-      whiteboard snapshot, HTML used); show per-student history and let the
-      teacher reopen a past board.
+- [x] **Session history (shipped):** in a room, "💾 Save to history" writes a
+      `sessions` row (date, topic, whiteboard snapshot, HTML used) for that
+      student's class. The dashboard shows each student's past sessions and
+      "Reopen" re-seeds a room with that saved HTML + whiteboard
+      (`/room/<code>?session=<id>`).
 
 To build the dashboard I need the project live: do steps 1–4 above, then share
 your **`VITE_SUPABASE_URL`** and **`VITE_SUPABASE_ANON_KEY`** (these are public)

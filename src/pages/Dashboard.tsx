@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../lib/auth";
 import { listClasses, createClass, deleteClass, touchClass, type ClassRow } from "../lib/classes";
+import { listSessions, type SessionRow } from "../lib/sessions";
 
 // Teacher hub: a private list of classes (one per student) with permanent
 // links, plus create / open / delete. Only reachable when auth is enabled and
@@ -17,6 +18,10 @@ export default function Dashboard() {
   const [label, setLabel] = useState("");
   const [busy, setBusy] = useState(false);
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  // Per-student session history (Stage 4): which class is expanded + its rows.
+  const [historyOf, setHistoryOf] = useState<string | null>(null);
+  const [sessionsByClass, setSessionsByClass] = useState<Record<string, SessionRow[]>>({});
+  const [historyLoading, setHistoryLoading] = useState(false);
 
   // Guard: no auth / not signed in → home.
   useEffect(() => {
@@ -83,6 +88,32 @@ export default function Dashboard() {
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to delete class");
     }
+  };
+
+  const toggleHistory = async (row: ClassRow) => {
+    if (historyOf === row.id) { setHistoryOf(null); return; }
+    setHistoryOf(row.id);
+    if (!sessionsByClass[row.id]) {
+      setHistoryLoading(true);
+      try {
+        const list = await listSessions(row.id);
+        setSessionsByClass((prev) => ({ ...prev, [row.id]: list }));
+      } catch {
+        setSessionsByClass((prev) => ({ ...prev, [row.id]: [] }));
+      } finally {
+        setHistoryLoading(false);
+      }
+    }
+  };
+
+  // Reopen a saved session: the room hydrates HTML + whiteboard from ?session.
+  const reopenSession = (row: ClassRow, s: SessionRow) => {
+    navigate(`/room/${row.room_code}?name=${encodeURIComponent(teacherName)}&session=${s.id}`);
+  };
+
+  const fmtDate = (iso: string) => {
+    try { return new Date(iso).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }); }
+    catch { return iso; }
   };
 
   return (
@@ -152,7 +183,8 @@ export default function Dashboard() {
           ) : (
             <ul className="ml-dark-saved-list">
               {rows.map((row) => (
-                <li key={row.id} className="ml-dark-saved-item">
+                <React.Fragment key={row.id}>
+                <li className="ml-dark-saved-item">
                   <button
                     className="ml-dark-saved-open"
                     onClick={() => handleOpen(row)}
@@ -172,6 +204,13 @@ export default function Dashboard() {
                     {copiedId === row.id ? "Copied!" : "Copy link"}
                   </button>
                   <button
+                    className="ml-dark-btn ml-dark-btn-glass"
+                    onClick={() => toggleHistory(row)}
+                    title="Past sessions for this student"
+                  >
+                    {historyOf === row.id ? "Hide history" : "History"}
+                  </button>
+                  <button
                     className="ml-dark-saved-remove"
                     onClick={() => handleDelete(row)}
                     aria-label={`Delete ${row.student_name}'s class`}
@@ -180,6 +219,32 @@ export default function Dashboard() {
                     ×
                   </button>
                 </li>
+                {historyOf === row.id && (
+                  <li style={{ listStyle: "none", padding: "8px 12px", background: "rgba(255,255,255,0.04)", borderRadius: 8, margin: "2px 0 8px" }}>
+                    {historyLoading && !sessionsByClass[row.id] ? (
+                      <div style={{ opacity: 0.7, fontSize: 13 }}>Loading…</div>
+                    ) : (sessionsByClass[row.id]?.length ?? 0) === 0 ? (
+                      <div style={{ opacity: 0.7, fontSize: 13, lineHeight: 1.5 }}>
+                        No saved sessions yet. Open the room and use “💾 Save to history”.
+                      </div>
+                    ) : (
+                      <ul style={{ display: "flex", flexDirection: "column", gap: 4, margin: 0, padding: 0 }}>
+                        {sessionsByClass[row.id]!.map((s) => (
+                          <li key={s.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, listStyle: "none" }}>
+                            <span style={{ fontSize: 13 }}>
+                              <strong>{s.topic || "Session"}</strong>
+                              <span style={{ opacity: 0.6, marginLeft: 8 }}>{fmtDate(s.started_at)}</span>
+                            </span>
+                            <button className="ml-dark-btn ml-dark-btn-glass" onClick={() => reopenSession(row, s)}>
+                              Reopen
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </li>
+                )}
+                </React.Fragment>
               ))}
             </ul>
           )}
