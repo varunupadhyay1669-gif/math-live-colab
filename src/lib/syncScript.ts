@@ -501,6 +501,30 @@ export const injectedSyncScript = `
       }
     }, true);
 
+    // ── Pointer events ──
+    // Modern quizzes/sims often advance on Pointer Events, which the
+    // mouse/click/touch listeners above don't cover. Two failures result:
+    // (1) in view-only mode the student could still advance the quiz locally
+    // (the reported "student on Q5, teacher on Q2" drift); (2) in interactive
+    // mode a pointer-only interaction produced no SYNC_ signal, so the teacher
+    // never learned the student acted. Capture pointerdown/up: block them in
+    // view-only, and in interactive mode emit a marker so the parent triggers
+    // a fresh state snapshot to the teacher. We deliberately do NOT replay
+    // these on the teacher (the click sync + the absolute state snapshot do
+    // the real work) to avoid double-applying a gesture.
+    document.addEventListener('pointerdown', function(e) {
+      if (isRemote()) return;
+      if (blockLocalInteraction(e)) return;
+      if (!e.isTrusted) return;
+      var path = getElementPath(e.target);
+      window.parent.postMessage({ type: 'SYNC_POINTERDOWN', path: path, x: e.clientX / window.innerWidth, y: e.clientY / window.innerHeight, button: e.button || 0 }, '*');
+    }, true);
+
+    document.addEventListener('pointerup', function(e) {
+      if (isRemote()) return;
+      if (blockLocalInteraction(e)) return;
+    }, true);
+
     document.addEventListener('mouseup', function(e) {
       // Clear the drag flag before any guard returns so a blocked/remote
       // mouseup can't leave the gesture stuck "down".
@@ -729,6 +753,21 @@ export const injectedSyncScript = `
             bubbles: true, clientX: mmx, clientY: mmy, buttons: data.buttons || 1, view: window
           }));
         } finally { exitRemote(); }
+      } else if (data.type === 'REMOTE_DOM') {
+        // Absolute-state sync: replace the visible DOM with a snapshot of the
+        // other side's iframe (used so the teacher sees the student's ACTUAL
+        // current state — e.g. quiz question 5 — instead of a drifting replay
+        // of clicks). Soft body-innerHTML swap → no reload, no flicker. We are
+        // only mirroring what's on screen; the sync script's own listeners
+        // live on document and survive the swap.
+        enterRemote();
+        try {
+          var parsed = new DOMParser().parseFromString(data.html || '', 'text/html');
+          if (parsed && parsed.body && document.body) {
+            document.body.innerHTML = parsed.body.innerHTML;
+          }
+        } catch(ignore) {}
+        setTimeout(function() { exitRemote(); }, 0);
       } else if (data.type === 'REMOTE_KEYDOWN') {
         enterRemote();
         try { document.dispatchEvent(new KeyboardEvent('keydown', { key: data.key, code: data.code, bubbles: true, shiftKey: data.shiftKey, ctrlKey: data.ctrlKey, altKey: data.altKey })); }

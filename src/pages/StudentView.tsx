@@ -199,6 +199,9 @@ export default function StudentView() {
   const pendingMessagesRef = useRef<any[]>([]);
   const syncEpochRef = useRef(0);
   const lastInboundSeqRef = useRef(0);
+  // Debounce for streaming the student's own DOM snapshot up to the teacher
+  // (absolute-state sync so the teacher tracks the student's true state).
+  const studentSnapTimerRef = useRef<ReturnType<typeof setTimeout>>();
   const lastRevisionRef = useRef(0);
 
   const applySessionState = useCallback((state: any) => {
@@ -803,8 +806,17 @@ export default function StudentView() {
       const type = e.data?.type;
       if (!type) return;
 
-      // Filter out internal events that shouldn't be relayed as interactions
-      if (type === 'SYNC_PROVIDE_HTML' || type === 'STEP_INFO') return;
+      // Student → teacher absolute-state snapshot response: forward the
+      // student's REAL DOM up so the teacher's view tracks the student's
+      // actual state (self-heals quiz/sim drift). Triggered by the debounced
+      // REQUEST_HTML below, tagged with an 'sstate-' requestId.
+      if (type === 'SYNC_PROVIDE_HTML') {
+        if (typeof e.data.requestId === 'string' && e.data.requestId.indexOf('sstate-') === 0 && e.data.html) {
+          socket.emit('student_state', { roomId, html: e.data.html });
+        }
+        return;
+      }
+      if (type === 'STEP_INFO') return;
 
       if (!type.startsWith('SYNC_')) return;
       // Always allow cursor (teacher can see where students look)
@@ -830,10 +842,22 @@ export default function StudentView() {
           clientTs: Date.now(),
         },
       });
+
+      // After a discrete interaction (not cursor/scroll/drag-move), debounce a
+      // DOM snapshot of the student's own iframe up to the teacher. This is the
+      // self-healing absolute-state channel: even if a replayed click was
+      // dropped or mis-targeted, the teacher's view snaps to the student's TRUE
+      // current state (e.g. the right quiz question).
+      if (type !== 'SYNC_SCROLL' && type !== 'SYNC_MOUSEMOVE') {
+        if (studentSnapTimerRef.current) clearTimeout(studentSnapTimerRef.current);
+        studentSnapTimerRef.current = setTimeout(() => {
+          postToIframe({ type: 'REQUEST_HTML', requestId: 'sstate-' + Date.now() });
+        }, 400);
+      }
     };
     window.addEventListener("message", handler);
     return () => window.removeEventListener("message", handler);
-  }, [socket, roomId, scrollSyncEnabled, interactionAllowed]);
+  }, [socket, roomId, scrollSyncEnabled, interactionAllowed, postToIframe]);
 
   useEffect(() => {
     syncEpochRef.current += 1;

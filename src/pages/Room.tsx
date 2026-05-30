@@ -667,6 +667,19 @@ export default function Room() {
       if (isRecordingRef.current) sessionRecorder.record('interaction', event);
     });
 
+    // ── Student absolute-state snapshot ──
+    // Render the student's REAL DOM into the teacher's iframe (flicker-free
+    // soft replace) so the teacher always sees the student's true current
+    // state, not a drifting replay of clicks. Self-heals the quiz "student on
+    // Q5, teacher on Q2" desync. Only arrives while interaction is allowed.
+    newSocket.on("student_state", ({ html }: { html: string; studentId?: string; studentName?: string }) => {
+      if (!html) return;
+      postToIframe({ type: 'REMOTE_DOM', html });
+      if (dualViewRef.current && mirrorIframeRef.current?.contentWindow && mirrorReadyRef.current) {
+        mirrorIframeRef.current.contentWindow.postMessage({ type: 'REMOTE_DOM', html }, '*');
+      }
+    });
+
     // ── Student Feedback ──
     newSocket.on("student_feedback", ({ emoji, label, studentName }: { emoji: string; label: string; studentName: string }) => {
       const id = feedbackIdRef.current++;
