@@ -122,6 +122,12 @@ export default function AnnotationLayer({
   const eraserActive = interactive && eraserMode !== 'off';
   const shapeActive = interactive && shapeTool !== 'off';
   const isShapingRef = useRef<false | ShapeKind>(false);
+  // Per-author undo/redo for ink drawn OVER the HTML (parity with the
+  // whiteboard). We only track THIS user's own committed strokes, so Ctrl+Z
+  // never removes a peer's marks. Re-uses the existing draw_delete_stroke /
+  // draw_stroke events, so undo/redo reflects on every connected screen.
+  const myUndoRef = useRef<StrokeData[]>([]);
+  const myRedoRef = useRef<StrokeData[]>([]);
 
   // Read the iframe's current scroll position. Tolerant of cross-origin /
   // not-yet-loaded iframes — falls back to 0,0 in those cases (which means
@@ -150,6 +156,32 @@ export default function AnnotationLayer({
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
+    // Premium ink: stroke a smoothed path (quadratic curves through the
+    // midpoints of consecutive samples) instead of hard polyline segments,
+    // and render a single tap as a clean dot. Same {x,y} wire format.
+    const drawSmooth = (pts: Array<{ x: number; y: number }>) => {
+      if (pts.length === 0) return;
+      if (pts.length === 1) {
+        const prevFill = ctx.fillStyle;
+        ctx.beginPath();
+        ctx.fillStyle = ctx.strokeStyle as string;
+        ctx.arc(pts[0].x, pts[0].y, Math.max(0.6, ctx.lineWidth / 2), 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = prevFill;
+        return;
+      }
+      ctx.beginPath();
+      ctx.moveTo(pts[0].x, pts[0].y);
+      if (pts.length === 2) {
+        ctx.lineTo(pts[1].x, pts[1].y);
+      } else {
+        for (let i = 1; i < pts.length - 1; i++) {
+          ctx.quadraticCurveTo(pts[i].x, pts[i].y, (pts[i].x + pts[i + 1].x) / 2, (pts[i].y + pts[i + 1].y) / 2);
+        }
+        ctx.quadraticCurveTo(pts[pts.length - 2].x, pts[pts.length - 2].y, pts[pts.length - 1].x, pts[pts.length - 1].y);
+      }
+      ctx.stroke();
+    };
     const rect = canvas.getBoundingClientRect();
     if (canvas.width !== rect.width * 2 || canvas.height !== rect.height * 2) {
       canvas.width = rect.width * 2;
@@ -262,16 +294,9 @@ export default function AnnotationLayer({
           drawShapeStroke(stroke.kind, aOff, bOff);
         }
       } else {
-        ctx.beginPath();
-        stroke.points.forEach((p, i) => {
-          // Scroll offset: subtract the delta between current scroll and
-          // capture-time scroll so the stroke moves with the content.
-          const px = p.x * w - offsetX;
-          const py = p.y * h - offsetY;
-          if (i === 0) ctx.moveTo(px, py);
-          else ctx.lineTo(px, py);
-        });
-        ctx.stroke();
+        // Scroll offset: subtract the delta between current scroll and
+        // capture-time scroll so the stroke moves with the content.
+        drawSmooth(stroke.points.map(p => ({ x: p.x * w - offsetX, y: p.y * h - offsetY })));
       }
       ctx.restore();
     });
@@ -299,12 +324,7 @@ export default function AnnotationLayer({
       if (liveShape) {
         drawShapeStroke(liveShape, currentStrokeRef.current[0], currentStrokeRef.current[currentStrokeRef.current.length - 1]);
       } else {
-        ctx.beginPath();
-        currentStrokeRef.current.forEach((p, i) => {
-          if (i === 0) ctx.moveTo(p.x * w, p.y * h);
-          else ctx.lineTo(p.x * w, p.y * h);
-        });
-        ctx.stroke();
+        drawSmooth(currentStrokeRef.current.map(p => ({ x: p.x * w, y: p.y * h })));
       }
       ctx.restore();
     }
@@ -649,6 +669,8 @@ export default function AnnotationLayer({
           const id = newStrokeId();
           const stroke: StrokeData = { id, points: [a, b], color: penColor, width: penWidth, time: Date.now(), kind, scrollX, scrollY };
           strokesRef.current.push(stroke);
+          myUndoRef.current.push(stroke);
+          myRedoRef.current = [];
           socket.emit('draw_stroke', { roomId, id, points: [a, b], color: penColor, width: penWidth, kind, scrollX, scrollY });
         }
       }
@@ -663,6 +685,8 @@ export default function AnnotationLayer({
         const id = newStrokeId();
         const stroke: StrokeData = { id, points, color: '#000', width: eraserWidth, time: Date.now(), kind: 'eraser-pixel', scrollX, scrollY };
         strokesRef.current.push(stroke);
+        myUndoRef.current.push(stroke);
+        myRedoRef.current = [];
         socket.emit('draw_stroke', { roomId, id, points, color: '#000', width: eraserWidth, kind: 'eraser-pixel', scrollX, scrollY });
       }
       currentStrokeRef.current = [];
@@ -683,10 +707,55 @@ export default function AnnotationLayer({
       const id = newStrokeId();
       const stroke: StrokeData = { id, points, color: penColor, width: penWidth, time: Date.now(), transient: isTransientRef.current, kind: 'pen', scrollX, scrollY };
       strokesRef.current.push(stroke);
+      // Transient (fading) ink auto-disappears, so it isn't undoable.
+      if (!isTransientRef.current) {
+        myUndoRef.current.push(stroke);
+        myRedoRef.current = [];
+      }
       socket.emit('draw_stroke', { roomId, id, points, color: penColor, width: penWidth, transient: isTransientRef.current, kind: 'pen', scrollX, scrollY });
     }
     currentStrokeRef.current = [];
   };
+
+  // ── Undo / redo for over-HTML ink ──
+  const undoAnnotation = useCallback(() => {
+    const stroke = myUndoRef.current.pop();
+    if (!stroke || !stroke.id) return;
+    strokesRef.current = strokesRef.current.filter(s => s.id !== stroke.id);
+    if (socket) socket.emit('draw_delete_stroke', { roomId, strokeId: stroke.id });
+    myRedoRef.current.push(stroke);
+    renderStrokes();
+  }, [socket, roomId, renderStrokes]);
+
+  const redoAnnotation = useCallback(() => {
+    const stroke = myRedoRef.current.pop();
+    if (!stroke) return;
+    strokesRef.current.push(stroke);
+    if (socket) socket.emit('draw_stroke', {
+      roomId, id: stroke.id, points: stroke.points, color: stroke.color, width: stroke.width,
+      kind: stroke.kind, scrollX: stroke.scrollX, scrollY: stroke.scrollY,
+    });
+    myUndoRef.current.push(stroke);
+    renderStrokes();
+  }, [socket, roomId, renderStrokes]);
+
+  // Ctrl/Cmd+Z to undo, Ctrl/Cmd+Shift+Z or Ctrl+Y to redo — only while this
+  // user is actively drawing over the HTML, so we never hijack Ctrl+Z in
+  // other contexts (the whiteboard has its own separate undo).
+  useEffect(() => {
+    if (!interactive || !drawMode) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey)) return;
+      const t = e.target as HTMLElement | null;
+      const tag = t?.tagName?.toLowerCase();
+      if (tag === 'input' || tag === 'textarea' || t?.isContentEditable) return;
+      const k = e.key.toLowerCase();
+      if (k === 'z' && !e.shiftKey) { e.preventDefault(); undoAnnotation(); }
+      else if ((k === 'z' && e.shiftKey) || k === 'y') { e.preventDefault(); redoAnnotation(); }
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, [interactive, drawMode, undoAnnotation, redoAnnotation]);
 
   const handlePointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
     moveDraw(e);

@@ -1666,9 +1666,37 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
         }
         ctx.lineCap = 'round';
         ctx.lineJoin = 'round';
-        ctx.beginPath();
-        stroke.points.forEach((point, index) => index === 0 ? ctx.moveTo(point.x, point.y) : ctx.lineTo(point.x, point.y));
-        ctx.stroke();
+        // Premium ink: smooth the path with quadratic curves through the
+        // midpoints of consecutive samples (the classic signature-smoothing
+        // technique) instead of hard polyline segments. This removes the
+        // jagged "cheap" look while keeping the {x,y} wire format unchanged.
+        const pts = stroke.points;
+        if (pts.length === 1) {
+          // A single tap → a clean filled dot (a polyline can't render one).
+          ctx.beginPath();
+          ctx.fillStyle = ctx.strokeStyle as string;
+          ctx.arc(pts[0].x, pts[0].y, Math.max(0.6, ctx.lineWidth / 2), 0, Math.PI * 2);
+          ctx.fill();
+        } else if (pts.length === 2) {
+          ctx.beginPath();
+          ctx.moveTo(pts[0].x, pts[0].y);
+          ctx.lineTo(pts[1].x, pts[1].y);
+          ctx.stroke();
+        } else {
+          ctx.beginPath();
+          ctx.moveTo(pts[0].x, pts[0].y);
+          for (let i = 1; i < pts.length - 1; i++) {
+            const mx = (pts[i].x + pts[i + 1].x) / 2;
+            const my = (pts[i].y + pts[i + 1].y) / 2;
+            ctx.quadraticCurveTo(pts[i].x, pts[i].y, mx, my);
+          }
+          // Final segment to the true last point.
+          ctx.quadraticCurveTo(
+            pts[pts.length - 2].x, pts[pts.length - 2].y,
+            pts[pts.length - 1].x, pts[pts.length - 1].y,
+          );
+          ctx.stroke();
+        }
         ctx.restore();
       };
       // ── UNIFIED CONTENT RENDER (chronological z-order) ──
@@ -3566,6 +3594,107 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
                     </span>
                   )}
                 </div>
+                {/* AUTONOMOUS: Math symbol palette. Quick-tap row for
+                    symbols that are hard to type. In plain-text mode
+                    we insert the literal unicode character; in LaTeX
+                    mode we insert the matching command (e.g. \pi) so
+                    KaTeX renders it on commit.
+
+                    onMouseDown preventDefault keeps the textarea
+                    focused — without it the blur-commit fires and
+                    the editor closes the moment you click a symbol. */}
+                {(() => {
+                  const SYMBOLS: Array<{ label: string; plain: string; latex: string; title: string }> = [
+                    { label: '×', plain: '×', latex: '\\times ', title: 'Multiply' },
+                    { label: '÷', plain: '÷', latex: '\\div ', title: 'Divide' },
+                    { label: '±', plain: '±', latex: '\\pm ', title: 'Plus-minus' },
+                    { label: '°', plain: '°', latex: '^{\\circ}', title: 'Degree' },
+                    { label: 'π', plain: 'π', latex: '\\pi ', title: 'Pi' },
+                    { label: '√', plain: '√', latex: '\\sqrt{}', title: 'Square root' },
+                    { label: 'x²', plain: '²', latex: '^{2}', title: 'Squared' },
+                    { label: 'x³', plain: '³', latex: '^{3}', title: 'Cubed' },
+                    { label: '≤', plain: '≤', latex: '\\leq ', title: 'Less than or equal' },
+                    { label: '≥', plain: '≥', latex: '\\geq ', title: 'Greater than or equal' },
+                    { label: '≠', plain: '≠', latex: '\\neq ', title: 'Not equal' },
+                    { label: '≈', plain: '≈', latex: '\\approx ', title: 'Approximately' },
+                    { label: '∞', plain: '∞', latex: '\\infty ', title: 'Infinity' },
+                    { label: '∫', plain: '∫', latex: '\\int ', title: 'Integral' },
+                    { label: 'Σ', plain: 'Σ', latex: '\\sum ', title: 'Summation' },
+                    { label: '∠', plain: '∠', latex: '\\angle ', title: 'Angle' },
+                    { label: 'θ', plain: 'θ', latex: '\\theta ', title: 'Theta' },
+                    { label: '⅓', plain: '⅓', latex: '\\tfrac{1}{3}', title: 'One third' },
+                  ];
+                  const insertAtCursor = (s: string) => {
+                    const ta = textEditorRef.current;
+                    if (!ta) return;
+                    const start = ta.selectionStart ?? ta.value.length;
+                    const end = ta.selectionEnd ?? ta.value.length;
+                    const next = ta.value.slice(0, start) + s + ta.value.slice(end);
+                    setTextEditor(ed => ed ? { ...ed, value: next } : ed);
+                    // Move caret to just after the inserted text. We
+                    // need rAF because React hasn't applied the new
+                    // value to the DOM yet at this tick.
+                    requestAnimationFrame(() => {
+                      const t = textEditorRef.current;
+                      if (!t) return;
+                      const pos = start + s.length;
+                      t.focus();
+                      t.setSelectionRange(pos, pos);
+                    });
+                  };
+                  return (
+                    <div
+                      onMouseDown={(e) => e.preventDefault()}
+                      style={{
+                        display: 'flex',
+                        flexWrap: 'wrap',
+                        gap: 3,
+                        marginBottom: 6,
+                        maxWidth: 360,
+                        padding: 4,
+                        background: 'rgba(255,255,255,0.96)',
+                        border: '1px solid #E5E7EB',
+                        borderRadius: 8,
+                        boxShadow: '0 2px 8px rgba(15,23,42,0.10)',
+                      }}
+                      aria-label="Math symbols"
+                    >
+                      {SYMBOLS.map(s => (
+                        <button
+                          key={s.label}
+                          onClick={(e) => {
+                            e.preventDefault();
+                            insertAtCursor(textEditor.latex ? s.latex : s.plain);
+                          }}
+                          title={`${s.title} — inserts ${textEditor.latex ? s.latex.trim() : s.plain}`}
+                          style={{
+                            width: 32,
+                            height: 30,
+                            padding: 0,
+                            border: '1px solid transparent',
+                            borderRadius: 5,
+                            background: 'transparent',
+                            color: '#0F172A',
+                            fontFamily: 'ui-serif, Georgia, serif',
+                            fontSize: 15,
+                            cursor: 'pointer',
+                            transition: 'background 0.12s ease, border-color 0.12s ease',
+                          }}
+                          onMouseEnter={(e) => {
+                            e.currentTarget.style.background = 'rgba(99,102,241,0.10)';
+                            e.currentTarget.style.borderColor = 'rgba(99,102,241,0.30)';
+                          }}
+                          onMouseLeave={(e) => {
+                            e.currentTarget.style.background = 'transparent';
+                            e.currentTarget.style.borderColor = 'transparent';
+                          }}
+                        >
+                          {s.label}
+                        </button>
+                      ))}
+                    </div>
+                  );
+                })()}
                 <textarea
                   ref={textEditorRef}
                   autoFocus
