@@ -1,0 +1,3 @@
+## 2024-05-18 - Missing Disabled State Explanations and Placeholder-only Inputs
+**Learning:** Found that relying exclusively on placeholders for input forms is an accessibility anti-pattern because the placeholder disappears when users start typing, losing context. Also, disabled submit buttons without explicit explanations leave users confused about what required information is missing.
+**Action:** Always provide explicit `aria-label` attributes for inputs if no visible label is present. Always provide a `title` attribute for disabled buttons to clearly explain why they are disabled and what action is required to enable them.

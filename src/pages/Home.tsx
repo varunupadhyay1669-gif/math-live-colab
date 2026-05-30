@@ -276,6 +276,7 @@ export default function Home() {
               <input
                 autoFocus
                 className="ml-dark-input"
+                aria-label="What are you teaching today? (Teacher Name or Subject)"
                 placeholder="What are you teaching today?"
                 value={teacherName}
                 onChange={(e) => setTeacherName(e.target.value)}
@@ -283,6 +284,7 @@ export default function Home() {
               />
               <input
                 className="ml-dark-input ml-dark-input-mono"
+                aria-label="Permanent room code (optional)"
                 placeholder="Permanent room code (optional) — e.g. varun-grade5"
                 value={classCode}
                 onChange={(e) => setClassCode(e.target.value)}
@@ -292,6 +294,7 @@ export default function Home() {
                 className="ml-dark-btn ml-dark-btn-primary"
                 onClick={createRoom}
                 disabled={!teacherName.trim()}
+                title={!teacherName.trim() ? "Please enter what you are teaching to create a room" : undefined}
                 style={{ width: "100%" }}
               >
                 Create room
@@ -327,12 +330,14 @@ export default function Home() {
               <input
                 autoFocus
                 className="ml-dark-input"
+                aria-label="Your name"
                 placeholder="Your name"
                 value={studentName}
                 onChange={(e) => setStudentName(e.target.value)}
               />
               <input
                 className="ml-dark-input ml-dark-input-mono"
+                aria-label="Room code"
                 placeholder="abc123de"
                 value={roomCode}
                 onChange={(e) => setRoomCode(e.target.value)}
@@ -341,6 +346,7 @@ export default function Home() {
                 type="submit"
                 className="ml-dark-btn ml-dark-btn-primary"
                 disabled={!roomCode.trim() || !studentName.trim()}
+                title={(!roomCode.trim() || !studentName.trim()) ? "Please enter both your name and a room code to join" : undefined}
                 style={{ width: "100%" }}
               >
                 Join room
