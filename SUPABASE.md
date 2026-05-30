@@ -38,19 +38,22 @@ Open **SQL Editor** → paste and run the block in [§ Schema](#schema) below.
 This creates the `classes` and `sessions` tables and the Row-Level Security
 policies that ensure each teacher only ever sees their own rows.
 
-### 3. Enable Google sign-in
-1. **Google Cloud Console** → APIs & Services → Credentials → **Create OAuth
-   client ID** → type *Web application*.
-2. Under **Authorized redirect URIs** add:
-   `https://<your-project-ref>.supabase.co/auth/v1/callback`
-   (find `<your-project-ref>` in Supabase → Project Settings → API).
-3. Copy the **Client ID** and **Client secret**.
-4. Supabase → **Authentication → Providers → Google** → enable, paste the
-   Client ID + secret, save.
-5. Supabase → **Authentication → URL Configuration**:
+### 3. Sign-in: email magic-link (no extra provider setup)
+The app uses passwordless **email magic-links**, which are enabled by default
+on every Supabase project — no Google Cloud / OAuth client needed. You only
+have to allowlist where the link is allowed to land:
+
+1. Supabase → **Authentication → URL Configuration**:
    - **Site URL** = your app URL (e.g. `https://math-live.onrender.com`).
-   - **Redirect URLs** = add the same app URL (and `http://localhost:3000`
-     for local dev).
+   - **Redirect URLs** = add `<your app URL>/dashboard` (the link lands the
+     teacher on their dashboard) and, for local dev, `http://localhost:3000/dashboard`.
+2. (Optional) Authentication → Providers → **Email** is on by default. The
+   built-in mailer is fine for testing; for production volume, configure your
+   own SMTP under Authentication → Emails so links always deliver.
+
+> Want Google one-click later instead? Create a Google OAuth client, paste it
+> into Auth → Providers → Google, and swap `signInWithEmail` for
+> `signInWithOAuth({ provider: 'google' })` in `src/lib/auth.tsx`.
 
 ### 4. Set environment variables
 
@@ -132,11 +135,12 @@ create policy "sessions owned by teacher" on public.sessions
 ## Build status & plan
 
 - [x] **Foundation (shipped):** Supabase client, `AuthProvider`/`useAuth`,
-      Google sign-in gate on the teacher path, feature-flagged so the no-login
-      app is unchanged. SDK is lazy-loaded only when auth is enabled.
-- [ ] **Teacher dashboard:** list classes (one per student) + their permanent
-      links; create / rename / delete a class (generates a unique `room_code`);
-      open the room. CRUD via supabase-js under RLS.
+      email magic-link sign-in gate on the teacher path, feature-flagged so the
+      no-login app is unchanged. SDK is lazy-loaded only when auth is enabled.
+- [x] **Teacher dashboard (shipped):** `/dashboard` lists classes (one per
+      student) + their permanent links; create / delete a class (generates a
+      unique `room_code`); open the room; copy link. CRUD via supabase-js under
+      RLS.
 - [ ] **Ownership enforcement:** verify the teacher's Supabase JWT in
       Socket.IO; only the owning teacher may drive their room (replaces the
       current name-based `claim`). Needs `SUPABASE_JWT_SECRET`.

@@ -16,7 +16,8 @@ interface AuthState {
   loading: boolean;
   session: Session | null;
   user: User | null;
-  signInWithGoogle: () => Promise<void>;
+  /** Send a passwordless magic-link to `email`. Returns an error message on failure. */
+  signInWithEmail: (email: string) => Promise<{ error?: string }>;
   signOut: () => Promise<void>;
 }
 
@@ -63,14 +64,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     };
   }, []);
 
-  const signInWithGoogle = useCallback(async () => {
+  const signInWithEmail = useCallback(async (email: string): Promise<{ error?: string }> => {
     const { supabase } = await import('./supabase');
-    if (!supabase) return;
-    await supabase.auth.signInWithOAuth({
-      provider: 'google',
-      // Return to wherever the teacher started. Students never hit this path.
-      options: { redirectTo: window.location.origin },
+    if (!supabase) return { error: 'Auth not configured' };
+    const { error } = await supabase.auth.signInWithOtp({
+      email: email.trim(),
+      // Where the link in the email lands the teacher. This URL must be in
+      // Supabase → Auth → URL Configuration (Site URL / Redirect URLs).
+      options: { emailRedirectTo: `${window.location.origin}/dashboard` },
     });
+    return { error: error?.message };
   }, []);
 
   const signOut = useCallback(async () => {
@@ -86,7 +89,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         loading,
         session,
         user: session?.user ?? null,
-        signInWithGoogle,
+        signInWithEmail,
         signOut,
       }}
     >
@@ -105,7 +108,7 @@ export function useAuth(): AuthState {
       loading: false,
       session: null,
       user: null,
-      signInWithGoogle: async () => {},
+      signInWithEmail: async () => ({}),
       signOut: async () => {},
     };
   }
