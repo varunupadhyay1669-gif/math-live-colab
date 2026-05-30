@@ -20,7 +20,18 @@ The repo includes `render.yaml` (Blueprint).
 4. Render reads `render.yaml`, shows one service called `math-live`. Click
    **Apply**.
 5. First build takes ~3 minutes. When it goes green, open the URL Render gives
-   you (e.g. `https://math-live.onrender.com`).
+   you (this repo deploys at `https://math-live-colab.onrender.com`).
+
+### Environment variables (optional features)
+Set these in Render → your service → **Environment**, then **Manual Deploy →
+Clear build cache & deploy** (the `VITE_*` vars are inlined at *build* time, so
+they only take effect on a rebuild — setting them without redeploying does
+nothing):
+
+| Var | Enables | Notes |
+|-----|---------|-------|
+| `VITE_SUPABASE_URL` + `VITE_SUPABASE_ANON_KEY` | Teacher accounts (login + dashboard) | Public keys. Without them the app runs in no-login mode. See `SUPABASE.md`. |
+| `UPSTASH_REDIS_REST_URL` + `UPSTASH_REDIS_REST_TOKEN` | Durable rooms across restarts | Without them rooms persist to `.rooms/` only (wiped on free-tier restart). |
 
 ### Free-plan caveats
 - Service **sleeps after 15 min of inactivity**. First request after sleep

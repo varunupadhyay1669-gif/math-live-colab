@@ -44,7 +44,7 @@ on every Supabase project — no Google Cloud / OAuth client needed. You only
 have to allowlist where the link is allowed to land:
 
 1. Supabase → **Authentication → URL Configuration**:
-   - **Site URL** = your app URL (e.g. `https://math-live.onrender.com`).
+   - **Site URL** = your app URL (e.g. `https://math-live-colab.onrender.com`).
    - **Redirect URLs** = add `<your app URL>/dashboard` (the link lands the
      teacher on their dashboard) and, for local dev, `http://localhost:3000/dashboard`.
 2. (Optional) Authentication → Providers → **Email** is on by default. The
