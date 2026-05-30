@@ -1323,9 +1323,12 @@ async function startServer() {
         // stateful sims/quizzes in lockstep instead of drifting on replayed
         // clicks. Only while the teacher is the driver; when the student
         // drives, the teacher mirrors the student via student_state instead.
-        if (!room.studentInteractionAllowed) {
-          socket.to(roomId).emit('live_dom', { html, revision });
-        }
+        // Always mirror the teacher's DOM to students (single authoritative
+        // sim). In interactive mode the student's taps are relayed to the
+        // teacher (REMOTE_*) and drive the teacher's sim, whose result mirrors
+        // straight back — so the two sides run ONE sim and cannot diverge into
+        // different random problems.
+        socket.to(roomId).emit('live_dom', { html, revision });
       }
       logSync('snapshot_ack', { roomId, revision, requestId });
     });

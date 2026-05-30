@@ -422,9 +422,15 @@ export default function StudentView() {
     // we can't soft-swap yet (not loaded), fall back to a rebuild.
     newSocket.on("live_dom", ({ html }: { html: string }) => {
       if (!html) return;
-      if (currentHtmlRef.current && iframeReadyRef.current && !interactionAllowedRef.current) {
+      // Always mirror the teacher (single authoritative sim) — in BOTH modes.
+      // The REMOTE_DOM soft-swap strips the local sim's handlers, so the
+      // student stops running its own copy and becomes a faithful mirror;
+      // their taps still relay to the teacher (document-level listeners
+      // survive the body swap) and drive the shared sim. The swap is skipped
+      // while the student is typing, so it never wipes an in-progress answer.
+      if (currentHtmlRef.current && iframeReadyRef.current) {
         postToIframe({ type: 'REMOTE_DOM', html });
-      } else if (!interactionAllowedRef.current) {
+      } else {
         setCurrentHtml(prev => prev === html ? prev : html);
       }
     });

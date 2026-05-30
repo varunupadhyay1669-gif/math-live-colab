@@ -1020,7 +1020,9 @@ export default function Room() {
   // forwards this as a flicker-free soft-swap, and the change-detection above
   // skips identical DOM, so an idle teacher generates ~no traffic.
   useEffect(() => {
-    if (studentInteractionAllowed || whiteboardMode) return;
+    // Run in BOTH modes — the student always mirrors the teacher's single sim
+    // (in interactive mode their taps drive the teacher and mirror back).
+    if (whiteboardMode) return;
     const id = setInterval(() => {
       if (!iframeReadyRef.current || !previewHtmlRef.current) return;
       const requestId = `snap-hb-${Date.now()}`;
@@ -1167,16 +1169,13 @@ export default function Room() {
     };
   }, [socket, roomId, scrollSyncEnabled, dualView, postToMirror]);
 
-  // HYBRID DRIVER LOCK: a room has exactly one driver. When the teacher passes
-  // control to the student (studentInteractionAllowed = true), lock the
-  // teacher's OWN iframe so the teacher mirrors the student (via the
-  // student_state soft-swap) instead of co-driving — this is what guarantees
-  // the two screens can't diverge. When the teacher holds control, the iframe
-  // is interactive as normal (default behaviour, unchanged). Keyed on
-  // iframeUrl so a rebuilt iframe re-applies the correct mode.
+  // The teacher's iframe is the single authoritative sim and stays interactive
+  // in both modes — the student never runs an independent copy (it mirrors via
+  // live_dom), so there's no second driver to lock out. The student's taps are
+  // relayed to this iframe (REMOTE_*) and the result mirrors back.
   useEffect(() => {
-    postToIframe({ type: 'SET_INTERACTION_MODE', allowed: !studentInteractionAllowed });
-  }, [studentInteractionAllowed, iframeUrl, postToIframe]);
+    postToIframe({ type: 'SET_INTERACTION_MODE', allowed: true });
+  }, [iframeUrl, postToIframe]);
 
   useEffect(() => {
     // syncEpoch must mirror the student-side dependency set so the two counters
