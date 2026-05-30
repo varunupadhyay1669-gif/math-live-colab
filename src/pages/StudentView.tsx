@@ -848,7 +848,12 @@ export default function StudentView() {
       // self-healing absolute-state channel: even if a replayed click was
       // dropped or mis-targeted, the teacher's view snaps to the student's TRUE
       // current state (e.g. the right quiz question).
-      if (type !== 'SYNC_SCROLL' && type !== 'SYNC_MOUSEMOVE') {
+      // Typing (SYNC_INPUT/SYNC_CHANGE) is synced field-by-field via
+      // REMOTE_INPUT, which doesn't disturb the teacher's DOM — so it must NOT
+      // trigger a full-DOM snapshot (that was wiping the teacher's focused
+      // field). Snapshot only on discrete navigation (clicks, pointer, keys),
+      // debounced so a burst collapses to one.
+      if (type !== 'SYNC_SCROLL' && type !== 'SYNC_MOUSEMOVE' && type !== 'SYNC_INPUT' && type !== 'SYNC_CHANGE') {
         if (studentSnapTimerRef.current) clearTimeout(studentSnapTimerRef.current);
         studentSnapTimerRef.current = setTimeout(() => {
           postToIframe({ type: 'REQUEST_HTML', requestId: 'sstate-' + Date.now() });

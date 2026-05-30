@@ -597,7 +597,12 @@ export const injectedSyncScript = `
 
       if (data.type === 'REMOTE_INPUT' || data.type === 'REMOTE_CHANGE') {
         var el = findElement(data.path);
-        if (el) {
+        // Don't stomp the field the LOCAL user is actively editing — otherwise
+        // a remote keystroke resets their value/caret and they "can't type".
+        // The two sides reconcile when the local user blurs / on the next sync.
+        if (el && el === document.activeElement) {
+          // skip — local user owns this field right now
+        } else if (el) {
           enterRemote();
           try {
             if (el.type === 'checkbox' || el.type === 'radio') {
@@ -755,19 +760,27 @@ export const injectedSyncScript = `
         } finally { exitRemote(); }
       } else if (data.type === 'REMOTE_DOM') {
         // Absolute-state sync: replace the visible DOM with a snapshot of the
-        // other side's iframe (used so the teacher sees the student's ACTUAL
-        // current state — e.g. quiz question 5 — instead of a drifting replay
-        // of clicks). Soft body-innerHTML swap → no reload, no flicker. We are
-        // only mirroring what's on screen; the sync script's own listeners
-        // live on document and survive the swap.
-        enterRemote();
-        try {
-          var parsed = new DOMParser().parseFromString(data.html || '', 'text/html');
-          if (parsed && parsed.body && document.body) {
-            document.body.innerHTML = parsed.body.innerHTML;
-          }
-        } catch(ignore) {}
-        setTimeout(function() { exitRemote(); }, 0);
+        // other side's iframe (so the teacher sees the student's ACTUAL state —
+        // e.g. quiz question 5 — instead of a drifting replay of clicks). Soft
+        // body-innerHTML swap → no reload, no flicker.
+        //
+        // CRITICAL: never blow away the DOM while the LOCAL user is typing — a
+        // full innerHTML swap destroys the focused field and steals the caret,
+        // which made the teacher unable to type whenever the student typed.
+        // If the local user is editing, skip this snapshot entirely; a later
+        // one applies once they're done.
+        if (isEditableTarget(document.activeElement)) {
+          // skip — protect the local user's in-progress typing
+        } else {
+          enterRemote();
+          try {
+            var parsed = new DOMParser().parseFromString(data.html || '', 'text/html');
+            if (parsed && parsed.body && document.body) {
+              document.body.innerHTML = parsed.body.innerHTML;
+            }
+          } catch(ignore) {}
+          setTimeout(function() { exitRemote(); }, 0);
+        }
       } else if (data.type === 'REMOTE_KEYDOWN') {
         enterRemote();
         try { document.dispatchEvent(new KeyboardEvent('keydown', { key: data.key, code: data.code, bubbles: true, shiftKey: data.shiftKey, ctrlKey: data.ctrlKey, altKey: data.altKey })); }
