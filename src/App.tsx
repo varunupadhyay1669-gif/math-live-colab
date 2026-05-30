@@ -21,6 +21,7 @@ import { AuthProvider } from './lib/auth';
 // where every byte over the wire matters.
 const Room = lazy(() => import('./pages/Room'));
 const StudentView = lazy(() => import('./pages/StudentView'));
+const Dashboard = lazy(() => import('./pages/Dashboard'));
 
 // Tiny fallback while the route chunk loads. Matches the home page
 // background colour so there's no flash of wrong-colour content. The
@@ -57,6 +58,7 @@ export default function App() {
           <Suspense fallback={<RouteFallback />}>
             <Routes>
               <Route path="/" element={<Home />} />
+              <Route path="/dashboard" element={<Dashboard />} />
               <Route path="/room/:roomId" element={<Room />} />
               <Route path="/live/:roomId" element={<StudentView />} />
               {/* Backward compatibility */}

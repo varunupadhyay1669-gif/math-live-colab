@@ -273,6 +273,18 @@ export default function Home() {
                 )
               ) : (
                 <>
+              {auth.enabled && auth.user && (
+                <button
+                  className="ml-dark-btn ml-dark-btn-primary"
+                  onClick={() => navigate("/dashboard")}
+                  style={{ width: "100%" }}
+                >
+                  Open my classes
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <path d="M5 12h14M13 6l6 6-6 6" />
+                  </svg>
+                </button>
+              )}
               <input
                 autoFocus
                 className="ml-dark-input"
