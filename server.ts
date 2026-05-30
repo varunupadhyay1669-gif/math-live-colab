@@ -423,6 +423,12 @@ async function startServer() {
       password: room.password,
       scores: room.scores,
       revision: room.revision,
+      // Persist the interaction sequence so it doesn't restart at 0 when a
+      // restored room resumes — otherwise reconnecting clients (whose inbound
+      // guard survives) would drop the "lower" fresh seqs. Clients also reset
+      // their guard on reconnect, but keeping the server monotonic is belt-
+      // and-suspenders for the durable-store path.
+      interactionSeq: room.interactionSeq,
       liveSnapshotHtml: room.liveSnapshotHtml,
       whiteboard: room.whiteboard,
       annotations: room.annotations,
@@ -556,6 +562,7 @@ async function startServer() {
     room.password = raw.password || null;
     room.scores = raw.scores || {};
     room.revision = raw.revision || 0;
+    room.interactionSeq = raw.interactionSeq || 0;
     room.liveSnapshotHtml = raw.liveSnapshotHtml || null;
     room.whiteboard = raw.whiteboard
       ? {

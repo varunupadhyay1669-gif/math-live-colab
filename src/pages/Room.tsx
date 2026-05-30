@@ -443,6 +443,19 @@ export default function Room() {
       const wasReconnect = hasEverConnectedRef.current;
       hasEverConnectedRef.current = true;
       setConnected(true);
+      // AUTONOMOUS: Reset the inbound de-dupe guards on every (re)connect.
+      // These refs drop "stale" events by comparing against the highest
+      // serverSeq / revision seen so far — but the server's per-room
+      // interactionSeq restarts at 0 on a cold-start, and `revision` restarts
+      // at 0 for a room recreated fresh (free-tier ephemeral .rooms/). Because
+      // these refs SURVIVE the socket reconnect, a post-reconnect student
+      // event (seq 1,2,3…) would be silently dropped as "older" than our
+      // stale max — so the teacher stops seeing the student's live actions
+      // even though control still works. Resetting re-opens acceptance to the
+      // server's fresh sequence. Safe: the server never replays old events, so
+      // there's nothing to double-apply.
+      lastInboundSeqRef.current = 0;
+      lastRevisionRef.current = 0;
       // Re-claim the teacher seat on (re)connect. If a different tab is
       // already in the room we'll be allowed (same name) and that other
       // tab will receive a `teacher_replaced` notification.

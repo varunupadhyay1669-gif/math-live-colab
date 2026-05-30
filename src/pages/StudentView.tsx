@@ -297,6 +297,12 @@ export default function StudentView() {
 
     newSocket.on("connect", () => {
       setConnected(true);
+      // Reset inbound de-dupe guards on (re)connect — the server's per-room
+      // interactionSeq/revision can restart at 0 after a cold-start while
+      // these refs survive, which would otherwise make us drop every fresh
+      // post-reconnect event as "stale". See the matching note in Room.tsx.
+      lastInboundSeqRef.current = 0;
+      lastRevisionRef.current = 0;
       newSocket.emit("join_room", { roomId, userName: studentName, role: 'student' });
       // Start attention detection
       cleanupAttention = setupAttentionDetection(newSocket, roomId, studentName);
@@ -309,6 +315,8 @@ export default function StudentView() {
 
     newSocket.on("reconnect" as any, () => {
       setConnected(true);
+      lastInboundSeqRef.current = 0;
+      lastRevisionRef.current = 0;
       newSocket.emit("join_room", { roomId, userName: studentName, role: 'student' });
       showNotification("✅ Reconnected!");
     });
