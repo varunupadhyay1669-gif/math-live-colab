@@ -27,6 +27,7 @@ import SimulationLibrary from "../components/SimulationLibrary";
 import ConnectionStatus from "../components/ConnectionStatus";
 import Leaderboard from "../components/Leaderboard";
 import Whiteboard from "../components/Whiteboard";
+import { useAuth } from "../lib/auth";
 
 // ── Types ──
 interface FileEntry {
@@ -75,6 +76,13 @@ const CURSOR_COLORS = ["#6366F1", "#10B981", "#F59E0B", "#F43F5E", "#8B5CF6", "#
 export default function Room() {
   const { roomId } = useParams<{ roomId: string }>();
   const navigate = useNavigate();
+  const auth = useAuth();
+  // The signed-in teacher's Supabase token, mirrored into a ref so the socket
+  // 'connect' handler (set up once) always reads the latest value. Sent on
+  // join_room so the server can enforce class ownership (Stage 3). Undefined
+  // when auth is disabled — server then skips enforcement.
+  const authTokenRef = useRef<string | null>(null);
+  useEffect(() => { authTokenRef.current = auth.session?.access_token ?? null; }, [auth.session]);
   const [searchParams] = useSearchParams();
   const teacherName = searchParams.get('name') || 'Teacher';
   // AUTONOMOUS: Lesson templates — when arriving with ?template=ID,
@@ -103,6 +111,10 @@ export default function Room() {
   // and disables all write actions on the dethroned tab until the
   // user reloads.
   const [teacherReplaced, setTeacherReplaced] = useState(false);
+  // Server rejected this teacher join (ownership enforcement, or another
+  // teacher already seated). Surfaces a blocking banner instead of failing
+  // silently.
+  const [joinErrorMsg, setJoinErrorMsg] = useState<string | null>(null);
   // AUTONOMOUS: Miro-style claim status.
   // claimed=false → 24h auto-expiry; banner shows "X left to save".
   // claimed=true  → 30d expiry; banner hidden.
@@ -460,7 +472,7 @@ export default function Room() {
       // already in the room we'll be allowed (same name) and that other
       // tab will receive a `teacher_replaced` notification.
       setTeacherReplaced(false);
-      newSocket.emit("join_room", { roomId, userName: teacherName, role: 'teacher' });
+      newSocket.emit("join_room", { roomId, userName: teacherName, role: 'teacher', authToken: authTokenRef.current ?? undefined });
 
       // AUTONOMOUS: On a reconnect (NOT the initial connect), re-seed the
       // server with our cached HTML state. Render's free tier filesystem
@@ -487,6 +499,9 @@ export default function Room() {
     // or close the tab automatically; the user might want to read what
     // they had open. Just block writes (UI-side) and tell them clearly.
     newSocket.on("teacher_replaced", () => setTeacherReplaced(true));
+    newSocket.on("join_error", ({ message }: { message: string }) => {
+      setJoinErrorMsg(message || 'Unable to join this room.');
+    });
 
     // AUTONOMOUS: Room claim broadcast — fires when ANYONE in the room
     // clicks "Save to my boards". Banner hides for everyone (the room is
@@ -1785,6 +1800,18 @@ export default function Room() {
           the same teacher took over the room. The banner is non-dismissible
           (a hard reload fixes it; the user shouldn't keep editing on a
           dead-write tab). */}
+      {joinErrorMsg && (
+        <div className="animate-slide-down px-4 py-2.5 flex items-center justify-center gap-3 text-sm font-semibold"
+          style={{ background: '#FEF2F2', color: '#991B1B', borderBottom: '1px solid #FCA5A5' }}>
+          <span>⚠️ {joinErrorMsg}</span>
+          <button
+            onClick={() => navigate('/')}
+            style={{ padding: '4px 12px', borderRadius: 8, border: '1px solid #DC2626', background: '#fff', color: '#991B1B', fontWeight: 600, cursor: 'pointer' }}
+          >
+            Back to home
+          </button>
+        </div>
+      )}
       {teacherReplaced && (
         <div className="animate-slide-down px-4 py-2.5 flex items-center justify-center gap-3 text-sm font-semibold"
           style={{ background: '#FEF2F2', color: '#991B1B', borderBottom: '1px solid #FCA5A5' }}>

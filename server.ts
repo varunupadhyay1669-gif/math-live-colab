@@ -678,6 +678,54 @@ async function startServer() {
     return typeof roomId === 'string' && roomId.length > 0 && roomId.length <= MAX_ROOM_ID_LENGTH && /^[a-zA-Z0-9_-]+$/.test(roomId);
   }
 
+  // ─── TEACHER OWNERSHIP ENFORCEMENT (Stage 3) ───
+  // When Supabase is configured server-side, a room that corresponds to a
+  // registered class can only be DRIVEN by its owning teacher. We offload the
+  // crypto to Supabase: verify the access token via /auth/v1/user, then read
+  // the class owner via the service role (bypassing RLS so we can tell
+  // "not the owner" apart from "no such class"). Ad-hoc rooms (no class row)
+  // keep the legacy name-based behaviour. Entirely gated by env — absent →
+  // no enforcement, identical to before.
+  const SUPABASE_URL = process.env.SUPABASE_URL;
+  const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY;
+  const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  const ownershipEnabled = !!(SUPABASE_URL && SUPABASE_ANON_KEY && SUPABASE_SERVICE_ROLE_KEY);
+  console.log(
+    ownershipEnabled
+      ? '🔒 Teacher ownership enforcement: ON (registered classes are owner-only)'
+      : '🔓 Teacher ownership enforcement: OFF (set SUPABASE_URL + SUPABASE_ANON_KEY + SUPABASE_SERVICE_ROLE_KEY to enable)'
+  );
+
+  // Returns 'allow' | 'reject'. Fails OPEN (allow) on any transient error so a
+  // Supabase hiccup never locks a teacher out of their own class; only a
+  // definitive "this class belongs to someone else" rejects.
+  async function verifyTeacherOwnership(roomId: string, authToken: unknown): Promise<'allow' | 'reject'> {
+    if (!ownershipEnabled) return 'allow';
+    try {
+      // 1) Does a registered class exist for this room code, and who owns it?
+      const clsRes = await fetch(
+        `${SUPABASE_URL}/rest/v1/classes?room_code=eq.${encodeURIComponent(roomId)}&select=teacher_id`,
+        { headers: { apikey: SUPABASE_SERVICE_ROLE_KEY!, Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}` } },
+      );
+      if (!clsRes.ok) return 'allow';
+      const rows = (await clsRes.json()) as Array<{ teacher_id: string }>;
+      if (!Array.isArray(rows) || rows.length === 0) return 'allow'; // ad-hoc room → no enforcement
+      const ownerId = rows[0].teacher_id;
+
+      // 2) Registered class → require a valid token whose user IS the owner.
+      if (typeof authToken !== 'string' || !authToken) return 'reject';
+      const userRes = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
+        headers: { apikey: SUPABASE_ANON_KEY!, Authorization: `Bearer ${authToken}` },
+      });
+      if (!userRes.ok) return 'reject'; // invalid/expired token for an owned class
+      const user = (await userRes.json()) as { id?: string };
+      return user?.id && user.id === ownerId ? 'allow' : 'reject';
+    } catch (err) {
+      console.error(`Ownership check failed for ${roomId} (failing open):`, err);
+      return 'allow';
+    }
+  }
+
   function isMember(room: RoomData | undefined, socketId: string): room is RoomData {
     return !!room && room.users.has(socketId);
   }
@@ -818,7 +866,7 @@ async function startServer() {
     });
 
     // ─── JOIN ROOM ───
-    socket.on('join_room', async ({ roomId, userName, role, password }: { roomId: string; userName: string; role: 'teacher' | 'student'; password?: string }) => {
+    socket.on('join_room', async ({ roomId, userName, role, password, authToken }: { roomId: string; userName: string; role: 'teacher' | 'student'; password?: string; authToken?: string }) => {
       // Validate inputs
       if (!isValidRoomId(roomId)) {
         socket.emit('join_error', { message: 'Invalid room code' });
@@ -864,6 +912,19 @@ async function startServer() {
       if (room.password && role === 'student' && password !== room.password) {
         socket.emit('join_error', { message: 'Incorrect room password' });
         return;
+      }
+
+      // ── Ownership enforcement (Stage 3) ──
+      // For a registered class, only the owning (signed-in) teacher may take
+      // the teacher seat. No-op unless Supabase is configured server-side and
+      // the room is a registered class; ad-hoc rooms fall through to the
+      // legacy name-based gate below.
+      if (role === 'teacher' && ownershipEnabled) {
+        const decision = await verifyTeacherOwnership(roomId, authToken);
+        if (decision === 'reject') {
+          socket.emit('join_error', { message: 'This class belongs to another teacher. Please sign in as the owner.' });
+          return;
+        }
       }
 
       // ── Teacher-takeover gate ──

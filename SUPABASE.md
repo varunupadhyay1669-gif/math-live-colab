@@ -69,17 +69,20 @@ VITE_SUPABASE_ANON_KEY=<your anon/public key>
 > the data. Vite inlines `VITE_*` at build time, so on Render they must exist
 > **before** `npm run build` runs (set them, then redeploy).
 
-**Server (only needed for the next stages — ownership enforcement + history
-writes):**
+**Server (enables ownership enforcement — Stage 3):** set these three on
+Render so a registered class can only be DRIVEN by its owning teacher. All
+gated — absent → no enforcement (legacy name-based behaviour, no regression).
 
 ```
 SUPABASE_URL=https://<your-project-ref>.supabase.co
-SUPABASE_SERVICE_ROLE_KEY=<service-role key>   # server-only, NEVER in client
-SUPABASE_JWT_SECRET=<JWT secret>               # to verify teacher tokens
+SUPABASE_ANON_KEY=<anon/publishable key>       # used to verify the teacher's token
+SUPABASE_SERVICE_ROLE_KEY=<service-role key>   # server-only, NEVER in client — reads class owner
 ```
 
-Find these in Supabase → Project Settings → API. Keep the service-role key and
-JWT secret server-side only.
+Find these in Supabase → Project Settings → API. The service-role key is a
+full-access secret — keep it server-side only (it is never sent to the
+browser). After setting them, redeploy; the server logs
+`🔒 Teacher ownership enforcement: ON`.
 
 ### 5. Redeploy
 Once `VITE_SUPABASE_URL` + `VITE_SUPABASE_ANON_KEY` are set and the app
@@ -141,9 +144,11 @@ create policy "sessions owned by teacher" on public.sessions
       student) + their permanent links; create / delete a class (generates a
       unique `room_code`); open the room; copy link. CRUD via supabase-js under
       RLS.
-- [ ] **Ownership enforcement:** verify the teacher's Supabase JWT in
-      Socket.IO; only the owning teacher may drive their room (replaces the
-      current name-based `claim`). Needs `SUPABASE_JWT_SECRET`.
+- [x] **Ownership enforcement (shipped):** on join, the teacher's Supabase
+      token is verified via Supabase's own endpoints and checked against the
+      `classes` owner; a non-owner is rejected from a registered class. Ad-hoc
+      rooms keep legacy behaviour. Activate with the three server env vars
+      above.
 - [ ] **Session history:** on session end, write a `sessions` row (date, topic,
       whiteboard snapshot, HTML used); show per-student history and let the
       teacher reopen a past board.
