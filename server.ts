@@ -1316,6 +1316,16 @@ async function startServer() {
             io.to(studentId).emit('dom_snapshot', { fileId: room.activeFileId, html, revision, requestId });
           }
         }
+        // Live follow-mirror: push the teacher's CURRENT DOM to every
+        // already-joined student so their screen tracks the teacher exactly.
+        // The student applies it as a flicker-free soft DOM swap (NOT an iframe
+        // reload — that's why this is now safe during use), which keeps
+        // stateful sims/quizzes in lockstep instead of drifting on replayed
+        // clicks. Only while the teacher is the driver; when the student
+        // drives, the teacher mirrors the student via student_state instead.
+        if (!room.studentInteractionAllowed) {
+          socket.to(roomId).emit('live_dom', { html, revision });
+        }
       }
       logSync('snapshot_ack', { roomId, revision, requestId });
     });

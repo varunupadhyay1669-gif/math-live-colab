@@ -415,6 +415,20 @@ export default function StudentView() {
       }
     });
 
+    // Continuous follow-mirror: the teacher's live DOM, pushed on every
+    // teacher interaction. Apply via soft-swap (no reload, no script reset) so
+    // the student's screen faithfully tracks the teacher's — the fix for
+    // stateful sim/quiz drift. Only while following with a lesson loaded; if
+    // we can't soft-swap yet (not loaded), fall back to a rebuild.
+    newSocket.on("live_dom", ({ html }: { html: string }) => {
+      if (!html) return;
+      if (currentHtmlRef.current && iframeReadyRef.current && !interactionAllowedRef.current) {
+        postToIframe({ type: 'REMOTE_DOM', html });
+      } else if (!interactionAllowedRef.current) {
+        setCurrentHtml(prev => prev === html ? prev : html);
+      }
+    });
+
     newSocket.on("force_sync_state", (state: any) => {
       if (typeof state.revision === 'number') {
         if (state.revision < lastRevisionRef.current) return;
