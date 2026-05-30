@@ -1141,6 +1141,17 @@ export default function Room() {
     };
   }, [socket, roomId, scrollSyncEnabled, dualView, postToMirror]);
 
+  // HYBRID DRIVER LOCK: a room has exactly one driver. When the teacher passes
+  // control to the student (studentInteractionAllowed = true), lock the
+  // teacher's OWN iframe so the teacher mirrors the student (via the
+  // student_state soft-swap) instead of co-driving — this is what guarantees
+  // the two screens can't diverge. When the teacher holds control, the iframe
+  // is interactive as normal (default behaviour, unchanged). Keyed on
+  // iframeUrl so a rebuilt iframe re-applies the correct mode.
+  useEffect(() => {
+    postToIframe({ type: 'SET_INTERACTION_MODE', allowed: !studentInteractionAllowed });
+  }, [studentInteractionAllowed, iframeUrl, postToIframe]);
+
   useEffect(() => {
     // syncEpoch must mirror the student-side dependency set so the two counters
     // stay in lock-step. Including teacher-only UI flags like dualView here used

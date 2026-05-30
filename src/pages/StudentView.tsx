@@ -203,6 +203,11 @@ export default function StudentView() {
   // (absolute-state sync so the teacher tracks the student's true state).
   const studentSnapTimerRef = useRef<ReturnType<typeof setTimeout>>();
   const lastRevisionRef = useRef(0);
+  // Refs the once-set-up socket handlers read for live values.
+  const interactionAllowedRef = useRef(false);
+  const currentHtmlRef = useRef('');
+  useEffect(() => { interactionAllowedRef.current = interactionAllowed; }, [interactionAllowed]);
+  useEffect(() => { currentHtmlRef.current = currentHtml; }, [currentHtml]);
 
   const applySessionState = useCallback((state: any) => {
     if (typeof state.revision === 'number') {
@@ -396,7 +401,18 @@ export default function StudentView() {
         if (revision < lastRevisionRef.current) return;
         lastRevisionRef.current = revision;
       }
-      setCurrentHtml(prev => prev === html ? prev : html);
+      // FOLLOW MIRROR: when we're following the teacher (not the driver) and a
+      // lesson is already on screen, apply the teacher's live DOM via a soft
+      // body-swap that does NOT re-run the page's scripts — so stateful
+      // sims/quizzes faithfully mirror the teacher's exact screen instead of
+      // resetting their internal state on a full iframe rebuild. Only the
+      // teacher's per-interaction snapshots (dom_snapshot) take this path;
+      // genuine content loads (run_preview / new file) still rebuild.
+      if (currentHtmlRef.current && iframeReadyRef.current && !interactionAllowedRef.current) {
+        postToIframe({ type: 'REMOTE_DOM', html });
+      } else {
+        setCurrentHtml(prev => prev === html ? prev : html);
+      }
     });
 
     newSocket.on("force_sync_state", (state: any) => {
