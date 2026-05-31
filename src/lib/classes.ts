@@ -47,9 +47,11 @@ export async function createClass(studentName: string, label?: string): Promise<
   const teacher_id = userData.user?.id;
   if (!teacher_id) throw new Error('Not signed in');
   const base = slug(studentName) || 'class';
-  // Retry a few times to dodge the (rare) room_code uniqueness collision.
-  for (let attempt = 0; attempt < 5; attempt++) {
-    const room_code = `${base}-${randSuffix()}`;
+  // Prefer the student's plain name as the room code (memorable — the student
+  // can just type their name to join). Only add a short suffix if that exact
+  // code is already taken globally.
+  for (let attempt = 0; attempt < 6; attempt++) {
+    const room_code = attempt === 0 ? base : `${base}-${randSuffix()}`;
     const { data, error } = await supabase
       .from('classes')
       .insert({ teacher_id, student_name: studentName.trim(), label: label?.trim() || null, room_code })

@@ -59,6 +59,12 @@ export default function Home() {
     else setLinkSent(true);
   };
   const [mode, setMode] = useState<Mode>(null);
+
+  // Flow: as soon as a signed-in teacher reaches the teacher path, send them
+  // to their dashboard — the hub where they create per-student rooms.
+  useEffect(() => {
+    if (auth.enabled && auth.user && mode === "teacher") navigate("/dashboard");
+  }, [auth.enabled, auth.user, mode, navigate]);
   // AUTONOMOUS: Read saved-boards on first render and on every mode flip.
   // (Refs/state set on actions stay correct; the initial read covers the
   // common case of opening Home and seeing the list.)
@@ -312,20 +318,30 @@ export default function Home() {
                     </p>
                   </>
                 )
+              ) : auth.enabled && auth.user ? (
+                <div style={{ textAlign: "center", lineHeight: 1.6, padding: "8px 0" }}>
+                  <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 8 }}>You're signed in ✓</div>
+                  <p style={{ fontSize: 13, opacity: 0.75, marginBottom: 10 }}>Taking you to your classes…</p>
+                  <button
+                    className="ml-dark-btn ml-dark-btn-primary"
+                    onClick={() => navigate("/dashboard")}
+                    style={{ width: "100%" }}
+                  >
+                    Go to my classes
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      <path d="M5 12h14M13 6l6 6-6 6" />
+                    </svg>
+                  </button>
+                  <button
+                    className="ml-dark-btn ml-dark-btn-ghost"
+                    onClick={() => auth.signOut()}
+                    style={{ width: "100%", marginTop: 8 }}
+                  >
+                    Sign out{auth.user.email ? ` (${auth.user.email})` : ""}
+                  </button>
+                </div>
               ) : (
                 <>
-              {auth.enabled && auth.user && (
-                <button
-                  className="ml-dark-btn ml-dark-btn-primary"
-                  onClick={() => navigate("/dashboard")}
-                  style={{ width: "100%" }}
-                >
-                  Open my classes
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                    <path d="M5 12h14M13 6l6 6-6 6" />
-                  </svg>
-                </button>
-              )}
               <input
                 autoFocus
                 className="ml-dark-input"
@@ -352,15 +368,6 @@ export default function Home() {
                   <path d="M5 12h14M13 6l6 6-6 6" />
                 </svg>
               </button>
-              {auth.enabled && auth.user && (
-                <button
-                  className="ml-dark-btn ml-dark-btn-ghost"
-                  onClick={() => auth.signOut()}
-                  style={{ width: "100%" }}
-                >
-                  Sign out{auth.user.email ? ` (${auth.user.email})` : ""}
-                </button>
-              )}
                 </>
               )}
               <div className="ml-dark-back-row">
@@ -386,9 +393,9 @@ export default function Home() {
               />
               <input
                 className="ml-dark-input ml-dark-input-mono"
-                placeholder="abc123de"
+                placeholder="Room code (often your name)"
                 value={roomCode}
-                onChange={(e) => setRoomCode(e.target.value)}
+                onChange={(e) => setRoomCode(e.target.value.trim())}
               />
               <button
                 type="submit"
