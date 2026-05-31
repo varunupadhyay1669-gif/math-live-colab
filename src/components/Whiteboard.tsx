@@ -739,6 +739,75 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
       });
     }, [selectedShapeId, shapes, socket, isTeacher, roomId, recordAction]);
 
+    // Currently-selected ids across single + multi selection (shapes/text/images).
+    const getSelectedSets = useCallback(() => ({
+      shapeIds: new Set<string>([...(selectedShapeId ? [selectedShapeId] : []), ...multiShapeIds]),
+      textIds: new Set<string>([...(selectedTextId ? [selectedTextId] : []), ...multiTextIds]),
+      objIds: new Set<string>([...(selectedObjectId ? [selectedObjectId] : []), ...multiObjectIds]),
+    }), [selectedShapeId, selectedTextId, selectedObjectId, multiShapeIds, multiTextIds, multiObjectIds]);
+
+    // ── Duplicate selection (Ctrl+D) — shapes / text / images ──
+    const duplicateSelection = useCallback(() => {
+      const OFF = 24;
+      const now = Date.now();
+      const { shapeIds, textIds, objIds } = getSelectedSets();
+      const shapeClones: BoardShape[] = shapes.filter(s => shapeIds.has(s.id)).map(s => ({ ...s, id: newId('shape'), x1: s.x1 + OFF, y1: s.y1 + OFF, x2: s.x2 + OFF, y2: s.y2 + OFF, createdAt: now }));
+      const textClones: BoardText[] = texts.filter(t => textIds.has(t.id)).map(t => ({ ...t, id: newId('text'), x: t.x + OFF, y: t.y + OFF, createdAt: now, updatedAt: now }));
+      const objClones: BoardImageObject[] = objects.filter(o => objIds.has(o.id)).map(o => ({ ...o, id: newId('img'), x: o.x + OFF, y: o.y + OFF, zIndex: now }));
+      if (!shapeClones.length && !textClones.length && !objClones.length) return;
+      const addAll = () => {
+        if (shapeClones.length) setShapes(prev => [...prev, ...shapeClones]);
+        if (textClones.length) setTexts(prev => [...prev, ...textClones]);
+        if (objClones.length) setObjects(prev => [...prev, ...objClones]);
+        if (socket) {
+          if (isTeacher) { shapeClones.forEach(s => socket.emit('whiteboard_add_shape', { roomId, shape: s })); textClones.forEach(t => socket.emit('whiteboard_add_text', { roomId, text: t })); }
+          if (canMutateImages) objClones.forEach(o => socket.emit('whiteboard_add_image', { roomId, object: o }));
+        }
+      };
+      const removeAll = () => {
+        const sId = new Set(shapeClones.map(s => s.id)), tId = new Set(textClones.map(t => t.id)), oId = new Set(objClones.map(o => o.id));
+        if (shapeClones.length) setShapes(prev => prev.filter(s => !sId.has(s.id)));
+        if (textClones.length) setTexts(prev => prev.filter(t => !tId.has(t.id)));
+        if (objClones.length) setObjects(prev => prev.filter(o => !oId.has(o.id)));
+        if (socket) {
+          if (isTeacher) { shapeClones.forEach(s => socket.emit('whiteboard_remove_shape', { roomId, shapeId: s.id })); textClones.forEach(t => socket.emit('whiteboard_remove_text', { roomId, textId: t.id })); }
+          if (canMutateImages) objClones.forEach(o => socket.emit('whiteboard_remove_object', { roomId, objectId: o.id }));
+        }
+      };
+      addAll();
+      // Select the new copies.
+      setSelectedShapeId(null); setSelectedObjectId(null); setSelectedTextId(null); setSelectedStrokeIndex(null);
+      clearMultiSelection();
+      setMultiShapeIds(shapeClones.map(s => s.id));
+      setMultiTextIds(textClones.map(t => t.id));
+      setMultiObjectIds(objClones.map(o => o.id));
+      recordAction({ undo: removeAll, redo: addAll });
+    }, [shapes, texts, objects, getSelectedSets, socket, isTeacher, canMutateImages, roomId, recordAction, clearMultiSelection]);
+
+    // ── Z-order: bring to front / send to back — shapes / text / images ──
+    const zOrderSelection = useCallback((toFront: boolean) => {
+      const z = toFront ? Date.now() : 1;
+      const { shapeIds, textIds, objIds } = getSelectedSets();
+      if (!shapeIds.size && !textIds.size && !objIds.size) return;
+      const beforeShapes = shapes.filter(s => shapeIds.has(s.id)).map(s => ({ ...s }));
+      const afterShapes = beforeShapes.map(s => ({ ...s, createdAt: z }));
+      const beforeTexts = texts.filter(t => textIds.has(t.id)).map(t => ({ ...t }));
+      const afterTexts = beforeTexts.map(t => ({ ...t, createdAt: z }));
+      const beforeObjs = objects.filter(o => objIds.has(o.id)).map(o => ({ ...o }));
+      const afterObjs = beforeObjs.map(o => ({ ...o, zIndex: z }));
+      const apply = (sh: BoardShape[], tx: BoardText[], ob: BoardImageObject[]) => {
+        if (sh.length) setShapes(prev => prev.map(s => sh.find(x => x.id === s.id) || s));
+        if (tx.length) setTexts(prev => prev.map(t => tx.find(x => x.id === t.id) || t));
+        if (ob.length) setObjects(prev => prev.map(o => ob.find(x => x.id === o.id) || o));
+        if (socket) {
+          if (isTeacher) { sh.forEach(s => socket.emit('whiteboard_update_shape', { roomId, shape: s })); tx.forEach(t => socket.emit('whiteboard_update_text', { roomId, text: t })); }
+          if (canMutateImages) ob.forEach(o => socket.emit('whiteboard_update_object', { roomId, object: o }));
+        }
+      };
+      apply(afterShapes, afterTexts, afterObjs);
+      recordAction({ undo: () => apply(beforeShapes, beforeTexts, beforeObjs), redo: () => apply(afterShapes, afterTexts, afterObjs) });
+    }, [shapes, texts, objects, getSelectedSets, socket, isTeacher, canMutateImages, roomId, recordAction]);
+
     // ── Shape geometry helpers ──
     const shapeBounds = useCallback((shape: BoardShape) => {
       const pad = shape.width / 2 + 8 / view.boardScale;
@@ -2220,6 +2289,15 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
             } else if ((key === 'z' && e.shiftKey) || key === 'y') {
               e.preventDefault();
               redo();
+            } else if (key === 'd') {
+              e.preventDefault();
+              duplicateSelection();
+            } else if (key === ']') {
+              e.preventDefault();
+              zOrderSelection(true);
+            } else if (key === '[') {
+              e.preventDefault();
+              zOrderSelection(false);
             }
           }
         }
@@ -2233,7 +2311,7 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
         window.removeEventListener('keydown', down);
         window.removeEventListener('keyup', up);
       };
-    }, [isActive, canEdit, selectedObjectId, selectedStrokeIndex, selectedShapeId, selectedTextId, removeSelectedObject, deleteStrokeIndices, removeSelectedShape, removeSelectedText, multiObjectIds.length, multiShapeIds.length, multiStrokeIndices.length, multiTextIds.length, removeMultiSelection, clearMultiSelection, undo, redo, textEditor]);
+    }, [isActive, canEdit, selectedObjectId, selectedStrokeIndex, selectedShapeId, selectedTextId, removeSelectedObject, deleteStrokeIndices, removeSelectedShape, removeSelectedText, multiObjectIds.length, multiShapeIds.length, multiStrokeIndices.length, multiTextIds.length, removeMultiSelection, clearMultiSelection, undo, redo, duplicateSelection, zOrderSelection, textEditor]);
 
     useEffect(() => {
       if (!socket) return;
@@ -3546,6 +3624,13 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
             );
           })()}
           <div className="whiteboard-spacer" />
+          {canEdit && (selectedShape || selectedObject || selectedTextId || multiShapeIds.length > 0 || multiObjectIds.length > 0 || multiTextIds.length > 0) && (
+            <div className="whiteboard-control-group">
+              <button onClick={duplicateSelection} className="whiteboard-action" title="Duplicate (Ctrl+D)">Duplicate</button>
+              <button onClick={() => zOrderSelection(true)} className="whiteboard-action" title="Bring to front (Ctrl+])">Front</button>
+              <button onClick={() => zOrderSelection(false)} className="whiteboard-action" title="Send to back (Ctrl+[)">Back</button>
+            </div>
+          )}
           {canEdit && selectedObject && <button onClick={removeSelectedObject} className="whiteboard-action danger">Delete image</button>}
           {canEdit && selectedShape && <button onClick={removeSelectedShape} className="whiteboard-action danger">Delete shape</button>}
           {canEdit && selectedStrokeIndex !== null && <button onClick={() => deleteStrokeIndices([selectedStrokeIndex])} className="whiteboard-action danger">Delete stroke</button>}
