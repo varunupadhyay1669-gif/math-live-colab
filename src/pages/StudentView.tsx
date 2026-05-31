@@ -975,6 +975,7 @@ export default function StudentView() {
           <button
             className="flex items-center gap-2 px-2.5 py-1 rounded-full transition-all"
             data-tip="View leaderboard"
+            aria-label="View leaderboard"
             style={{
               background: 'linear-gradient(135deg, rgba(99,102,241,0.12), rgba(139,92,246,0.12))',
               border: '1px solid rgba(99,102,241,0.25)',
@@ -1040,8 +1041,8 @@ export default function StudentView() {
           <button onClick={() => {
             if (document.fullscreenElement) document.exitFullscreen();
             else document.documentElement.requestFullscreen().catch(() => {});
-          }} className="btn-icon" data-tip="Fullscreen">
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          }} className="btn-icon" data-tip="Fullscreen" aria-label="Fullscreen">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
               <polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/>
             </svg>
           </button>
