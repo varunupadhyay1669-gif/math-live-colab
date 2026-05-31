@@ -281,6 +281,8 @@ const RULER_BODY_THICKNESS = 56; // height of the ruler body
 const PROTRACTOR_DEFAULT_RADIUS = 240;
 
 const COLORS = ['#111827', '#EF4444', '#10B981', '#2563EB', '#F59E0B', '#7C3AED', '#FFFFFF'];
+// Soft fills for shapes (Excalidraw-style backgrounds) + a dark one.
+const FILL_COLORS = ['#FDE68A', '#FCA5A5', '#A7F3D0', '#BFDBFE', '#DDD6FE', '#111827'];
 const WIDTHS = [2, 4, 6, 10, 16, 24];
 
 // Pen-shaped cursor (hot-spot at the nib, bottom-left of a 24x24 SVG so the tip
@@ -453,6 +455,11 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
     const [eraserMode, setEraserMode] = useState<'stroke' | 'pixel'>('stroke');
     const [color, setColor] = useState('#111827');
     const [width, setWidth] = useState(4);
+    // Shape styling (Excalidraw-style). Defaults for new shapes; also edits the
+    // selected shape live via applyShapeStyle.
+    const [fillColor, setFillColor] = useState('');                       // '' = no fill
+    const [fillStyle, setFillStyle] = useState<ShapeFillStyle>('hachure');
+    const [strokeStyle, setStrokeStyle] = useState<ShapeStrokeStyle>('solid');
     const [view, setView] = useState<BoardView>({ boardScale: 1, boardOffsetX: 0, boardOffsetY: 0 });
     const [spacePan, setSpacePan] = useState(false);
     // Background grid style — synced across the room (it's a board-level
@@ -713,6 +720,24 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
     }, [multiObjectIds, multiShapeIds, multiStrokeIndices, multiTextIds, objects, shapes, socket, isTeacher, canMutateImages, roomId, clearMultiSelection, recordAction]);
 
     const selectedShape = selectedShapeId ? shapes.find(s => s.id === selectedShapeId) : null;
+
+    // Set styling for NEW shapes, and (if a shape is selected) apply it live to
+    // that shape too — synced + undoable like any other shape edit.
+    const applyShapeStyle = useCallback((patch: { fillColor?: string; fillStyle?: ShapeFillStyle; strokeStyle?: ShapeStrokeStyle }) => {
+      if (patch.fillColor !== undefined) setFillColor(patch.fillColor);
+      if (patch.fillStyle !== undefined) setFillStyle(patch.fillStyle);
+      if (patch.strokeStyle !== undefined) setStrokeStyle(patch.strokeStyle);
+      const sel = selectedShapeId ? shapes.find(s => s.id === selectedShapeId) : null;
+      if (!sel) return;
+      const before: BoardShape = { ...sel };
+      const after: BoardShape = { ...sel, ...patch };
+      setShapes(prev => prev.map(s => (s.id === sel.id ? after : s)));
+      if (socket && isTeacher) socket.emit('whiteboard_update_shape', { roomId, shape: after });
+      recordAction({
+        undo: () => { setShapes(prev => prev.map(s => (s.id === before.id ? before : s))); if (socket && isTeacher) socket.emit('whiteboard_update_shape', { roomId, shape: before }); },
+        redo: () => { setShapes(prev => prev.map(s => (s.id === after.id ? after : s))); if (socket && isTeacher) socket.emit('whiteboard_update_shape', { roomId, shape: after }); },
+      });
+    }, [selectedShapeId, shapes, socket, isTeacher, roomId, recordAction]);
 
     // ── Shape geometry helpers ──
     const shapeBounds = useCallback((shape: BoardShape) => {
@@ -2524,6 +2549,8 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
           kind,
           x1: start.x, y1: start.y, x2: start.x, y2: start.y,
           color, width,
+          strokeStyle,
+          ...(fillColor ? { fillColor, fillStyle } : {}),
           createdAt: Date.now(),
           // Compass marks the construction-point centre on the resulting circle.
           ...(tool === 'compass' ? { centerMark: true } : {}),
@@ -3477,6 +3504,47 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
               ))}
             </div>
           )}
+          {/* ── Shape styling (Excalidraw-style): fill, fill style, stroke style ──
+              Shown when a shape tool is active or a shape is selected. Edits the
+              selected shape live, and sets the default for new shapes. */}
+          {(isShapeTool(tool) || !!selectedShape) && (() => {
+            const curFill = selectedShape ? (selectedShape.fillColor || '') : fillColor;
+            const curStroke = selectedShape ? (selectedShape.strokeStyle || 'solid') : strokeStyle;
+            const curFillStyle = selectedShape ? (selectedShape.fillStyle || 'hachure') : fillStyle;
+            return (
+              <>
+                <div className="whiteboard-control-group" title="Fill">
+                  <button
+                    onClick={() => applyShapeStyle({ fillColor: '' })}
+                    className={`whiteboard-swatch ${!curFill ? 'active' : ''}`}
+                    style={{ background: '#fff', backgroundImage: 'linear-gradient(45deg,#e5e7eb 25%,transparent 25%,transparent 75%,#e5e7eb 75%)', backgroundSize: '8px 8px' }}
+                    aria-label="No fill" title="No fill"
+                  />
+                  {FILL_COLORS.map(c => (
+                    <button key={c} onClick={() => applyShapeStyle({ fillColor: c })} className={`whiteboard-swatch ${curFill === c ? 'active' : ''}`} style={{ background: c }} aria-label={`Fill ${c}`} />
+                  ))}
+                </div>
+                {curFill && (
+                  <div className="whiteboard-control-group" title="Fill style">
+                    {(['hachure', 'solid', 'cross-hatch'] as const).map(fs => (
+                      <button key={fs} onClick={() => applyShapeStyle({ fillStyle: fs })} className="whiteboard-action"
+                        style={{ fontSize: 11, padding: '4px 8px', fontWeight: curFillStyle === fs ? 800 : 500, opacity: curFillStyle === fs ? 1 : 0.55 }}>
+                        {fs === 'cross-hatch' ? 'cross' : fs}
+                      </button>
+                    ))}
+                  </div>
+                )}
+                <div className="whiteboard-control-group" title="Stroke style">
+                  {(['solid', 'dashed', 'dotted'] as const).map(ss => (
+                    <button key={ss} onClick={() => applyShapeStyle({ strokeStyle: ss })} className="whiteboard-action"
+                      style={{ fontSize: 11, padding: '4px 8px', fontWeight: curStroke === ss ? 800 : 500, opacity: curStroke === ss ? 1 : 0.55 }}>
+                      {ss}
+                    </button>
+                  ))}
+                </div>
+              </>
+            );
+          })()}
           <div className="whiteboard-spacer" />
           {canEdit && selectedObject && <button onClick={removeSelectedObject} className="whiteboard-action danger">Delete image</button>}
           {canEdit && selectedShape && <button onClick={removeSelectedShape} className="whiteboard-action danger">Delete shape</button>}
