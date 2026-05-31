@@ -1,6 +1,7 @@
 import React, { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import { Socket } from 'socket.io-client';
 import katex from 'katex';
+import rough from 'roughjs';
 import { templates as templatesStore } from '../lib/prefs';
 
 // AUTONOMOUS: KaTeX render helper. Safe-fails on invalid LaTeX (returns
@@ -109,11 +110,26 @@ interface WhiteboardProps {
   whiteboardSyncEnabled?: boolean;
 }
 
-type ShapeKind = 'line' | 'rect' | 'circle' | 'arrow';
+type ShapeKind = 'line' | 'rect' | 'circle' | 'arrow' | 'diamond';
+type ShapeFillStyle = 'solid' | 'hachure' | 'cross-hatch';
+type ShapeStrokeStyle = 'solid' | 'dashed' | 'dotted';
+
+// Stable rough.js seed from a shape id so the hand-drawn rendering doesn't
+// re-randomise (wiggle) on every animation-frame redraw.
+function shapeSeed(id: string): number {
+  let h = 0;
+  for (let i = 0; i < id.length; i++) h = (Math.imul(31, h) + id.charCodeAt(i)) | 0;
+  return (Math.abs(h) % 1_000_000) || 1;
+}
 
 interface BoardShape {
   id: string;
   kind: ShapeKind;
+  // Excalidraw-style styling (all optional; absent = crisp-but-sketchy
+  // outline, no fill, solid stroke — backward compatible with old shapes).
+  fillColor?: string;            // shape fill; absent/'' = transparent
+  fillStyle?: ShapeFillStyle;    // how the fill is drawn (default hachure)
+  strokeStyle?: ShapeStrokeStyle; // solid (default) | dashed | dotted
   // For line/arrow: x1,y1=start, x2,y2=end.
   // For rect: x1,y1 and x2,y2 are opposite corners (board-space).
   // For circle: x1,y1=center, x2,y2=an edge point (radius = distance).
@@ -239,7 +255,7 @@ export interface WhiteboardRef {
   getCanvas: () => HTMLCanvasElement | null;
 }
 
-type BoardTool = 'select' | 'pen' | 'highlighter' | 'eraser' | 'pan' | 'line' | 'rect' | 'circle' | 'arrow' | 'compass' | 'ruler' | 'protractor' | 'text';
+type BoardTool = 'select' | 'pen' | 'highlighter' | 'eraser' | 'pan' | 'line' | 'rect' | 'circle' | 'arrow' | 'diamond' | 'compass' | 'ruler' | 'protractor' | 'text';
 
 // Default font size for new text in board units. ~24px at 100% zoom.
 const TEXT_DEFAULT_FONT_SIZE = 24;
@@ -251,11 +267,11 @@ const TEXT_LINE_HEIGHT_RATIO = 1.25;
 // just additionally tags the resulting shape with centerMark so the centre
 // point is visible). Ruler / protractor are spawn-toggle instruments and
 // don't go through the shape-create dispatch.
-const SHAPE_TOOLS: BoardTool[] = ['line', 'rect', 'circle', 'arrow', 'compass'];
+const SHAPE_TOOLS: BoardTool[] = ['line', 'rect', 'circle', 'arrow', 'diamond', 'compass'];
 const isShapeTool = (t: BoardTool): boolean => SHAPE_TOOLS.includes(t);
 const shapeKindForTool = (t: BoardTool): ShapeKind | null => {
   if (t === 'compass') return 'circle';
-  if (t === 'line' || t === 'rect' || t === 'circle' || t === 'arrow') return t;
+  if (t === 'line' || t === 'rect' || t === 'circle' || t === 'arrow' || t === 'diamond') return t;
   return null;
 };
 
@@ -733,6 +749,16 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
         const r = Math.hypot(shape.x2 - shape.x1, shape.y2 - shape.y1);
         const d = Math.hypot(point.x - shape.x1, point.y - shape.y1);
         return Math.abs(d - r) <= tol;
+      }
+      if (shape.kind === 'diamond') {
+        const cx = (shape.x1 + shape.x2) / 2, cy = (shape.y1 + shape.y2) / 2;
+        const left = Math.min(shape.x1, shape.x2), right = Math.max(shape.x1, shape.x2);
+        const top = Math.min(shape.y1, shape.y2), bottom = Math.max(shape.y1, shape.y2);
+        const v = [{ x: cx, y: top }, { x: right, y: cy }, { x: cx, y: bottom }, { x: left, y: cy }];
+        for (let i = 0; i < 4; i++) {
+          if (distanceToSegment(point, v[i], v[(i + 1) % 4]) <= tol) return true;
+        }
+        return false;
       }
       return false;
     }, [view.boardScale]);
@@ -1564,49 +1590,69 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
         ctx.restore();
       };
 
+      // Excalidraw-style hand-drawn rendering via rough.js. A stable per-shape
+      // seed keeps the sketch from re-randomising each frame. Optional fill
+      // (solid/hachure/cross-hatch) and stroke style (dashed/dotted). Falls
+      // back to crisp canvas rendering if rough ever throws.
+      const rc = rough.canvas(canvas as HTMLCanvasElement);
       const drawShape = (shape: BoardShape) => {
         ctx.save();
-        ctx.strokeStyle = shape.color;
-        ctx.lineWidth = shape.width;
-        ctx.lineCap = 'round';
-        ctx.lineJoin = 'round';
-        if (shape.kind === 'rect') {
-          const x = Math.min(shape.x1, shape.x2);
-          const y = Math.min(shape.y1, shape.y2);
-          const w = Math.abs(shape.x2 - shape.x1);
-          const h = Math.abs(shape.y2 - shape.y1);
-          ctx.strokeRect(x, y, w, h);
-        } else if (shape.kind === 'circle') {
-          const r = Math.hypot(shape.x2 - shape.x1, shape.y2 - shape.y1);
-          ctx.beginPath();
-          ctx.arc(shape.x1, shape.y1, r, 0, Math.PI * 2);
-          ctx.stroke();
-          // Compass-drawn circles get a small filled dot at the centre point
-          // — matches what a real compass leaves on paper.
-          if (shape.centerMark) {
-            ctx.save();
-            ctx.fillStyle = shape.color;
-            ctx.beginPath();
-            ctx.arc(shape.x1, shape.y1, Math.max(shape.width * 0.9, 3 / view.boardScale), 0, Math.PI * 2);
-            ctx.fill();
-            ctx.restore();
+        const sw = shape.width;
+        const seed = shapeSeed(shape.id || 'shape');
+        const dash =
+          shape.strokeStyle === 'dashed' ? [sw * 3, sw * 2.5] :
+          shape.strokeStyle === 'dotted' ? [0.1, sw * 2.2] : undefined;
+        const opts: Record<string, unknown> = { stroke: shape.color, strokeWidth: sw, roughness: 1.1, bowing: 1, seed };
+        if (dash) opts.strokeLineDash = dash;
+        if (shape.fillColor) {
+          opts.fill = shape.fillColor;
+          opts.fillStyle = shape.fillStyle || 'hachure';
+          opts.fillWeight = Math.max(sw * 0.5, 0.6);
+          opts.hachureGap = Math.max(sw * 4, 6);
+        }
+        try {
+          if (shape.kind === 'rect') {
+            const x = Math.min(shape.x1, shape.x2), y = Math.min(shape.y1, shape.y2);
+            rc.rectangle(x, y, Math.abs(shape.x2 - shape.x1), Math.abs(shape.y2 - shape.y1), opts);
+          } else if (shape.kind === 'circle') {
+            const r = Math.hypot(shape.x2 - shape.x1, shape.y2 - shape.y1);
+            rc.ellipse(shape.x1, shape.y1, r * 2, r * 2, opts);
+            if (shape.centerMark) {
+              ctx.fillStyle = shape.color;
+              ctx.beginPath();
+              ctx.arc(shape.x1, shape.y1, Math.max(sw * 0.9, 3 / view.boardScale), 0, Math.PI * 2);
+              ctx.fill();
+            }
+          } else if (shape.kind === 'diamond') {
+            const cx = (shape.x1 + shape.x2) / 2, cy = (shape.y1 + shape.y2) / 2;
+            const left = Math.min(shape.x1, shape.x2), right = Math.max(shape.x1, shape.x2);
+            const top = Math.min(shape.y1, shape.y2), bottom = Math.max(shape.y1, shape.y2);
+            rc.polygon([[cx, top], [right, cy], [cx, bottom], [left, cy]], opts);
+          } else if (shape.kind === 'line' || shape.kind === 'arrow') {
+            rc.line(shape.x1, shape.y1, shape.x2, shape.y2, opts);
+            if (shape.kind === 'arrow') {
+              const angle = Math.atan2(shape.y2 - shape.y1, shape.x2 - shape.x1);
+              const headLen = Math.max(sw * 4, 14), ha = Math.PI / 7;
+              rc.line(shape.x2, shape.y2, shape.x2 - headLen * Math.cos(angle - ha), shape.y2 - headLen * Math.sin(angle - ha), opts);
+              rc.line(shape.x2, shape.y2, shape.x2 - headLen * Math.cos(angle + ha), shape.y2 - headLen * Math.sin(angle + ha), opts);
+            }
           }
-        } else if (shape.kind === 'line' || shape.kind === 'arrow') {
-          ctx.beginPath();
-          ctx.moveTo(shape.x1, shape.y1);
-          ctx.lineTo(shape.x2, shape.y2);
-          ctx.stroke();
-          if (shape.kind === 'arrow') {
-            // Arrowhead at (x2,y2). Length scales with line width.
-            const angle = Math.atan2(shape.y2 - shape.y1, shape.x2 - shape.x1);
-            const headLen = Math.max(shape.width * 4, 14);
-            const headAngle = Math.PI / 7;
-            ctx.beginPath();
-            ctx.moveTo(shape.x2, shape.y2);
-            ctx.lineTo(shape.x2 - headLen * Math.cos(angle - headAngle), shape.y2 - headLen * Math.sin(angle - headAngle));
-            ctx.moveTo(shape.x2, shape.y2);
-            ctx.lineTo(shape.x2 - headLen * Math.cos(angle + headAngle), shape.y2 - headLen * Math.sin(angle + headAngle));
-            ctx.stroke();
+        } catch {
+          ctx.strokeStyle = shape.color; ctx.lineWidth = sw; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+          if (dash) ctx.setLineDash(dash as number[]);
+          if (shape.kind === 'rect') {
+            const x = Math.min(shape.x1, shape.x2), y = Math.min(shape.y1, shape.y2);
+            ctx.strokeRect(x, y, Math.abs(shape.x2 - shape.x1), Math.abs(shape.y2 - shape.y1));
+          } else if (shape.kind === 'circle') {
+            const r = Math.hypot(shape.x2 - shape.x1, shape.y2 - shape.y1);
+            ctx.beginPath(); ctx.arc(shape.x1, shape.y1, r, 0, Math.PI * 2); ctx.stroke();
+          } else if (shape.kind === 'diamond') {
+            const cx = (shape.x1 + shape.x2) / 2, cy = (shape.y1 + shape.y2) / 2;
+            const left = Math.min(shape.x1, shape.x2), right = Math.max(shape.x1, shape.x2);
+            const top = Math.min(shape.y1, shape.y2), bottom = Math.max(shape.y1, shape.y2);
+            ctx.beginPath(); ctx.moveTo(cx, top); ctx.lineTo(right, cy); ctx.lineTo(cx, bottom); ctx.lineTo(left, cy); ctx.closePath(); ctx.stroke();
+          } else {
+            ctx.beginPath(); ctx.moveTo(shape.x1, shape.y1); ctx.lineTo(shape.x2, shape.y2); ctx.stroke();
           }
         }
         ctx.restore();
@@ -3302,6 +3348,7 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
       { id: 'rect', label: 'Rectangle', icon: <rect x="4" y="6" width="16" height="12" /> },
       { id: 'circle', label: 'Circle', icon: <circle cx="12" cy="12" r="8" /> },
       { id: 'arrow', label: 'Arrow', icon: <><path d="M5 19L19 5" /><path d="M12 5h7v7" /></> },
+      { id: 'diamond', label: 'Diamond', icon: <path d="M12 3l9 9-9 9-9-9z" /> },
       // Compass — circle drawn from the centre, leaves a small dot at the centre point.
       { id: 'compass', label: 'Compass', icon: <><circle cx="12" cy="12" r="8" /><circle cx="12" cy="12" r="1.5" fill="currentColor" /><path d="M12 4v3" /></> },
       // Ruler — toggle: spawn / remove the ruler instrument on the board.
@@ -3318,6 +3365,7 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
       tool === 'rect' ? 'Draw rectangle — click and drag' :
       tool === 'circle' ? 'Draw circle — click and drag from centre' :
       tool === 'arrow' ? 'Draw arrow — click and drag from start to head' :
+      tool === 'diamond' ? 'Draw diamond — click and drag' :
       tool === 'compass' ? 'Compass — click and drag from centre to draw a circle with a centre mark' :
       tool === 'ruler' ? 'Click to drop a ruler on the board' :
       tool === 'protractor' ? 'Click to drop a protractor on the board' :
