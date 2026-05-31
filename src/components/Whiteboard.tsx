@@ -746,14 +746,9 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
       objIds: new Set<string>([...(selectedObjectId ? [selectedObjectId] : []), ...multiObjectIds]),
     }), [selectedShapeId, selectedTextId, selectedObjectId, multiShapeIds, multiTextIds, multiObjectIds]);
 
-    // ── Duplicate selection (Ctrl+D) — shapes / text / images ──
-    const duplicateSelection = useCallback(() => {
-      const OFF = 24;
-      const now = Date.now();
-      const { shapeIds, textIds, objIds } = getSelectedSets();
-      const shapeClones: BoardShape[] = shapes.filter(s => shapeIds.has(s.id)).map(s => ({ ...s, id: newId('shape'), x1: s.x1 + OFF, y1: s.y1 + OFF, x2: s.x2 + OFF, y2: s.y2 + OFF, createdAt: now }));
-      const textClones: BoardText[] = texts.filter(t => textIds.has(t.id)).map(t => ({ ...t, id: newId('text'), x: t.x + OFF, y: t.y + OFF, createdAt: now, updatedAt: now }));
-      const objClones: BoardImageObject[] = objects.filter(o => objIds.has(o.id)).map(o => ({ ...o, id: newId('img'), x: o.x + OFF, y: o.y + OFF, zIndex: now }));
+    // Add freshly-built clone items (shapes/text/images): apply to state, sync,
+    // select the copies, and make it undoable. Shared by duplicate + paste.
+    const commitNewItems = useCallback((shapeClones: BoardShape[], textClones: BoardText[], objClones: BoardImageObject[]) => {
       if (!shapeClones.length && !textClones.length && !objClones.length) return;
       const addAll = () => {
         if (shapeClones.length) setShapes(prev => [...prev, ...shapeClones]);
@@ -775,14 +770,49 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
         }
       };
       addAll();
-      // Select the new copies.
       setSelectedShapeId(null); setSelectedObjectId(null); setSelectedTextId(null); setSelectedStrokeIndex(null);
       clearMultiSelection();
       setMultiShapeIds(shapeClones.map(s => s.id));
       setMultiTextIds(textClones.map(t => t.id));
       setMultiObjectIds(objClones.map(o => o.id));
       recordAction({ undo: removeAll, redo: addAll });
-    }, [shapes, texts, objects, getSelectedSets, socket, isTeacher, canMutateImages, roomId, recordAction, clearMultiSelection]);
+    }, [socket, isTeacher, canMutateImages, roomId, recordAction, clearMultiSelection]);
+
+    // ── Duplicate selection (Ctrl+D) — shapes / text / images ──
+    const duplicateSelection = useCallback(() => {
+      const OFF = 24, now = Date.now();
+      const { shapeIds, textIds, objIds } = getSelectedSets();
+      const shapeClones: BoardShape[] = shapes.filter(s => shapeIds.has(s.id)).map(s => ({ ...s, id: newId('shape'), x1: s.x1 + OFF, y1: s.y1 + OFF, x2: s.x2 + OFF, y2: s.y2 + OFF, createdAt: now }));
+      const textClones: BoardText[] = texts.filter(t => textIds.has(t.id)).map(t => ({ ...t, id: newId('text'), x: t.x + OFF, y: t.y + OFF, createdAt: now, updatedAt: now }));
+      const objClones: BoardImageObject[] = objects.filter(o => objIds.has(o.id)).map(o => ({ ...o, id: newId('img'), x: o.x + OFF, y: o.y + OFF, zIndex: now }));
+      commitNewItems(shapeClones, textClones, objClones);
+    }, [shapes, texts, objects, getSelectedSets, commitNewItems]);
+
+    // ── Copy / paste (Ctrl+C / Ctrl+V) — works across rooms + tabs via
+    // localStorage, so a teacher can copy a diagram from one student's board
+    // and paste it into another's. ──
+    const WB_CLIPBOARD_KEY = 'mathlive:wb-clipboard';
+    const copySelection = useCallback(() => {
+      const { shapeIds, textIds, objIds } = getSelectedSets();
+      const payload = {
+        shapes: shapes.filter(s => shapeIds.has(s.id)),
+        texts: texts.filter(t => textIds.has(t.id)),
+        objects: objects.filter(o => objIds.has(o.id)),
+      };
+      if (!payload.shapes.length && !payload.texts.length && !payload.objects.length) return;
+      try { localStorage.setItem(WB_CLIPBOARD_KEY, JSON.stringify(payload)); } catch { /* quota / disabled — ignore */ }
+    }, [shapes, texts, objects, getSelectedSets]);
+
+    const pasteClipboard = useCallback(() => {
+      let payload: { shapes?: BoardShape[]; texts?: BoardText[]; objects?: BoardImageObject[] } | null = null;
+      try { const raw = localStorage.getItem(WB_CLIPBOARD_KEY); payload = raw ? JSON.parse(raw) : null; } catch { payload = null; }
+      if (!payload) return;
+      const OFF = 24, now = Date.now();
+      const shapeClones: BoardShape[] = (payload.shapes || []).map(s => ({ ...s, id: newId('shape'), x1: s.x1 + OFF, y1: s.y1 + OFF, x2: s.x2 + OFF, y2: s.y2 + OFF, createdAt: now }));
+      const textClones: BoardText[] = (payload.texts || []).map(t => ({ ...t, id: newId('text'), x: t.x + OFF, y: t.y + OFF, createdAt: now, updatedAt: now }));
+      const objClones: BoardImageObject[] = (payload.objects || []).map(o => ({ ...o, id: newId('img'), x: o.x + OFF, y: o.y + OFF, zIndex: now }));
+      commitNewItems(shapeClones, textClones, objClones);
+    }, [commitNewItems]);
 
     // ── Z-order: bring to front / send to back — shapes / text / images ──
     const zOrderSelection = useCallback((toFront: boolean) => {
@@ -2292,6 +2322,12 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
             } else if (key === 'd') {
               e.preventDefault();
               duplicateSelection();
+            } else if (key === 'c') {
+              e.preventDefault();
+              copySelection();
+            } else if (key === 'v') {
+              e.preventDefault();
+              pasteClipboard();
             } else if (key === ']') {
               e.preventDefault();
               zOrderSelection(true);
@@ -2311,7 +2347,7 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
         window.removeEventListener('keydown', down);
         window.removeEventListener('keyup', up);
       };
-    }, [isActive, canEdit, selectedObjectId, selectedStrokeIndex, selectedShapeId, selectedTextId, removeSelectedObject, deleteStrokeIndices, removeSelectedShape, removeSelectedText, multiObjectIds.length, multiShapeIds.length, multiStrokeIndices.length, multiTextIds.length, removeMultiSelection, clearMultiSelection, undo, redo, duplicateSelection, zOrderSelection, textEditor]);
+    }, [isActive, canEdit, selectedObjectId, selectedStrokeIndex, selectedShapeId, selectedTextId, removeSelectedObject, deleteStrokeIndices, removeSelectedShape, removeSelectedText, multiObjectIds.length, multiShapeIds.length, multiStrokeIndices.length, multiTextIds.length, removeMultiSelection, clearMultiSelection, undo, redo, duplicateSelection, zOrderSelection, copySelection, pasteClipboard, textEditor]);
 
     useEffect(() => {
       if (!socket) return;
@@ -3627,6 +3663,8 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
           {canEdit && (selectedShape || selectedObject || selectedTextId || multiShapeIds.length > 0 || multiObjectIds.length > 0 || multiTextIds.length > 0) && (
             <div className="whiteboard-control-group">
               <button onClick={duplicateSelection} className="whiteboard-action" title="Duplicate (Ctrl+D)">Duplicate</button>
+              <button onClick={copySelection} className="whiteboard-action" title="Copy (Ctrl+C) — paste in any room">Copy</button>
+              <button onClick={pasteClipboard} className="whiteboard-action" title="Paste (Ctrl+V)">Paste</button>
               <button onClick={() => zOrderSelection(true)} className="whiteboard-action" title="Bring to front (Ctrl+])">Front</button>
               <button onClick={() => zOrderSelection(false)} className="whiteboard-action" title="Send to back (Ctrl+[)">Back</button>
             </div>
