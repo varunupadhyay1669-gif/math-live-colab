@@ -32,6 +32,7 @@ nothing):
 |-----|---------|-------|
 | `VITE_SUPABASE_URL` + `VITE_SUPABASE_ANON_KEY` | Teacher accounts (login + dashboard) | Public keys. Without them the app runs in no-login mode. See `SUPABASE.md`. |
 | `UPSTASH_REDIS_REST_URL` + `UPSTASH_REDIS_REST_TOKEN` | Durable rooms across restarts | Without them rooms persist to `.rooms/` only (wiped on free-tier restart). |
+| `GEMINI_API_KEY` | "✨ AI Lesson" — generate interactive lessons from a prompt | Server-side only (never sent to the browser). Get a key at aistudio.google.com. Without it the AI button shows a "not configured" message. |
 
 ### Free-plan caveats
 - Service **sleeps after 15 min of inactivity**. First request after sleep

@@ -690,6 +690,14 @@ async function startServer() {
   const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY;
   const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
   const ownershipEnabled = !!(SUPABASE_URL && SUPABASE_ANON_KEY && SUPABASE_SERVICE_ROLE_KEY);
+
+  // ─── AI LESSON GENERATION (server-side; key never reaches the browser) ───
+  const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+  console.log(
+    GEMINI_API_KEY
+      ? '✨ AI lesson generation: ON'
+      : '✨ AI lesson generation: OFF (set GEMINI_API_KEY to enable)'
+  );
   console.log(
     ownershipEnabled
       ? '🔒 Teacher ownership enforcement: ON (registered classes are owner-only)'
@@ -1177,6 +1185,72 @@ async function startServer() {
       broadcastFullState(roomId, room, 'run_preview');
       // Auto-push HTML to all connected clients immediately
       io.to(roomId).emit('run_preview', { fileId: file.id, html: file.html, revision });
+    });
+
+    // ─── AI LESSON GENERATION ───
+    // Teacher describes a concept; we generate a self-contained interactive
+    // HTML widget with Gemini (server-side) and load it into the room exactly
+    // like an uploaded file. Key stays on the server.
+    socket.on('generate_lesson', async ({ roomId, prompt }: { roomId: string; prompt: string }) => {
+      updateRoomActivity(roomId);
+      const room = rooms.get(roomId);
+      if (!requireTeacher(room, socket.id)) return;
+      if (!GEMINI_API_KEY) {
+        socket.emit('generate_lesson_error', { message: 'AI is not configured on the server (set GEMINI_API_KEY).' });
+        return;
+      }
+      const safePrompt = sanitizeString(prompt, 2000);
+      if (!safePrompt) {
+        socket.emit('generate_lesson_error', { message: 'Describe the lesson you want generated.' });
+        return;
+      }
+      try {
+        const { GoogleGenAI } = await import('@google/genai');
+        const ai = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
+        const instruction = `You are an expert creator of single-file, self-contained INTERACTIVE HTML teaching widgets for a LIVE maths classroom shown inside a sandboxed iframe.
+Output ONLY raw HTML — no markdown, no code fences, no commentary before or after.
+Hard requirements:
+- One single HTML document. ALL CSS and JavaScript inline. NO external resources, CDNs, web fonts, images by URL, or network calls (the iframe is sandboxed and offline).
+- Large, high-contrast, readable typography. Centered, responsive layout that fills the viewport.
+- Genuinely INTERACTIVE: buttons/inputs the student manipulates, with clear step-by-step feedback.
+- Prefer keeping visible state in the DOM (text content, classes, input values) so it mirrors cleanly between screens.
+- Must run immediately on load with zero console errors. Keep it robust and self-contained.
+Build a widget that teaches: ${safePrompt}`;
+        const response = await ai.models.generateContent({ model: 'gemini-2.5-flash', contents: instruction });
+        let html = (response.text || '').trim();
+        // Strip accidental markdown fences if the model added them.
+        html = html.replace(/^```[a-zA-Z]*\s*/, '').replace(/```\s*$/, '').trim();
+        if (html.length < 30) {
+          socket.emit('generate_lesson_error', { message: 'The AI returned an empty lesson. Try rephrasing.' });
+          return;
+        }
+        if (html.length > MAX_FILE_SIZE) html = html.slice(0, MAX_FILE_SIZE);
+
+        // Load it like an uploaded file (same broadcast as upload_file).
+        const file: FileEntry = {
+          id: `ai-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+          name: safePrompt.length > 40 ? safePrompt.slice(0, 40) + '…' : safePrompt,
+          html,
+          uploadedAt: Date.now(),
+        };
+        room.files.push(file);
+        room.activeFileId = file.id;
+        room.lastRunHtml = html;
+        room.liveSnapshotHtml = null;
+        const wasWhiteboard = room.whiteboardMode;
+        if (wasWhiteboard) room.whiteboardMode = false;
+        const revision = bumpRevision(room);
+        io.to(roomId).emit('file_uploaded', file);
+        io.to(roomId).emit('active_file_changed', { fileId: file.id, fileName: file.name, html, currentStep: room.currentStep, revision });
+        if (wasWhiteboard) io.to(roomId).emit('whiteboard_mode_changed', { active: false });
+        broadcastFullState(roomId, room, 'run_preview');
+        io.to(roomId).emit('run_preview', { fileId: file.id, html, revision });
+        socket.emit('generate_lesson_done', { fileId: file.id, name: file.name });
+        logSync('generate_lesson', { roomId, revision });
+      } catch (err) {
+        console.error('generate_lesson failed:', err);
+        socket.emit('generate_lesson_error', { message: 'AI generation failed — check the server API key / quota and try again.' });
+      }
     });
 
     socket.on('update_file', ({ roomId, fileId, html }: { roomId: string; fileId: string; html: string }) => {

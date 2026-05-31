@@ -164,6 +164,11 @@ export default function Room() {
   const [isDragging, setIsDragging] = useState(false);
   const [showPasteModal, setShowPasteModal] = useState(false);
   const [pasteCode, setPasteCode] = useState("");
+  // AI lesson generation
+  const [showAiModal, setShowAiModal] = useState(false);
+  const [aiPrompt, setAiPrompt] = useState("");
+  const [aiGenerating, setAiGenerating] = useState(false);
+  const [aiError, setAiError] = useState<string | null>(null);
   // AUTONOMOUS: "Explain over this" can be a file OR pasted HTML.
   // showExplainModal opens a small chooser; the user picks file or
   // types HTML into the inline textarea. Separate from the main paste
@@ -559,6 +564,17 @@ export default function Room() {
     });
     newSocket.on("upload_error", ({ message }: { message: string }) => {
       showNotif(`⚠️ Upload failed: ${message}`);
+    });
+    newSocket.on("generate_lesson_done", ({ name }: { name: string }) => {
+      setAiGenerating(false);
+      setShowAiModal(false);
+      setAiPrompt("");
+      setAiError(null);
+      showNotif(`✨ Generated & loaded: ${name}`);
+    });
+    newSocket.on("generate_lesson_error", ({ message }: { message: string }) => {
+      setAiGenerating(false);
+      setAiError(message || 'AI generation failed.');
     });
     newSocket.on("file_updated", ({ fileId, html }: { fileId: string; html: string }) => {
       setFiles(prev => prev.map(f => f.id === fileId ? { ...f, html } : f));
@@ -1372,6 +1388,13 @@ export default function Room() {
     });
   };
 
+  const handleGenerateAi = () => {
+    if (!socket || !aiPrompt.trim() || aiGenerating) return;
+    setAiError(null);
+    setAiGenerating(true);
+    socket.emit("generate_lesson", { roomId, prompt: aiPrompt.trim() });
+  };
+
   const handlePasteSubmit = () => {
     if (!socket || !pasteCode.trim()) return;
     const name = pasteFileName.trim() || `Pasted-${new Date().toLocaleTimeString()}`;
@@ -2019,6 +2042,9 @@ export default function Room() {
               <button onClick={() => setShowPasteModal(true)} className="btn text-[12px]">
                 📋 Paste Code
               </button>
+              <button onClick={() => { setAiError(null); setShowAiModal(true); }} className="btn-accent text-[12px]" title="Describe a concept; AI builds an interactive lesson">
+                ✨ AI Lesson
+              </button>
             </div>
 
             {/* File Tabs */}
@@ -2576,6 +2602,40 @@ export default function Room() {
           <div className="px-5 py-2.5 rounded-xl text-sm font-medium"
             style={{ background: 'var(--bg-card)', color: 'var(--text-primary)', border: '1px solid var(--border-subtle)', boxShadow: 'var(--shadow-lg)' }}>
             {notification}
+          </div>
+        </div>
+      )}
+
+      {/* ═══ AI LESSON MODAL ═══ */}
+      {showAiModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4"
+          style={{ background: 'rgba(0,0,0,0.3)', backdropFilter: 'blur(4px)' }}>
+          <div className="w-full max-w-2xl animate-bounce-in"
+            style={{ background: 'var(--bg-card)', borderRadius: 'var(--radius-xl)', border: '1px solid var(--border-subtle)', boxShadow: 'var(--shadow-xl)' }}>
+            <div className="flex items-center justify-between p-5 pb-0">
+              <h3 className="font-display text-lg font-bold">✨ Generate a lesson with AI</h3>
+              <button onClick={() => { if (!aiGenerating) { setShowAiModal(false); setAiPrompt(''); setAiError(null); } }}
+                style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '20px' }}>✕</button>
+            </div>
+            <div className="p-5 space-y-4">
+              <textarea value={aiPrompt} onChange={(e) => setAiPrompt(e.target.value)}
+                placeholder="e.g. Teach long division of 391 by 17, step by step, with a button to reveal each step"
+                disabled={aiGenerating}
+                className="input-field text-sm"
+                style={{ minHeight: '120px', resize: 'vertical', lineHeight: '1.6' }} />
+              {aiError && <p style={{ color: '#DC2626', fontSize: 13 }}>{aiError}</p>}
+              <p style={{ fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.5 }}>
+                A self-contained interactive widget is generated and loaded into the room for everyone. Takes a few seconds.
+              </p>
+              <div className="flex gap-3 justify-end">
+                <button onClick={() => { if (!aiGenerating) { setShowAiModal(false); setAiPrompt(''); setAiError(null); } }}
+                  className="btn-secondary" disabled={aiGenerating}>Cancel</button>
+                <button onClick={handleGenerateAi} disabled={!aiPrompt.trim() || aiGenerating}
+                  className="btn-primary disabled:opacity-40">
+                  {aiGenerating ? 'Generating…' : 'Generate & Run ▶'}
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}
