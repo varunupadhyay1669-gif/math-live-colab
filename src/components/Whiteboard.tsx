@@ -130,6 +130,7 @@ interface BoardShape {
   fillColor?: string;            // shape fill; absent/'' = transparent
   fillStyle?: ShapeFillStyle;    // how the fill is drawn (default hachure)
   strokeStyle?: ShapeStrokeStyle; // solid (default) | dashed | dotted
+  groupId?: string;              // shapes/text/images sharing this move + select together
   // For line/arrow: x1,y1=start, x2,y2=end.
   // For rect: x1,y1 and x2,y2 are opposite corners (board-space).
   // For circle: x1,y1=center, x2,y2=an edge point (radius = distance).
@@ -207,6 +208,7 @@ interface BoardImageObject {
   scale: number;
   rotation: number;
   zIndex: number;
+  groupId?: string;
 }
 
 // Text labels on the whiteboard. Click-to-place; Enter/blur commits.
@@ -239,6 +241,7 @@ interface BoardText {
   // Stored explicitly (not auto-detected) so a teacher writing "$2" in
   // plain text doesn't suddenly render as math.
   latex?: boolean;
+  groupId?: string;
 }
 
 interface BoardView {
@@ -388,7 +391,15 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
     const marqueeRef = useRef<{ x1: number; y1: number; x2: number; y2: number } | null>(null);
     type ObjectHandle = 'tl' | 'tr' | 'bl' | 'br' | 'rotate';
     const dragRef = useRef<{
-      mode: 'draw' | 'erase' | 'pan' | 'object' | 'object-resize' | 'object-rotate' | 'shape-create' | 'shape-move' | 'marquee' | 'instrument-translate' | 'instrument-handle' | 'text-move' | null;
+      mode: 'draw' | 'erase' | 'pan' | 'object' | 'object-resize' | 'object-rotate' | 'shape-create' | 'shape-move' | 'group-move' | 'marquee' | 'instrument-translate' | 'instrument-handle' | 'text-move' | null;
+      // Snapshot of every group member's start position, so a group drag moves
+      // them all by the same delta. Additive — existing single-move modes are
+      // untouched.
+      groupSnapshot?: {
+        shapes: Array<{ id: string; x1: number; y1: number; x2: number; y2: number }>;
+        texts: Array<{ id: string; x: number; y: number }>;
+        objects: Array<{ id: string; x: number; y: number }>;
+      };
       pointerId: number;
       startClientX: number;
       startClientY: number;
@@ -837,6 +848,53 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
       apply(afterShapes, afterTexts, afterObjs);
       recordAction({ undo: () => apply(beforeShapes, beforeTexts, beforeObjs), redo: () => apply(afterShapes, afterTexts, afterObjs) });
     }, [shapes, texts, objects, getSelectedSets, socket, isTeacher, canMutateImages, roomId, recordAction]);
+
+    // ── Group / ungroup (Ctrl+G / Ctrl+Shift+G) ──
+    // Stamps a shared `groupId` onto the selected shapes/text/images. Clicking
+    // any one member afterwards selects + drags the whole group as a unit.
+    // Same before/after + emit + undo shape as zOrderSelection.
+    const setGroupId = useCallback((shapeIds: Set<string>, textIds: Set<string>, objIds: Set<string>, gid: string | undefined) => {
+      const beforeShapes = shapes.filter(s => shapeIds.has(s.id)).map(s => ({ ...s }));
+      const afterShapes = beforeShapes.map(s => ({ ...s, groupId: gid }));
+      const beforeTexts = texts.filter(t => textIds.has(t.id)).map(t => ({ ...t }));
+      const afterTexts = beforeTexts.map(t => ({ ...t, groupId: gid }));
+      const beforeObjs = objects.filter(o => objIds.has(o.id)).map(o => ({ ...o }));
+      const afterObjs = beforeObjs.map(o => ({ ...o, groupId: gid }));
+      if (!beforeShapes.length && !beforeTexts.length && !beforeObjs.length) return;
+      const apply = (sh: BoardShape[], tx: BoardText[], ob: BoardImageObject[]) => {
+        if (sh.length) setShapes(prev => prev.map(s => sh.find(x => x.id === s.id) || s));
+        if (tx.length) setTexts(prev => prev.map(t => tx.find(x => x.id === t.id) || t));
+        if (ob.length) setObjects(prev => prev.map(o => ob.find(x => x.id === o.id) || o));
+        if (socket) {
+          if (isTeacher) { sh.forEach(s => socket.emit('whiteboard_update_shape', { roomId, shape: s })); tx.forEach(t => socket.emit('whiteboard_update_text', { roomId, text: t })); }
+          if (canMutateImages) ob.forEach(o => socket.emit('whiteboard_update_object', { roomId, object: o }));
+        }
+      };
+      apply(afterShapes, afterTexts, afterObjs);
+      recordAction({ undo: () => apply(beforeShapes, beforeTexts, beforeObjs), redo: () => apply(afterShapes, afterTexts, afterObjs) });
+    }, [shapes, texts, objects, socket, isTeacher, canMutateImages, roomId, recordAction]);
+
+    const groupSelection = useCallback(() => {
+      const { shapeIds, textIds, objIds } = getSelectedSets();
+      // Need at least two members for a group to mean anything.
+      if (shapeIds.size + textIds.size + objIds.size < 2) return;
+      setGroupId(shapeIds, textIds, objIds, newId('grp'));
+    }, [getSelectedSets, setGroupId]);
+
+    const ungroupSelection = useCallback(() => {
+      // Expand the selection to every member of every group represented in it,
+      // then clear their groupId — so ungrouping one member ungroups the whole.
+      const { shapeIds, textIds, objIds } = getSelectedSets();
+      const gids = new Set<string>();
+      shapes.forEach(s => { if (s.groupId && shapeIds.has(s.id)) gids.add(s.groupId); });
+      texts.forEach(t => { if (t.groupId && textIds.has(t.id)) gids.add(t.groupId); });
+      objects.forEach(o => { if (o.groupId && objIds.has(o.id)) gids.add(o.groupId); });
+      if (!gids.size) return;
+      const sIds = new Set(shapes.filter(s => s.groupId && gids.has(s.groupId)).map(s => s.id));
+      const tIds = new Set(texts.filter(t => t.groupId && gids.has(t.groupId)).map(t => t.id));
+      const oIds = new Set(objects.filter(o => o.groupId && gids.has(o.groupId)).map(o => o.id));
+      setGroupId(sIds, tIds, oIds, undefined);
+    }, [getSelectedSets, setGroupId, shapes, texts, objects]);
 
     // ── Shape geometry helpers ──
     const shapeBounds = useCallback((shape: BoardShape) => {
@@ -2334,6 +2392,12 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
             } else if (key === '[') {
               e.preventDefault();
               zOrderSelection(false);
+            } else if (key === 'g' && !e.shiftKey) {
+              e.preventDefault();
+              groupSelection();
+            } else if (key === 'g' && e.shiftKey) {
+              e.preventDefault();
+              ungroupSelection();
             }
           }
         }
@@ -2347,7 +2411,7 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
         window.removeEventListener('keydown', down);
         window.removeEventListener('keyup', up);
       };
-    }, [isActive, canEdit, selectedObjectId, selectedStrokeIndex, selectedShapeId, selectedTextId, removeSelectedObject, deleteStrokeIndices, removeSelectedShape, removeSelectedText, multiObjectIds.length, multiShapeIds.length, multiStrokeIndices.length, multiTextIds.length, removeMultiSelection, clearMultiSelection, undo, redo, duplicateSelection, zOrderSelection, copySelection, pasteClipboard, textEditor]);
+    }, [isActive, canEdit, selectedObjectId, selectedStrokeIndex, selectedShapeId, selectedTextId, removeSelectedObject, deleteStrokeIndices, removeSelectedShape, removeSelectedText, multiObjectIds.length, multiShapeIds.length, multiStrokeIndices.length, multiTextIds.length, removeMultiSelection, clearMultiSelection, undo, redo, duplicateSelection, zOrderSelection, copySelection, pasteClipboard, groupSelection, ungroupSelection, textEditor]);
 
     useEffect(() => {
       if (!socket) return;
@@ -2583,8 +2647,35 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
             }
           }
         }
+        // ── Group drag: if the cursor is over any grouped item, select the
+        // whole group and move it as a unit. Additive — the single-move paths
+        // below are left completely untouched. ──
+        const startGroupMove = (gid: string): boolean => {
+          const sMembers = shapes.filter(s => s.groupId === gid);
+          const tMembers = texts.filter(t => t.groupId === gid);
+          const oMembers = objects.filter(o => o.groupId === gid);
+          if (sMembers.length + tMembers.length + oMembers.length === 0) return false;
+          setSelectedShapeId(null); setSelectedObjectId(null); setSelectedTextId(null); setSelectedStrokeIndex(null);
+          setMultiShapeIds(sMembers.map(s => s.id));
+          setMultiTextIds(tMembers.map(t => t.id));
+          setMultiObjectIds(oMembers.map(o => o.id));
+          setMultiStrokeIndices([]);
+          dragRef.current = {
+            mode: 'group-move',
+            pointerId: e.pointerId,
+            startClientX: e.clientX, startClientY: e.clientY,
+            startOffsetX: view.boardOffsetX, startOffsetY: view.boardOffsetY,
+            groupSnapshot: {
+              shapes: sMembers.map(s => ({ id: s.id, x1: s.x1, y1: s.y1, x2: s.x2, y2: s.y2 })),
+              texts: tMembers.map(t => ({ id: t.id, x: t.x, y: t.y })),
+              objects: oMembers.map(o => ({ id: o.id, x: o.x, y: o.y })),
+            },
+          };
+          return true;
+        };
         const hitObject = findObjectAt(point);
         if (hitObject) {
+          if (hitObject.groupId && startGroupMove(hitObject.groupId)) return;
           setSelectedObjectId(hitObject.id);
           setSelectedStrokeIndex(null);
           setSelectedShapeId(null);
@@ -2593,6 +2684,7 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
         }
         const hitShape = findShapeAt(point);
         if (hitShape) {
+          if (hitShape.groupId && startGroupMove(hitShape.groupId)) return;
           setSelectedShapeId(hitShape.id);
           setSelectedObjectId(null);
           setSelectedStrokeIndex(null);
@@ -2611,6 +2703,7 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
         // other; only one is set at a time per the resets below.
         const hitText = findTextAt(point);
         if (hitText) {
+          if (hitText.groupId && startGroupMove(hitText.groupId)) return;
           setSelectedTextId(hitText.id);
           setSelectedShapeId(null);
           setSelectedObjectId(null);
@@ -2733,6 +2826,23 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
           x1: start.x1 + dx, y1: start.y1 + dy,
           x2: start.x2 + dx, y2: start.y2 + dy,
         } : s));
+        return;
+      }
+      if (drag.mode === 'group-move' && drag.groupSnapshot) {
+        const dx = (e.clientX - drag.startClientX) / view.boardScale;
+        const dy = (e.clientY - drag.startClientY) / view.boardScale;
+        const gs = drag.groupSnapshot;
+        // Local-only every frame (no wire flood); the final positions are
+        // emitted once on pointer-up. Offset every member by the same delta.
+        if (gs.shapes.length) {
+          setShapes(prev => prev.map(s => { const o = gs.shapes.find(x => x.id === s.id); return o ? { ...s, x1: o.x1 + dx, y1: o.y1 + dy, x2: o.x2 + dx, y2: o.y2 + dy } : s; }));
+        }
+        if (gs.texts.length) {
+          setTexts(prev => prev.map(t => { const o = gs.texts.find(x => x.id === t.id); return o ? { ...t, x: o.x + dx, y: o.y + dy } : t; }));
+        }
+        if (gs.objects.length) {
+          setObjects(prev => prev.map(ob => { const o = gs.objects.find(x => x.id === ob.id); return o ? { ...ob, x: o.x + dx, y: o.y + dy } : ob; }));
+        }
         return;
       }
       if (drag.mode === 'instrument-translate' && drag.instrumentId && drag.instrumentStart) {
@@ -2896,6 +3006,44 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
             },
           });
         }
+      }
+      if (drag.mode === 'group-move' && drag.groupSnapshot) {
+        const dx = (e.clientX - drag.startClientX) / view.boardScale;
+        const dy = (e.clientY - drag.startClientY) / view.boardScale;
+        const gs = drag.groupSnapshot;
+        // before = snapshot positions; after = snapshot + final delta. Captured
+        // as plain {id,coords} so undo/redo replays exact positions regardless
+        // of later edits, and emits the full element (server replaces on update).
+        const sBefore = gs.shapes.map(o => ({ ...o }));
+        const sAfter = gs.shapes.map(o => ({ id: o.id, x1: o.x1 + dx, y1: o.y1 + dy, x2: o.x2 + dx, y2: o.y2 + dy }));
+        const tBefore = gs.texts.map(o => ({ ...o }));
+        const tAfter = gs.texts.map(o => ({ id: o.id, x: o.x + dx, y: o.y + dy }));
+        const oBefore = gs.objects.map(o => ({ ...o }));
+        const oAfter = gs.objects.map(o => ({ id: o.id, x: o.x + dx, y: o.y + dy }));
+        const applyPos = (
+          sp: Array<{ id: string; x1: number; y1: number; x2: number; y2: number }>,
+          tp: Array<{ id: string; x: number; y: number }>,
+          op: Array<{ id: string; x: number; y: number }>,
+        ) => {
+          if (sp.length) {
+            setShapes(prev => prev.map(s => { const o = sp.find(x => x.id === s.id); return o ? { ...s, x1: o.x1, y1: o.y1, x2: o.x2, y2: o.y2 } : s; }));
+          }
+          if (tp.length) {
+            setTexts(prev => prev.map(t => { const o = tp.find(x => x.id === t.id); return o ? { ...t, x: o.x, y: o.y } : t; }));
+          }
+          if (op.length) {
+            setObjects(prev => prev.map(ob => { const o = op.find(x => x.id === ob.id); return o ? { ...ob, x: o.x, y: o.y } : ob; }));
+          }
+          if (socket) {
+            if (isTeacher) {
+              sp.forEach(o => { const full = shapesRef.current.find(s => s.id === o.id); if (full) socket.emit('whiteboard_update_shape', { roomId, shape: { ...full, x1: o.x1, y1: o.y1, x2: o.x2, y2: o.y2 } }); });
+              tp.forEach(o => { const full = textsRef.current.find(t => t.id === o.id); if (full) socket.emit('whiteboard_update_text', { roomId, text: { ...full, x: o.x, y: o.y } }); });
+            }
+            if (canMutateImages) op.forEach(o => { const full = objects.find(ob => ob.id === o.id); if (full) socket.emit('whiteboard_update_object', { roomId, object: { ...full, x: o.x, y: o.y } }); });
+          }
+        };
+        applyPos(sAfter, tAfter, oAfter);
+        recordAction({ undo: () => applyPos(sBefore, tBefore, oBefore), redo: () => applyPos(sAfter, tAfter, oAfter) });
       }
       if (drag.mode === 'marquee') {
         const m = marqueeRef.current;
@@ -3667,6 +3815,19 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
               <button onClick={pasteClipboard} className="whiteboard-action" title="Paste (Ctrl+V)">Paste</button>
               <button onClick={() => zOrderSelection(true)} className="whiteboard-action" title="Bring to front (Ctrl+])">Front</button>
               <button onClick={() => zOrderSelection(false)} className="whiteboard-action" title="Send to back (Ctrl+[)">Back</button>
+              {(multiShapeIds.length + multiObjectIds.length + multiTextIds.length) >= 2 && (
+                <button onClick={groupSelection} className="whiteboard-action" title="Group — move together (Ctrl+G)">Group</button>
+              )}
+              {(() => {
+                const { shapeIds, textIds, objIds } = getSelectedSets();
+                const grouped =
+                  shapes.some(s => s.groupId && shapeIds.has(s.id)) ||
+                  texts.some(t => t.groupId && textIds.has(t.id)) ||
+                  objects.some(o => o.groupId && objIds.has(o.id));
+                return grouped ? (
+                  <button onClick={ungroupSelection} className="whiteboard-action" title="Ungroup (Ctrl+Shift+G)">Ungroup</button>
+                ) : null;
+              })()}
             </div>
           )}
           {canEdit && selectedObject && <button onClick={removeSelectedObject} className="whiteboard-action danger">Delete image</button>}
