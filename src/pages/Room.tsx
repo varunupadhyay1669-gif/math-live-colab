@@ -705,16 +705,22 @@ export default function Room() {
     });
 
     // ── Student absolute-state snapshot ──
-    // Render the student's REAL DOM into the teacher's iframe (flicker-free
-    // soft replace) so the teacher always sees the student's true current
-    // state, not a drifting replay of clicks. Self-heals the quiz "student on
-    // Q5, teacher on Q2" desync. Only arrives while interaction is allowed.
-    newSocket.on("student_state", ({ html }: { html: string; studentId?: string; studentName?: string }) => {
-      if (!html) return;
-      postToIframe({ type: 'REMOTE_DOM', html });
-      if (dualViewRef.current && mirrorIframeRef.current?.contentWindow && mirrorReadyRef.current) {
-        mirrorIframeRef.current.contentWindow.postMessage({ type: 'REMOTE_DOM', html }, '*');
-      }
+    // INTENTIONALLY NOT applied to the teacher's iframe anymore.
+    //
+    // We run a single-authoritative-sim model: the teacher's iframe is the live,
+    // interactive simulation; the student is a mirror whose own handlers are
+    // stripped, so its clicks just relay up to us and drive THIS sim (replayed
+    // as REMOTE_CLICK), and we broadcast the result back via live_dom. In that
+    // model the student's DOM is only ever an echo of ours — so soft-swapping it
+    // back onto the teacher was redundant AND destructive: an innerHTML swap
+    // drops every addEventListener the lesson wired up on load, after which the
+    // teacher's buttons (and the relayed student clicks) hit dead handlers. That
+    // was the "interactive buttons stop working / next-step button does nothing"
+    // bug. The teacher already sees the student's exact state because both run
+    // the same authoritative sim. (syncScript also hard-guards this: a presenter
+    // iframe ignores REMOTE_DOM.)
+    newSocket.on("student_state", (_data: { html: string; studentId?: string; studentName?: string }) => {
+      /* no-op — see comment above */
     });
 
     // ── Student Feedback ──

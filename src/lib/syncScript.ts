@@ -759,6 +759,14 @@ export const injectedSyncScript = `
           }));
         } finally { exitRemote(); }
       } else if (data.type === 'REMOTE_DOM') {
+        // The presenter (teacher) is the single source of truth: its iframe runs
+        // the live, INTERACTIVE simulation that everyone else mirrors. Never
+        // replace its DOM. A body-innerHTML swap silently drops every
+        // addEventListener the page wired up on load, so the page's own buttons
+        // (and the student clicks we replay into it as REMOTE_CLICK) stop doing
+        // anything — the "interactive buttons stop working" bug. Mirrors/students
+        // are not in presenter mode, so they still soft-swap to follow.
+        if (presenterMode) return;
         // Absolute-state sync: replace the visible DOM with a snapshot of the
         // other side's iframe (so the teacher sees the student's ACTUAL state —
         // e.g. quiz question 5 — instead of a drifting replay of clicks). Soft
