@@ -38,6 +38,7 @@ export default function StepControls({
           <button onClick={() => onSetStep(Math.max(1, currentStep - 1))}
             disabled={currentStep <= 1}
             className="btn text-[12px] disabled:opacity-30"
+            title={currentStep <= 1 ? "Already on first step" : "Go to previous step"}
             style={{ padding: '5px 10px' }}>
             ◀ Prev
           </button>
@@ -53,6 +54,8 @@ export default function StepControls({
                 {Array.from({ length: maxStep }).map((_, i) => (
                   <button key={i} onClick={() => onSetStep(i + 1)}
                     className="transition-all"
+                    title={`Go to step ${i + 1}`}
+                    aria-label={`Step ${i + 1}`}
                     style={{
                       width: 8, height: 8, borderRadius: '50%',
                       background: i + 1 <= currentStep ? 'var(--accent-indigo)' : 'var(--border-default)',
@@ -69,6 +72,7 @@ export default function StepControls({
           <button onClick={() => onSetStep(Math.min(maxStep || 999, currentStep + 1))}
             disabled={maxStep > 0 && currentStep >= maxStep}
             className="btn text-[12px] disabled:opacity-30"
+            title={maxStep > 0 && currentStep >= maxStep ? "Already on last step" : "Go to next step"}
             style={{ padding: '5px 10px' }}>
             Next ▶
           </button>
