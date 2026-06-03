@@ -235,8 +235,11 @@ export default function TeacherControls({
         <div className="toolbar-divider" />
 
         {/* ── Zoom Controls (synced to all students) ── */}
-        <button onClick={onZoomOut} className="tb-btn" data-tip="Zoom out (synced)" disabled={zoomLevel <= 0.5}>
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+        <button onClick={onZoomOut} className="tb-btn"
+          data-tip={zoomLevel <= 0.5 ? "Minimum zoom reached (50%)" : "Zoom out (synced)"}
+          aria-label={zoomLevel <= 0.5 ? "Minimum zoom reached" : "Zoom out"}
+          disabled={zoomLevel <= 0.5}>
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
             <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="8" y1="11" x2="14" y2="11"/>
           </svg>
         </button>
@@ -246,8 +249,11 @@ export default function TeacherControls({
             {Math.round(zoomLevel * 100)}%
           </span>
         </button>
-        <button onClick={onZoomIn} className="tb-btn" data-tip="Zoom in (synced)" disabled={zoomLevel >= 3}>
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+        <button onClick={onZoomIn} className="tb-btn"
+          data-tip={zoomLevel >= 3 ? "Maximum zoom reached (300%)" : "Zoom in (synced)"}
+          aria-label={zoomLevel >= 3 ? "Maximum zoom reached" : "Zoom in"}
+          disabled={zoomLevel >= 3}>
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
             <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/>
           </svg>
         </button>
