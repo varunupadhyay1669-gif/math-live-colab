@@ -1865,6 +1865,7 @@ export default function Room() {
                     id="invite-pass"
                     type="text"
                     placeholder="e.g. math123"
+                    aria-label="Room password (optional)"
                     value={roomPassword}
                     onChange={(e) => saveRoomPassword(e.target.value)}
                     className="ml-input"
@@ -2111,6 +2112,7 @@ export default function Room() {
                     }}
                     spellCheck={false}
                     placeholder="Paste or write your HTML code here..."
+                    aria-label="Custom HTML code"
                     onKeyDown={(e) => {
                       if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); runPreview(); }
                       if (e.key === 'Tab') {
@@ -2626,6 +2628,7 @@ export default function Room() {
             <div className="p-5 space-y-4">
               <textarea value={aiPrompt} onChange={(e) => setAiPrompt(e.target.value)}
                 placeholder="e.g. Teach long division of 391 by 17, step by step, with a button to reveal each step"
+                aria-label="AI Prompt"
                 disabled={aiGenerating}
                 className="input-field text-sm"
                 style={{ minHeight: '120px', resize: 'vertical', lineHeight: '1.6' }} />
@@ -2660,9 +2663,11 @@ export default function Room() {
             <div className="p-5 space-y-4">
               <input value={pasteFileName} onChange={(e) => setPasteFileName(e.target.value)}
                 placeholder="File name (optional, e.g. fractions-sim)"
+                aria-label="File name (optional)"
                 className="input-field text-sm" />
               <textarea value={pasteCode} onChange={(e) => setPasteCode(e.target.value)}
                 placeholder="Paste your HTML code here..."
+                aria-label="HTML code"
                 className="input-field code-editor"
                 style={{ minHeight: '250px', resize: 'vertical', lineHeight: '1.6', background: 'var(--bg-code)', color: '#D4D4D8' }} />
               <div className="flex gap-3 justify-end">
@@ -2706,12 +2711,14 @@ export default function Room() {
                 value={explainName}
                 onChange={(e) => setExplainName(e.target.value)}
                 placeholder="Title (optional, e.g. Step-by-step quadratic)"
+                aria-label="Title (optional)"
                 className="input-field text-sm"
               />
               <textarea
                 value={explainHtml}
                 onChange={(e) => setExplainHtml(e.target.value)}
                 placeholder="Paste your HTML code here..."
+                aria-label="HTML code"
                 className="input-field code-editor"
                 style={{ minHeight: '250px', resize: 'vertical', lineHeight: '1.6', background: 'var(--bg-code)', color: '#D4D4D8' }}
               />
@@ -2764,6 +2771,7 @@ export default function Room() {
               <h3 className="font-display text-lg font-bold mb-4">🎯 Pop Quiz</h3>
               <textarea value={quizQuestion} onChange={(e) => setQuizQuestion(e.target.value)}
                 placeholder="Type your question... e.g. What is 3/4 + 1/2?"
+                aria-label="Quiz question"
                 className="input-field mb-4" style={{ minHeight: '90px', resize: 'vertical' }} />
               {quizAnswers.length > 0 && (
                 <div className="mb-4 p-3 rounded-xl" style={{ background: 'var(--bg-surface)' }}>
