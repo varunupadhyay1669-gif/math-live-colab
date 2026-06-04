@@ -294,6 +294,7 @@ export default function Home() {
                       autoFocus
                       className="ml-dark-input"
                       placeholder="you@example.com"
+                      aria-label="Email address"
                       value={loginEmail}
                       onChange={(e) => setLoginEmail(e.target.value)}
                       onKeyDown={(e) => e.key === "Enter" && sendMagicLink()}
@@ -346,6 +347,7 @@ export default function Home() {
                 autoFocus
                 className="ml-dark-input"
                 placeholder="What are you teaching today?"
+                aria-label="What are you teaching today?"
                 value={teacherName}
                 onChange={(e) => setTeacherName(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && createRoom()}
@@ -353,6 +355,7 @@ export default function Home() {
               <input
                 className="ml-dark-input ml-dark-input-mono"
                 placeholder="Permanent room code (optional) — e.g. varun-grade5"
+                aria-label="Permanent room code (optional)"
                 value={classCode}
                 onChange={(e) => setClassCode(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && createRoom()}
@@ -388,12 +391,14 @@ export default function Home() {
                 autoFocus
                 className="ml-dark-input"
                 placeholder="Your name"
+                aria-label="Your name"
                 value={studentName}
                 onChange={(e) => setStudentName(e.target.value)}
               />
               <input
                 className="ml-dark-input ml-dark-input-mono"
                 placeholder="Room code (often your name)"
+                aria-label="Room code"
                 value={roomCode}
                 onChange={(e) => setRoomCode(e.target.value.trim())}
               />

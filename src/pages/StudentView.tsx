@@ -1448,6 +1448,7 @@ export default function StudentView() {
                     value={quizAnswer}
                     onChange={(e) => setQuizAnswer(e.target.value)}
                     placeholder="Type your answer here..."
+                    aria-label="Your quiz answer"
                     className="input-field mb-4"
                     autoFocus
                     style={{ minHeight: '80px', resize: 'vertical' }}
