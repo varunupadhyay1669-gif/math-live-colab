@@ -2513,14 +2513,14 @@ export default function Room() {
                         <span className="ml-mode-card-title">Start with HTML</span>
                         <span className="ml-mode-card-body">Upload an interactive HTML simulation, quiz, or worksheet. Pan/zoom mirrors both ways.</span>
                         <div className="ml-mode-card-actions">
-                          <button onClick={() => fileInputRef.current?.click()} className="ml-mode-card-action ml-mode-card-action-primary">
+                          <button onClick={() => fileInputRef.current?.click()} className="ml-mode-card-action ml-mode-card-action-primary" aria-label="Choose HTML file" title="Choose HTML file">
                             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                               <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
                               <polyline points="14 2 14 8 20 8" />
                             </svg>
                             Browse files
                           </button>
-                          <button onClick={() => setShowPasteModal(true)} className="ml-mode-card-action ml-mode-card-action-ghost">
+                          <button onClick={() => setShowPasteModal(true)} className="ml-mode-card-action ml-mode-card-action-ghost" aria-label="Paste HTML code" title="Paste HTML code">
                             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                               <rect x="9" y="2" width="6" height="4" rx="1" />
                               <path d="M9 4H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2h-2" />
@@ -2621,6 +2621,8 @@ export default function Room() {
             <div className="flex items-center justify-between p-5 pb-0">
               <h3 className="font-display text-lg font-bold">✨ Generate a lesson with AI</h3>
               <button onClick={() => { if (!aiGenerating) { setShowAiModal(false); setAiPrompt(''); setAiError(null); } }}
+                aria-label="Close AI lesson modal"
+                title="Close AI lesson modal"
                 style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '20px' }}>✕</button>
             </div>
             <div className="p-5 space-y-4">
@@ -2655,6 +2657,8 @@ export default function Room() {
             <div className="flex items-center justify-between p-5 pb-0">
               <h3 className="font-display text-lg font-bold">📋 Paste HTML Code</h3>
               <button onClick={() => { setShowPasteModal(false); setPasteCode(''); setPasteFileName(''); }}
+                aria-label="Close paste HTML modal"
+                title="Close paste HTML modal"
                 style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '20px' }}>✕</button>
             </div>
             <div className="p-5 space-y-4">
@@ -2695,6 +2699,8 @@ export default function Room() {
               <h3 className="font-display text-lg font-bold">📚 Explain Over This</h3>
               <button
                 onClick={() => { setShowExplainModal(false); setExplainHtml(''); setExplainName(''); }}
+                aria-label="Close explain modal"
+                title="Close explain modal"
                 style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '20px' }}
               >✕</button>
             </div>
