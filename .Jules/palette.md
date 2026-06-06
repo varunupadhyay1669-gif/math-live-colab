@@ -1,0 +1,3 @@
+## 2024-06-06 - A11y: Unlabeled Icon Buttons
+**Learning:** Found several bare text/emoji icon buttons (✕, 🗑) used for closing modals or deleting items that lack `aria-label` attributes, making them inaccessible to screen readers.
+**Action:** Always add explicit `aria-label` and `title` attributes to all icon-only buttons (whether text-based or SVGs) to ensure screen reader users receive proper context and sighted users get tooltips.
