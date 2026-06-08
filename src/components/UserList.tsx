@@ -69,7 +69,8 @@ export default function UserList({ users, attention, isTeacher, socket, roomId }
               <button onClick={() => handleKick(user.id)}
                 className="opacity-0 group-hover:opacity-100 transition-opacity text-[11px]"
                 style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer' }}
-                title="Remove student">
+                title="Remove student"
+                aria-label="Remove student">
                 ✕
               </button>
             )}
