@@ -2621,6 +2621,7 @@ export default function Room() {
             <div className="flex items-center justify-between p-5 pb-0">
               <h3 className="font-display text-lg font-bold">✨ Generate a lesson with AI</h3>
               <button onClick={() => { if (!aiGenerating) { setShowAiModal(false); setAiPrompt(''); setAiError(null); } }}
+                aria-label="Close dialog"
                 style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '20px' }}>✕</button>
             </div>
             <div className="p-5 space-y-4">
@@ -2655,6 +2656,7 @@ export default function Room() {
             <div className="flex items-center justify-between p-5 pb-0">
               <h3 className="font-display text-lg font-bold">📋 Paste HTML Code</h3>
               <button onClick={() => { setShowPasteModal(false); setPasteCode(''); setPasteFileName(''); }}
+                aria-label="Close dialog"
                 style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '20px' }}>✕</button>
             </div>
             <div className="p-5 space-y-4">
@@ -2695,6 +2697,7 @@ export default function Room() {
               <h3 className="font-display text-lg font-bold">📚 Explain Over This</h3>
               <button
                 onClick={() => { setShowExplainModal(false); setExplainHtml(''); setExplainName(''); }}
+                aria-label="Close dialog"
                 style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '20px' }}
               >✕</button>
             </div>
