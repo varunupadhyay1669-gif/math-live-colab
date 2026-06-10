@@ -280,6 +280,40 @@ async function run() {
   t3.emit('bookmark_restore', { roomId: ROOM3, bookmarkId: bmList.bookmarks[0].id });
   await restored.then(() => ok('restoring a bookmark rewinds every client to that HTML')).catch(e => bad('bookmark restore rewinds clients', e.message));
 
+  // ── Test M: event journal — late joiner receives the interaction stream ──
+  console.log('Test M: event journal replays to late joiners');
+  const ROOM4 = 'vjrnl' + Math.floor(Date.now() % 100000);
+  const t4 = track(connect()); await waitFor(t4, 'connect');
+  t4.emit('join_room', { roomId: ROOM4, userName: 'JT', role: 'teacher' });
+  await waitFor(t4, 'room_state').catch(() => {});
+  t4.emit('upload_file', { roomId: ROOM4, file: { id: 'j1', name: 'J', html: '<!doctype html><body><button id="b">go</button></body>', uploadedAt: Date.now() } });
+  await delay(300);
+  // three discrete teacher events + noise that must NOT be journaled
+  t4.emit('interaction', { roomId: ROOM4, event: { type: 'SYNC_CLICK', path: '#b' } });
+  t4.emit('interaction', { roomId: ROOM4, event: { type: 'SYNC_CURSOR', x: 0.1, y: 0.1 } });
+  t4.emit('interaction', { roomId: ROOM4, event: { type: 'SYNC_INPUT', path: '#b', value: '7' } });
+  t4.emit('interaction', { roomId: ROOM4, event: { type: 'SYNC_PING', clientX: 0.5, clientY: 0.5 } });
+  t4.emit('interaction', { roomId: ROOM4, event: { type: 'SYNC_CLICK', path: '#b' } });
+  await delay(300);
+  const sLate = track(connect()); await waitFor(sLate, 'connect');
+  const gotReplay = waitFor(sLate, 'interaction_replay');
+  sLate.emit('join_room', { roomId: ROOM4, userName: 'LateLou', role: 'student' });
+  const replay = await gotReplay.catch(() => null);
+  assert(replay && Array.isArray(replay.events) && replay.events.length === 3,
+    'late joiner gets exactly the 3 discrete events (cursor/ping excluded)', `got=${replay && replay.events?.map(e => e.type).join(',')}`);
+  assert(replay && replay.events[0].type === 'SYNC_CLICK' && replay.events[1].type === 'SYNC_INPUT' && replay.events[2].type === 'SYNC_CLICK',
+    'journal preserves event order', replay && replay.events?.map(e => e.type).join(','));
+
+  // ── Test N: journal resets on a new baseline (run_preview) ──
+  console.log('Test N: journal clears on new content baseline');
+  t4.emit('run_preview', { roomId: ROOM4, fileId: 'j1', html: '<!doctype html><body><button id="b">v2</button></body>' });
+  await delay(300);
+  const sLate2 = track(connect()); await waitFor(sLate2, 'connect');
+  const noReplay = expectNo(sLate2, 'interaction_replay', 900);
+  sLate2.emit('join_room', { roomId: ROOM4, userName: 'LateLee', role: 'student' });
+  const nr = await noReplay;
+  assert(nr === null, 'no replay after run_preview baseline (journal cleared)', JSON.stringify(nr)?.slice(0, 60));
+
   console.log(`\nRESULT: ${passed} passed, ${failed} failed`);
   for (const s of sockets) { try { s.close(); } catch {} }
   process.exit(failed === 0 ? 0 : 1);

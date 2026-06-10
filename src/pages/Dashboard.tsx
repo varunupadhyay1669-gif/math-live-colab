@@ -69,15 +69,44 @@ export default function Dashboard() {
     }
   };
 
-  const handleOpen = async (row: ClassRow) => {
-    await touchClass(row.room_code);
+  const handleOpen = (row: ClassRow) => {
+    // Best-effort recency stamp — must never delay opening the room
+    // (awaiting it made the Open click visibly stall on slow networks).
+    void touchClass(row.room_code);
     navigate(`/room/${row.room_code}?name=${encodeURIComponent(teacherName)}`);
   };
 
-  const handleCopy = (row: ClassRow) => {
-    navigator.clipboard.writeText(studentLink(row.room_code));
-    setCopiedId(row.id);
-    setTimeout(() => setCopiedId((id) => (id === row.id ? null : id)), 2000);
+  const handleCopy = async (row: ClassRow) => {
+    const link = studentLink(row.room_code);
+    // navigator.clipboard is undefined on non-HTTPS origins (a common LAN
+    // teaching setup) and the write can be permission-rejected — both used
+    // to throw/reject unhandled while the UI still claimed "Copied!".
+    let copied = false;
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(link);
+        copied = true;
+      }
+    } catch { copied = false; }
+    if (!copied) {
+      // Fallback: select-and-copy via a transient textarea (works on http).
+      try {
+        const ta = document.createElement('textarea');
+        ta.value = link;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        copied = document.execCommand('copy');
+        document.body.removeChild(ta);
+      } catch { copied = false; }
+    }
+    if (copied) {
+      setCopiedId(row.id);
+      setTimeout(() => setCopiedId((id) => (id === row.id ? null : id)), 2000);
+    } else {
+      setError(`Couldn't copy automatically — the link is ${link}`);
+    }
   };
 
   const handleDelete = async (row: ClassRow) => {

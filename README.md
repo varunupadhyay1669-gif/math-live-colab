@@ -1,20 +1,85 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
-</div>
+# Math Live 🧮
 
-# Run and deploy your AI Studio app
+A live teaching platform for **interactive HTML simulations**. The teacher
+imports a pre-made HTML sim (or generates one with AI), presents it live, and
+every student's screen runs the same simulation in deterministic sync — clicks,
+inputs, drags, annotations, whiteboard, the lot.
 
-This contains everything you need to run your app locally.
+**Live deployment:** https://math-live-colab.onrender.com
 
-View your app in AI Studio: https://ai.studio/apps/a0fe8b96-cfc1-4a12-955d-03fad2813704
+## What makes it different
 
-## Run Locally
+- **Replay-first sync** — every client runs its own live sim instance; the
+  teacher's (or a granted student's) interactions replay into all of them.
+  Canvas/WebGL/3D sims and animations stay alive — nothing is screenshotted
+  or DOM-swapped. Late joiners boot the current baseline and **replay the
+  class's interaction journal** to converge.
+- **Control handoff** — hand "the chalk" to any student (✋ in the
+  participants list): their screen drives the whole class until you take it
+  back. The global view-only/interactive toggle is independent.
+- **Student Peek** — open a live, read-only window into any student's *real*
+  screen (👁️), give them control from there, or resync just them.
+- **Lesson Time Machine** — bookmark moments (HTML + whiteboard + annotations
+  + step) and rewind the entire class to any of them.
+- **Element pings** — anyone (even view-only students) can Alt+click to drop
+  a synced "look here" ripple on the exact element.
+- **Checkpoints & XP** — gate steps behind a quiz; server-graded, anti-farm,
+  with a live leaderboard.
+- **Whiteboard** — infinite shared canvas: pen/highlighter/eraser, shapes,
+  KaTeX labels, images (upload/paste/drag-drop), ruler & protractor,
+  per-author undo, grid/graph paper.
+- **Annotations over the sim**, laser pointer, reactions, raise-hand, chat,
+  challenge timer, attention checks, session recording.
 
-**Prerequisites:**  Node.js
+## Run locally
 
+Prerequisites: Node.js ≥ 20.
 
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+```bash
+npm install
+npm run dev        # Vite + Socket.IO on http://localhost:3000 (PORT to override)
+```
+
+There is **no separate frontend server** — `server.ts` boots Vite in
+middleware mode and Socket.IO in one process.
+
+Open `/` → *Start teaching* → upload an HTML sim. Join from a second
+tab/device via the room code (`/live/<code>`).
+
+### Optional features (all env-gated, see `.env.example`)
+
+| Env | Enables |
+|---|---|
+| `VITE_SUPABASE_URL` + `VITE_SUPABASE_ANON_KEY` | Teacher accounts (magic-link login + dashboard with permanent per-student rooms) |
+| `SUPABASE_URL` + `SUPABASE_ANON_KEY` + `SUPABASE_SERVICE_ROLE_KEY` | Server-side teacher-ownership enforcement for registered classes |
+| `UPSTASH_REDIS_REST_URL` + `UPSTASH_REDIS_REST_TOKEN` | Durable rooms across restarts/redeploys |
+| `GEMINI_API_KEY` | ✨ AI Lesson — generate an interactive widget from a prompt (server-side only) |
+
+## Scripts
+
+```bash
+npm run dev          # dev server (tsx server.ts — restart after server.ts edits)
+npm run build        # production bundle → dist/
+npm start            # production server (POSIX; on Windows set NODE_ENV manually)
+npm run lint         # tsc --noEmit
+npm run verify:sync  # Socket.IO integration suite (needs a running server)
+```
+
+## Documentation
+
+- [`AGENTS.md`](AGENTS.md) — ground rules for anyone (human or AI) changing this codebase. **Read first.**
+- [`SYNC.md`](SYNC.md) — the sync architecture contract (canonical revisioned state, event replay, snapshots, control handoff, event journal).
+- [`DEPLOY.md`](DEPLOY.md) — deployment (Render blueprint included; Railway/Fly/VPS notes).
+- [`SUPABASE.md`](SUPABASE.md) — teacher accounts setup.
+
+## Writing sims that sync well
+
+Any self-contained HTML file works. For best results:
+
+- Keep visible state in the DOM (text content, input values, classes).
+- Stable element `id`s help replay target the right elements.
+- Mark progressive content with `data-step="1"`, `data-step="2"`, … to use
+  Step Lock.
+- `Math.random()` is automatically seeded per-document for deterministic
+  replay across screens.
+- No external network calls — sims run sandboxed and offline.

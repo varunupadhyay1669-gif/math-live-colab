@@ -47,6 +47,19 @@ teacher renders the serialized DOM WITHOUT re-running scripts (a frozen, true
 snapshot). `resync_student` rebuilds ONE drifted student from canonical state
 without disturbing the rest of the class.
 
+### 1.35 Event journal (late-join convergence)
+The server records the DISCRETE interaction stream (clicks/inputs/keys —
+never cursor/scroll/zoom/ping) since the last content **baseline** (upload /
+run / restore / force / stored non-canvas DOM snapshot). On a student's
+fresh join, `interaction_replay { events }` is unicast after content
+delivery; the client feeds each event through the queued iframe transport,
+so the freshly-built sim re-lives the class's interactions in order and
+converges — including canvas/WebGL and JS-stateful sims that DOM snapshots
+cannot capture. Capped at 400 events; on overflow replay is disabled until
+the next baseline (a partial replay would diverge worse than none). Clients
+skip the replay on socket-blip reconnects (the live sim already lived those
+events — guard: tab had content at connect time).
+
 ### 1.4 Lesson Time Machine
 `bookmark_create` captures canonical state (HTML + whiteboard + annotations +
 step + zoom; cap 8, FIFO, persisted, deep-copied). `bookmark_restore` rewinds

@@ -7,7 +7,9 @@ services:
     branch: main
     buildCommand: npm install && npm run build
     startCommand: npm start
-    healthCheckPath: /
+    # /healthz is the purpose-built cheap probe (tiny JSON, no SPA fallback,
+    # no static-file work) — exactly what a health checker should hit.
+    healthCheckPath: /healthz
     envVars:
       - key: NODE_ENV
         value: production

@@ -32,15 +32,27 @@ function getContext(): AudioContext {
   if (!audioCtx) {
     audioCtx = new AudioContext();
   }
+  // Browsers create AudioContexts in the "suspended" state until a user
+  // gesture. Our first sound is often socket-driven (a student joining),
+  // which is NOT a gesture — without an explicit resume() every SFX stayed
+  // permanently silent for users who hadn't clicked yet. resume() inside a
+  // gesture unlocks it; outside one it's a harmless no-op promise.
+  if (audioCtx.state === 'suspended') {
+    void audioCtx.resume().catch(() => {});
+  }
   return audioCtx;
 }
 
-function getGain(): GainNode {
-  const ctx = getContext();
-  const gain = ctx.createGain();
-  gain.gain.value = muted ? 0 : masterVolume;
-  gain.connect(ctx.destination);
-  return gain;
+// One-time unlock: the first real user gesture anywhere resumes the context,
+// so socket-driven sounds that fire later are audible.
+if (typeof window !== 'undefined') {
+  const unlock = () => {
+    try { getContext(); } catch { /* no Web Audio — stay silent */ }
+    window.removeEventListener('pointerdown', unlock);
+    window.removeEventListener('keydown', unlock);
+  };
+  window.addEventListener('pointerdown', unlock, { once: true });
+  window.addEventListener('keydown', unlock, { once: true });
 }
 
 /** Play a pure tone with optional envelope */

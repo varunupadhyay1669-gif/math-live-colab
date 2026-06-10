@@ -21,10 +21,20 @@ function formatRelativeTime(ts: number): string {
   return `${Math.floor(days / 7)}w ago`;
 }
 
+// Storage can throw in embedded/sandboxed contexts (SecurityError) — a raw
+// localStorage call in a render-phase initializer took down the whole landing
+// page there. These never throw.
+const safeStorageGet = (key: string): string => {
+  try { return localStorage.getItem(key) || ""; } catch { return ""; }
+};
+const safeStorageSet = (key: string, value: string): void => {
+  try { localStorage.setItem(key, value); } catch { /* storage blocked — non-fatal */ }
+};
+
 export default function Home() {
   const navigate = useNavigate();
   const auth = useAuth();
-  const [teacherName, setTeacherName] = useState(() => localStorage.getItem("mathslive_teacher_name") || "");
+  const [teacherName, setTeacherName] = useState(() => safeStorageGet("mathslive_teacher_name"));
 
   // When auth is on and the teacher signs in with Google, prefill their name
   // from the account (only if they haven't typed/saved one already).
@@ -53,10 +63,17 @@ export default function Home() {
     if (!email || sendingLink) return;
     setSendingLink(true);
     setLoginError(null);
-    const { error } = await auth.signInWithEmail(email);
-    setSendingLink(false);
-    if (error) setLoginError(error);
-    else setLinkSent(true);
+    try {
+      const { error } = await auth.signInWithEmail(email);
+      if (error) setLoginError(error);
+      else setLinkSent(true);
+    } catch {
+      // Lazy-chunk load failure (flaky network) or unexpected reject — without
+      // this catch the button stayed disabled on "Sending…" forever.
+      setLoginError('Could not reach the sign-in service. Check your connection and try again.');
+    } finally {
+      setSendingLink(false);
+    }
   };
   const [mode, setMode] = useState<Mode>(null);
 
@@ -84,10 +101,10 @@ export default function Home() {
   const useTemplate = (tpl: LessonTemplate) => {
     // Need a teacher name to enter a fresh room. Fall back to a stored
     // name if present, else ask the user once.
-    const stored = (localStorage.getItem("mathslive_teacher_name") || "").trim();
+    const stored = safeStorageGet("mathslive_teacher_name").trim();
     const name = stored || (window.prompt("What are you teaching today?") || "").trim();
     if (!name) return;
-    localStorage.setItem("mathslive_teacher_name", name);
+    safeStorageSet("mathslive_teacher_name", name);
     const newRoomId = uuidv4().slice(0, 8);
     navigate(`/room/${newRoomId}?name=${encodeURIComponent(name)}&template=${encodeURIComponent(tpl.id)}`);
   };
@@ -110,7 +127,7 @@ export default function Home() {
   const createRoom = () => {
     const name = teacherName.trim();
     if (!name) return;
-    localStorage.setItem("mathslive_teacher_name", name);
+    safeStorageSet("mathslive_teacher_name", name);
     // Use the teacher's chosen permanent code when given; otherwise fall back
     // to a fresh random id (the previous always-random behaviour).
     const custom = slugifyCode(classCode);

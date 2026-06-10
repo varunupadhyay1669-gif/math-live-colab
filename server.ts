@@ -99,6 +99,17 @@ interface RoomData {
   // is independent ("everyone may interact"). The teacher ALWAYS drives
   // regardless of this field.
   controlHolderName: string | null;
+  // ── Event journal (late-join convergence) ──
+  // The discrete interaction stream (clicks/inputs/keys — not cursor/scroll)
+  // since the last content BASELINE (upload / run / restore / stored DOM
+  // snapshot). A late-joining student boots the baseline HTML and then
+  // replays this journal in order, so their sim instance — including
+  // canvas/WebGL and JS-stateful sims that DOM snapshots can't capture —
+  // converges to the class's current state. Cleared whenever a new baseline
+  // is established. If it overflows EVENT_LOG_MAX, replay is disabled until
+  // the next baseline (a partial replay would diverge worse than none).
+  eventLog: any[];
+  eventLogOverflow: boolean;
   // ── Lesson Time Machine ──
   // Teacher-captured moments of canonical state. Restoring one rewinds the
   // whole class (HTML + whiteboard + annotations + step). Capped at
@@ -300,7 +311,39 @@ async function startServer() {
       zoomLevel: 1,
       controlHolderName: null,
       bookmarks: [],
+      eventLog: [],
+      eventLogOverflow: false,
     };
+  }
+
+  // ── Event journal helpers ──
+  // Discrete, replayable interaction types. Cursor/scroll/zoom/drag-move are
+  // continuous and view-only; pings are ephemeral — none of them belong in
+  // the journal a late joiner replays.
+  const REPLAYABLE_EVENT_TYPES = new Set([
+    'SYNC_CLICK', 'SYNC_INPUT', 'SYNC_CHANGE', 'SYNC_KEYDOWN', 'SYNC_KEYUP',
+    'SYNC_MOUSEDOWN', 'SYNC_MOUSEUP', 'SYNC_POINTERDOWN',
+    'SYNC_DRAGSTART', 'SYNC_DRAGEND', 'SYNC_DROP',
+  ]);
+  const EVENT_LOG_MAX = 400;
+  function journalEvent(room: RoomData, event: any) {
+    if (!event || !REPLAYABLE_EVENT_TYPES.has(event.type)) return;
+    if (room.eventLogOverflow) return;
+    if (room.eventLog.length >= EVENT_LOG_MAX) {
+      // Past the cap a partial journal would replay HALF the story and leave
+      // the late joiner in a state nobody else ever had. Disable until the
+      // next baseline instead.
+      room.eventLogOverflow = true;
+      room.eventLog = [];
+      return;
+    }
+    room.eventLog.push(event);
+  }
+  // A new content baseline (fresh HTML everyone rebuilds from, or a stored
+  // DOM snapshot late-joiners boot from) makes the old journal obsolete.
+  function resetEventJournal(room: RoomData) {
+    room.eventLog = [];
+    room.eventLogOverflow = false;
   }
 
   // AUTONOMOUS: Compute when this room expires.
@@ -474,6 +517,10 @@ async function startServer() {
       gateAwarded: Array.from(room.gateAwarded),
       controlHolderName: room.controlHolderName,
       bookmarks: room.bookmarks,
+      // Bounded (EVENT_LOG_MAX) — survives restart so a late joiner right
+      // after a redeploy still converges.
+      eventLog: room.eventLog,
+      eventLogOverflow: room.eventLogOverflow,
       claimed: !!room.claimed,
       claimedBy: room.claimedBy ?? null,
       claimedAt: room.claimedAt ?? null,
@@ -649,6 +696,8 @@ async function startServer() {
     room.bookmarks = Array.isArray(raw.bookmarks)
       ? raw.bookmarks.filter((b: any) => b && typeof b.id === 'string').slice(0, 8)
       : [];
+    room.eventLog = Array.isArray(raw.eventLog) ? raw.eventLog.slice(0, 400) : [];
+    room.eventLogOverflow = !!raw.eventLogOverflow;
     return room;
   }
 
@@ -1197,6 +1246,17 @@ async function startServer() {
         socket.emit('leaderboard_update', buildLeaderboard(room));
       }
 
+      // ── Event-journal replay for late joiners ──
+      // The student just received the BASELINE html (snapshot or pristine
+      // source). Hand them the discrete interaction stream recorded since
+      // that baseline; their client feeds it into the freshly-built iframe
+      // in order, so their sim instance (including canvas/JS-stateful sims
+      // a DOM snapshot can't capture) converges to the class's state.
+      if (role === 'student' && room.eventLog.length > 0 && !room.eventLogOverflow) {
+        socket.emit('interaction_replay', { events: room.eventLog, count: room.eventLog.length });
+        logSync('interaction_replay', { roomId, revision: room.revision, socketId: socket.id, reason: `events=${room.eventLog.length}` });
+      }
+
       // Broadcast updated user list
       io.to(roomId).emit('user_list', getRoomUserList(room));
     });
@@ -1264,6 +1324,7 @@ async function startServer() {
       room.activeFileId = file.id;
       room.lastRunHtml = file.html;
       room.liveSnapshotHtml = null;
+      resetEventJournal(room);
       // Uploading a new HTML file is an unambiguous "show this to the
       // student" intent. If the teacher was on the whiteboard surface,
       // exit whiteboard mode so the broadcast iframe actually surfaces
@@ -1332,6 +1393,7 @@ Build a widget that teaches: ${safePrompt}`;
         room.activeFileId = file.id;
         room.lastRunHtml = html;
         room.liveSnapshotHtml = null;
+        resetEventJournal(room);
         const wasWhiteboard = room.whiteboardMode;
         if (wasWhiteboard) room.whiteboardMode = false;
         const revision = bumpRevision(room);
@@ -1379,6 +1441,7 @@ Build a widget that teaches: ${safePrompt}`;
       room.activeFileId = nextFile ? nextFile.id : null;
       room.lastRunHtml = nextFile ? nextFile.html : null;
       room.liveSnapshotHtml = null;
+      resetEventJournal(room);
       const revision = bumpRevision(room);
       io.to(roomId).emit('file_deleted', { fileId, newActiveId: room.activeFileId });
       if (nextFile) {
@@ -1398,6 +1461,7 @@ Build a widget that teaches: ${safePrompt}`;
       room.activeFileId = fileId;
       room.lastRunHtml = file.html;
       room.liveSnapshotHtml = null;
+      resetEventJournal(room);
       const revision = bumpRevision(room);
       // Send file content WITH the active_file_changed so student never reads stale state
       io.to(roomId).emit('active_file_changed', { fileId, fileName: file.name, html: file.html, currentStep: room.currentStep, revision });
@@ -1421,6 +1485,7 @@ Build a widget that teaches: ${safePrompt}`;
       room.activeFileId = fileId;
       room.lastRunHtml = html;
       room.liveSnapshotHtml = null;
+      resetEventJournal(room);
       const revision = bumpRevision(room);
       broadcastFullState(roomId, room, 'run_preview');
       // Send to everyone (including sender for confirmation)
@@ -1443,6 +1508,7 @@ Build a widget that teaches: ${safePrompt}`;
       // NOT rewrite lastRunHtml or the persisted file source — only the live
       // snapshot. Canvas sims never store a snapshot at all (see dom_snapshot).
       room.liveSnapshotHtml = hasCanvas ? null : html;
+      if (!hasCanvas) resetEventJournal(room); // stored snapshot = new baseline
       const revision = bumpRevision(room);
       const deliverHtml = hasCanvas ? (room.lastRunHtml || getSourceHtml(room) || html) : html;
       // Send to any students waiting for the teacher's live DOM
@@ -1480,6 +1546,11 @@ Build a widget that teaches: ${safePrompt}`;
       // working sim and the event-replay stream brings them forward.
       if (hasCanvas) {
         room.liveSnapshotHtml = null;
+        // No new baseline stored — the journal keeps accumulating since the
+        // last run/upload so canvas-sim late-joiners can replay it. Force on
+        // a canvas sim DOES rebuild everyone from lastRunHtml, which resets
+        // each client's sim — the journal restarts with them.
+        if (isForceSync) resetEventJournal(room);
       } else {
         // ── Don't corrupt the source HTML on every late-join ack ──
         // `liveSnapshotHtml` is the "current DOM right now" and is meant to
@@ -1487,6 +1558,9 @@ Build a widget that teaches: ${safePrompt}`;
         // actually ran; `file.html` is the saved source. Only force-sync (an
         // explicit teacher request to re-baseline everyone) rewrites those.
         room.liveSnapshotHtml = html;
+        // The stored snapshot IS the new late-join baseline: events up to
+        // now are baked into it, so the journal restarts here.
+        resetEventJournal(room);
         if (isForceSync) {
           room.lastRunHtml = html;
           const file = room.files.find(f => f.id === room.activeFileId);
@@ -2188,6 +2262,9 @@ Build a widget that teaches: ${safePrompt}`;
         if (event.type === 'SYNC_SCROLL') {
           room.lastTeacherScroll = event;
         }
+        // Journal discrete events so late joiners can replay the lesson's
+        // interaction stream from the current baseline (see eventLog).
+        journalEvent(room, event);
         // Teacher → broadcast to all students (one-way sync)
         socket.to(roomId).emit('interaction', event);
       } else if (user?.role === 'student') {
@@ -2231,6 +2308,7 @@ Build a widget that teaches: ${safePrompt}`;
           // sims replay them too so every instance sees the same event
           // stream. The sender is excluded (their own sim already applied
           // the action locally; echoing it back would double-fire).
+          journalEvent(room, event);
           socket.to(roomId).emit('interaction', event);
         }
         // When not allowed: student events are silently dropped (view-only mode)
@@ -2367,6 +2445,7 @@ Build a widget that teaches: ${safePrompt}`;
       // hand out fresh clones — restoring twice must work.
       room.lastRunHtml = bm.html;
       room.liveSnapshotHtml = null;
+      resetEventJournal(room);
       room.whiteboard = structuredClone(bm.whiteboard);
       room.annotations = structuredClone(bm.annotations);
       room.currentStep = bm.currentStep;
@@ -2525,6 +2604,7 @@ Build a widget that teaches: ${safePrompt}`;
       room.scores = {};
       room.gateAwarded.clear();
       room.controlHolderName = null;
+      resetEventJournal(room);
       io.to(roomId).emit('control_changed', { holderName: null });
       // Bump the canonical revision. Without this, any subsequent
       // session_state / force_sync_state carries the OLD revision and clients

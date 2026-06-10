@@ -191,6 +191,9 @@ export default function StudentView() {
   const canDrive = interactionAllowed || hasControl;
   const canDriveRef = useRef(false);
   useEffect(() => { canDriveRef.current = canDrive; }, [canDrive]);
+  // True when this tab already had a running sim at (re)connect time — used
+  // to skip the event-journal replay on socket-blip reconnects (see connect).
+  const hadContentAtConnectRef = useRef(false);
 
   // ── Student Annotation Tools ──
   // AUTONOMOUS: Students can scribble on the HTML overlay the same
@@ -362,9 +365,31 @@ export default function StudentView() {
       // post-reconnect event as "stale". See the matching note in Room.tsx.
       lastInboundSeqRef.current = 0;
       lastRevisionRef.current = 0;
+      // Event-journal guard: only a tab that had NO sim yet (true late join /
+      // full page load) may apply the server's interaction replay. A socket
+      // blip reconnect keeps the live iframe, whose sim already lived those
+      // events — replaying would double-apply every click.
+      hadContentAtConnectRef.current = !!currentHtmlRef.current;
       newSocket.emit("join_room", { roomId, userName: studentName, role: 'student' });
       // Start attention detection
       cleanupAttention = setupAttentionDetection(newSocket, roomId, studentName);
+    });
+
+    // ── Event-journal replay (late-join convergence) ──
+    // The server sends the discrete interaction stream recorded since the
+    // baseline we just booted from. Feed it through the queued transport:
+    // messages wait until the fresh iframe fires onLoad, then flush in
+    // order — our sim re-lives the class's clicks and converges, including
+    // canvas/JS-stateful sims that DOM snapshots can't capture.
+    newSocket.on("interaction_replay", ({ events }: { events: any[] }) => {
+      if (hadContentAtConnectRef.current) return; // reconnect — sim already lived these
+      if (!Array.isArray(events) || events.length === 0) return;
+      for (const ev of events.slice(0, 400)) {
+        if (ev && typeof ev.type === 'string' && ev.type.startsWith('SYNC_')) {
+          postToIframe({ ...ev, type: ev.type.replace('SYNC_', 'REMOTE_') });
+        }
+      }
+      showNotification(`⚡ Catching you up — replayed ${events.length} class steps`);
     });
 
     newSocket.on("disconnect", () => {
@@ -1095,6 +1120,9 @@ export default function StudentView() {
           </button>
 
           <div className="header-divider" />
+
+          {/* Connection health (dot + RTT + reconnect toast) */}
+          <ConnectionStatus socket={socket} connected={connected} />
 
           {/* Control / View-only / Interactive indicator */}
           {hasControl ? (
