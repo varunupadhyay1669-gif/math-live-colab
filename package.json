@@ -12,7 +12,8 @@
     "start": "NODE_ENV=production tsx server.ts",
     "preview": "vite preview",
     "clean": "rm -rf dist",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "verify:sync": "node verify-sync.mjs"
   },
   "dependencies": {
     "@google/genai": "^1.29.0",

@@ -197,6 +197,14 @@ interface DrawStroke {
   createdAt?: number; // wall-clock ms; used by highlighter for fade-out
 }
 
+// Preserve a stroke's tool across the wire and on hydration. Older persisted
+// strokes (created before `tool` existed) and malformed payloads fall back to
+// 'pen'; 'eraser-pixel' and 'highlighter' MUST survive or peers render erases
+// as opaque ink and highlighters as permanent chunky pen strokes.
+function coerceStrokeTool(tool: unknown): DrawStroke['tool'] {
+  return tool === 'eraser-pixel' || tool === 'highlighter' ? tool : 'pen';
+}
+
 interface BoardImageObject {
   id: string;
   type: 'image';
@@ -1267,10 +1275,15 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
 
     const fitBoard = useCallback(() => setSyncedView(getInitialView()), [getInitialView, setSyncedView]);
 
+    // Always points at the latest redrawCanvas. loadImage's async img.onload
+    // fires long after creation; without this ref it would capture the first
+    // render's redrawCanvas (empty board + default view) and blank the canvas
+    // on every image decode.
+    const redrawCanvasRef = useRef<() => void>(() => {});
     const loadImage = useCallback((object: BoardImageObject) => {
       if (imageCacheRef.current.has(object.id)) return;
       const img = new Image();
-      img.onload = () => redrawCanvas();
+      img.onload = () => redrawCanvasRef.current();
       img.src = object.src;
       imageCacheRef.current.set(object.id, img);
     }, []);
@@ -1291,6 +1304,13 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
       setView(nextView);
       if (sync) emitView(nextView);
     }, [view, screenToBoard, emitView]);
+
+    // Latest zoomAt, reachable from long-lived native touch listeners without
+    // putting zoomAt (whose identity changes on every view change) in their
+    // effect deps. See the pinch-zoom effect: re-attaching listeners mid-pinch
+    // reset pinchActive and killed the gesture after one step.
+    const zoomAtRef = useRef(zoomAt);
+    zoomAtRef.current = zoomAt;
 
     const addImageObject = useCallback((src: string, naturalWidth?: number, naturalHeight?: number) => {
       const container = containerRef.current;
@@ -2261,6 +2281,10 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
       ctx.restore();
     }, [objects, selectedObjectId, selectedStrokeIndex, strokeBounds, strokes, currentStroke, color, width, tool, view, shapes, draftShape, selectedShape, shapeBounds, getObjectHandlePositions, marquee, multiObjectIds, multiShapeIds, multiStrokeIndices, multiTextIds, eraserMode, gridMode, instruments, getInstrumentPose, texts, selectedTextId, textEditor, measureText]);
 
+    // Keep the latest redrawCanvas reachable from async callbacks (image
+    // decode) that were created with stale closures. See loadImage.
+    redrawCanvasRef.current = redrawCanvas;
+
     const downloadBoard = useCallback(() => {
       const canvas = canvasRef.current;
       if (!canvas) return;
@@ -2306,7 +2330,7 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
       // The data isn't lost — it'll arrive via incremental whiteboard_*
       // events. We just defer the bulk-replace until interaction is idle.
       if (textEditor || dragRef.current) return;
-      const normalized = (initialState.strokes || []).map(stroke => ({ ...stroke, id: stroke.id || newId('stroke'), tool: 'pen' as const }));
+      const normalized = (initialState.strokes || []).map(stroke => ({ ...stroke, id: stroke.id || newId('stroke'), tool: coerceStrokeTool(stroke.tool) }));
       setObjects(initialState.objects || []);
       setStrokes(normalized);
       setShapes(initialState.shapes || []);
@@ -2330,12 +2354,19 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
       if (!isActive) return;
       const resize = () => {
         if (objects.length === 0 && strokes.length === 0 && shapes.length === 0) setView(getInitialView());
-        redrawCanvas();
+        redrawCanvasRef.current();
       };
       resize();
       window.addEventListener('resize', resize);
       return () => window.removeEventListener('resize', resize);
-    }, [isActive, getInitialView, redrawCanvas, objects.length, strokes.length, shapes.length]);
+      // Must NOT depend on redrawCanvas: it changes identity whenever `view`
+      // changes, and setView(getInitialView()) above changes `view` to a fresh
+      // object every run — so depending on redrawCanvas created an infinite
+      // setView → new redrawCanvas → re-run → setView loop ("Maximum update
+      // depth exceeded") whenever the whiteboard opened on an empty board.
+      // Repaint still happens via the dedicated [redrawCanvas] effect below.
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [isActive, getInitialView, objects.length, strokes.length, shapes.length]);
 
     useEffect(() => {
       if (!isActive) return;
@@ -2383,9 +2414,11 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
             } else if (key === 'c') {
               e.preventDefault();
               copySelection();
-            } else if (key === 'v') {
-              e.preventDefault();
-              pasteClipboard();
+            // NOTE: no 'v' branch — Ctrl/Cmd+V must reach the browser so the
+            // native `paste` event fires; the window paste listener routes it
+            // (OS image → board image, OS text → label, else internal
+            // clipboard). Intercepting at keydown suppressed that event and
+            // broke OS-clipboard pasting.
             } else if (key === ']') {
               e.preventDefault();
               zOrderSelection(true);
@@ -2436,7 +2469,7 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
       };
       const handleSetView = (data: { view: BoardView }) => setView(data.view);
       const handleStroke = (data: { stroke: DrawStroke }) => {
-        const stroke = { ...data.stroke, id: data.stroke.id || newId('stroke'), tool: 'pen' as const };
+        const stroke = { ...data.stroke, id: data.stroke.id || newId('stroke'), tool: coerceStrokeTool(data.stroke.tool) };
         setStrokes(prev => prev.some(existing => existing.id === stroke.id) ? prev : [...prev, stroke]);
       };
       const handleAddShape = (data: { shape: BoardShape }) => {
@@ -2562,7 +2595,10 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
 
     const handlePointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
       if (!canEdit) return;
-      e.currentTarget.setPointerCapture(e.pointerId);
+      // Guarded like the matching releasePointerCapture in handlePointerUp —
+      // capture can throw (pointer already lifted / not active) and an
+      // unhandled throw here aborted the whole draw before the drag started.
+      try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* non-fatal */ }
       const point = screenToBoard(e.clientX, e.clientY);
       const shouldPan = tool === 'pan' || spacePan || e.button === 1;
       if (shouldPan) {
@@ -3235,7 +3271,7 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
             // in BOARD space across the zoom (same trick as wheel-zoom
             // anchoring to the cursor).
             if (Math.abs(factor - 1) > 0.001) {
-              zoomAt(factor, m.x, m.y);
+              zoomAtRef.current(factor, m.x, m.y);
             }
           }
           // Two-finger PAN: shift the board by however far the
@@ -3308,7 +3344,12 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
         wrap.removeEventListener('gesturechange', blockGesture as EventListener);
         wrap.removeEventListener('gestureend', blockGesture as EventListener);
       };
-    }, [isActive, zoomAt, setLiveStroke]);
+    // Deliberately NOT keyed on zoomAt — it changes identity on every view
+    // change, and re-attaching these listeners mid-pinch reset pinchActive and
+    // killed two-finger zoom/pan after the first step. zoomAt is read live via
+    // zoomAtRef instead. setLiveStroke is a stable setter.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [isActive]);
 
     // AUTONOMOUS: [ORDER-1 CRITICAL] - Page-wide guard against browser zoom
     // while the whiteboard is mounted.
@@ -3430,18 +3471,50 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
     // meant a student could upload a homework photo from disk but not
     // paste the same photo from clipboard. The mutation gate is the
     // canonical permission (canMutateImages); use it here too.
+    // Single router for Ctrl/Cmd+V — everything goes through the NATIVE paste
+    // event (never intercepted at keydown, so the OS clipboard is always
+    // readable). Priority:
+    //   1. OS image (screenshot / copied picture)  → image object on the board
+    //   2. OS text (teacher only — text sync is teacher-authoritative) → label
+    //   3. Internal whiteboard clipboard (copied shapes/labels/images)
+    // The old keydown Ctrl+V interception preventDefault()ed the paste event,
+    // which silently killed OS-image pasting whenever the internal clipboard
+    // had ever been used.
     useEffect(() => {
       if (!isActive || !canMutateImages) return;
       const handlePaste = (e: ClipboardEvent) => {
         const item = Array.from(e.clipboardData?.items || []).find(i => i.type.startsWith('image/'));
         const blob = item?.getAsFile();
-        if (!blob) return;
+        if (blob) {
+          e.preventDefault();
+          void ingestImageBlob(blob);
+          return;
+        }
+        // Never hijack paste while typing (text editor textarea, inputs).
+        const target = e.target as HTMLElement | null;
+        if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) return;
+        const pasted = e.clipboardData?.getData('text/plain')?.trim();
+        if (pasted && isTeacher) {
+          e.preventDefault();
+          const rect = containerRef.current?.getBoundingClientRect();
+          const cx = rect ? rect.left + rect.width / 2 : window.innerWidth / 2;
+          const cy = rect ? rect.top + rect.height / 2 : window.innerHeight / 2;
+          const p = screenToBoard(cx, cy);
+          const now = Date.now();
+          const t: BoardText = { id: newId('text'), x: p.x, y: p.y, text: pasted.slice(0, 4000), fontSize: textFontSize, color, createdAt: now, updatedAt: now };
+          addText(t);
+          recordAction({
+            undo: () => { setTexts(prev => prev.filter(x => x.id !== t.id)); if (socket && isTeacher) socket.emit('whiteboard_remove_text', { roomId, textId: t.id }); },
+            redo: () => { setTexts(prev => prev.some(x => x.id === t.id) ? prev : [...prev, t]); if (socket && isTeacher) socket.emit('whiteboard_add_text', { roomId, text: t }); },
+          });
+          return;
+        }
         e.preventDefault();
-        void ingestImageBlob(blob);
+        pasteClipboard();
       };
       window.addEventListener('paste', handlePaste);
       return () => window.removeEventListener('paste', handlePaste);
-    }, [isActive, canMutateImages, ingestImageBlob]);
+    }, [isActive, canMutateImages, ingestImageBlob, isTeacher, screenToBoard, textFontSize, color, addText, recordAction, pasteClipboard, socket, roomId]);
 
     // AUTONOMOUS: Drag-and-drop image support on the whiteboard.
     //
@@ -3646,6 +3719,15 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
       { id: 'protractor', label: 'Protractor', icon: <><path d="M3 14a9 9 0 0 1 18 0" /><path d="M3 14h18" /><path d="M12 14v-3" /></>, pressed: protractorActive },
     ];
 
+    // Shapes, text and geometry instruments are teacher-authored: the server
+    // gates their events on requireTeacher, so a student picking these tools
+    // would draw something that appears locally, syncs to nobody, and is wiped
+    // by the next hydration. Hide them from non-teachers — interactive students
+    // keep the tools that actually sync (pen, eraser, highlighter, pan, select,
+    // image), matching the server permission model.
+    const TEACHER_ONLY_TOOLS = new Set<BoardTool>(['text', 'line', 'rect', 'circle', 'arrow', 'diamond', 'compass', 'ruler', 'protractor']);
+    const visibleTools = isTeacher ? tools : tools.filter(t => !TEACHER_ONLY_TOOLS.has(t.id));
+
     const toolChip =
       tool === 'eraser' ? (eraserMode === 'pixel' ? 'Erase pixels — drag across content' : 'Erase whole stroke — click on a stroke') :
       tool === 'pan' ? 'Move board' :
@@ -3672,7 +3754,7 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
 
         {canEdit && (
           <aside className="whiteboard-rail" aria-label="Whiteboard tools">
-            {tools.map(item => (
+            {visibleTools.map(item => (
               <button
                 key={item.id}
                 onClick={() => setTool(item.id)}

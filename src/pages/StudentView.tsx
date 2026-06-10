@@ -102,6 +102,27 @@ export default function StudentView() {
   // ── Step-Lock ──
   const [currentStep, setCurrentStep] = useState(999);
   const [gateModal, setGateModal] = useState<{ step: number; gate: GateData } | null>(null);
+  // Checkpoint gates by step (question + options; correctIndex is never sent to
+  // students — graded server-side). Hydrated from session_state and gate_added.
+  const [gates, setGates] = useState<Record<number, GateData>>({});
+  // Steps we've already auto-opened the gate for, so reaching the same gated
+  // step again (or re-hydration) doesn't keep re-popping the modal.
+  const promptedGatesRef = useRef<Set<number>>(new Set());
+  // Mirror of the open gate so the once-bound gate_result handler can tell
+  // which step was just answered without a stale closure.
+  const gateModalRef = useRef<{ step: number; gate: GateData } | null>(null);
+  useEffect(() => { gateModalRef.current = gateModal; }, [gateModal]);
+  // Correctly-answered gates survive a page refresh via sessionStorage (per
+  // room, per tab) — without this the modal re-opened on every reload because
+  // currentStep + gates re-hydrate identically. Server-side anti-farm already
+  // makes re-answering worthless; this removes the UX annoyance.
+  const gateDoneKey = `mathlive:gatesDone:${roomId ?? ''}`;
+  const readGatesDone = useCallback((): number[] => {
+    try { const raw = sessionStorage.getItem(gateDoneKey); const arr = raw ? JSON.parse(raw) : []; return Array.isArray(arr) ? arr.filter((n: unknown) => typeof n === 'number') : []; } catch { return []; }
+  }, [gateDoneKey]);
+  const markGateDone = useCallback((step: number) => {
+    try { const next = Array.from(new Set([...readGatesDone(), step])); sessionStorage.setItem(gateDoneKey, JSON.stringify(next)); } catch { /* storage unavailable — modal may re-open after refresh, harmless */ }
+  }, [gateDoneKey, readGatesDone]);
 
   // ── Scroll Sync ──
   const [scrollSyncEnabled, setScrollSyncEnabled] = useState(true);
@@ -221,6 +242,7 @@ export default function StudentView() {
     if (typeof state.studentInteractionAllowed === 'boolean') setInteractionAllowed(state.studentInteractionAllowed);
     if (typeof state.currentStep === 'number') setCurrentStep(state.currentStep);
     if (typeof state.zoomLevel === 'number') setZoomLevel(state.zoomLevel);
+    if (state.gates && typeof state.gates === 'object') setGates(state.gates);
     if (state.chat) setChatMessages(state.chat);
     if (state.whiteboard) setWhiteboardState(state.whiteboard);
     if (Array.isArray(state.annotations)) setAnnotations(state.annotations);
@@ -256,6 +278,22 @@ export default function StudentView() {
       setCurrentHtml(prev => prev === html ? prev : html);
     }
   }, []);
+
+  // Auto-open the checkpoint gate when the class reaches a gated step the
+  // student hasn't been prompted for yet. This is the trigger that was missing
+  // — gates were created and stored but never shown to students. Reacting to
+  // currentStep/gates state covers every path (step_changed, gate_added, and
+  // session_state hydration on join/reconnect). promptedGatesRef makes it
+  // fire once per step so frequent re-hydration doesn't re-pop the modal.
+  useEffect(() => {
+    if (currentStep >= 999) return; // 999 = no step lock active
+    const gate = gates[currentStep];
+    if (!gate || !Array.isArray(gate.options) || gate.options.length < 2) return;
+    if (promptedGatesRef.current.has(currentStep)) return;
+    if (readGatesDone().includes(currentStep)) return; // answered before refresh
+    promptedGatesRef.current.add(currentStep);
+    setGateModal({ step: currentStep, gate });
+  }, [currentStep, gates, readGatesDone]);
 
   const iframeRef = useRef<HTMLIFrameElement>(null);
 
@@ -401,39 +439,20 @@ export default function StudentView() {
         if (revision < lastRevisionRef.current) return;
         lastRevisionRef.current = revision;
       }
-      // FOLLOW MIRROR: when we're following the teacher (not the driver) and a
-      // lesson is already on screen, apply the teacher's live DOM via a soft
-      // body-swap that does NOT re-run the page's scripts — so stateful
-      // sims/quizzes faithfully mirror the teacher's exact screen instead of
-      // resetting their internal state on a full iframe rebuild. Only the
-      // teacher's per-interaction snapshots (dom_snapshot) take this path;
-      // genuine content loads (run_preview / new file) still rebuild.
-      if (currentHtmlRef.current && iframeReadyRef.current && !interactionAllowedRef.current) {
-        postToIframe({ type: 'REMOTE_DOM', html });
-      } else {
-        setCurrentHtml(prev => prev === html ? prev : html);
-      }
+      // dom_snapshot now only arrives on explicit Force Sync (server no longer
+      // streams per-interaction snapshots to joined students). Treat it as a
+      // genuine content load: full iframe rebuild so the sim's scripts re-run
+      // from a clean state. The old REMOTE_DOM body-swap "soft mirror" is
+      // retired — swapping body.innerHTML destroyed the sim's event listeners
+      // (student clicks stopped doing anything), detached the nodes the sim's
+      // own scripts animate (canvas/3D froze or blanked), and raced the
+      // click-replay stream (quiz drift). Live following is done by replaying
+      // interaction events into the student's own live sim instance.
+      setCurrentHtml(prev => prev === html ? prev : html);
     });
 
-    // Continuous follow-mirror: the teacher's live DOM, pushed on every
-    // teacher interaction. Apply via soft-swap (no reload, no script reset) so
-    // the student's screen faithfully tracks the teacher's — the fix for
-    // stateful sim/quiz drift. Only while following with a lesson loaded; if
-    // we can't soft-swap yet (not loaded), fall back to a rebuild.
-    newSocket.on("live_dom", ({ html }: { html: string }) => {
-      if (!html) return;
-      // Always mirror the teacher (single authoritative sim) — in BOTH modes.
-      // The REMOTE_DOM soft-swap strips the local sim's handlers, so the
-      // student stops running its own copy and becomes a faithful mirror;
-      // their taps still relay to the teacher (document-level listeners
-      // survive the body swap) and drive the shared sim. The swap is skipped
-      // while the student is typing, so it never wipes an in-progress answer.
-      if (currentHtmlRef.current && iframeReadyRef.current) {
-        postToIframe({ type: 'REMOTE_DOM', html });
-      } else {
-        setCurrentHtml(prev => prev === html ? prev : html);
-      }
-    });
+    // NOTE: the legacy `live_dom` continuous follow-mirror is retired (see
+    // dom_snapshot above). The server no longer emits it; no listener here.
 
     newSocket.on("force_sync_state", (state: any) => {
       if (typeof state.revision === 'number') {
@@ -577,8 +596,13 @@ export default function StudentView() {
       postToIframe({ type: 'SET_STEP', step });
     });
 
-    newSocket.on("gate_added", ({ step }: { step: number }) => {
+    newSocket.on("gate_added", ({ step, question, options }: { step: number; question?: string; options?: string[] }) => {
       showNotification(`🚧 Checkpoint added at Step ${step}`);
+      // Store the gate so the auto-open effect can prompt the student when the
+      // class reaches this step. correctIndex stays -1 (graded server-side).
+      if (question && Array.isArray(options) && options.length >= 2) {
+        setGates(prev => ({ ...prev, [step]: { question, options, correctIndex: -1 } }));
+      }
     });
 
     // ── Scroll Sync ──
@@ -668,6 +692,11 @@ export default function StudentView() {
     newSocket.on("gate_result", ({ correct, xpGained, xp, streak, level, levelUp }: {
       correct: boolean; xpGained?: number; xp?: number; streak?: number; level?: number; levelUp?: boolean;
     }) => {
+      // Remember a correct answer for this tab so a refresh doesn't re-open
+      // the same checkpoint (the server already refuses to re-award XP).
+      if (correct && gateModalRef.current) {
+        markGateDone(gateModalRef.current.step);
+      }
       if (correct && xpGained && xpGained > 0) {
         setMyXp(xp || 0);
         setMyStreak(streak || 0);
@@ -714,6 +743,9 @@ export default function StudentView() {
       setLeaderboard([]);
       setQuizModal(null);
       setGateModal(null);
+      setGates({});
+      promptedGatesRef.current = new Set();
+      try { sessionStorage.removeItem(gateDoneKey); } catch { /* ignore */ }
       // Keep uploaded files list in sync with authoritative server state
       if (payload?.files) setFiles(payload.files);
       if (payload?.activeFileId !== undefined) setActiveFileId(payload.activeFileId);
@@ -975,6 +1007,7 @@ export default function StudentView() {
           <button
             className="flex items-center gap-2 px-2.5 py-1 rounded-full transition-all"
             data-tip="View leaderboard"
+            onClick={() => setShowLeaderboard(true)}
             style={{
               background: 'linear-gradient(135deg, rgba(99,102,241,0.12), rgba(139,92,246,0.12))',
               border: '1px solid rgba(99,102,241,0.25)',

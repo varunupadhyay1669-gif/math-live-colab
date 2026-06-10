@@ -35,6 +35,9 @@ interface RoomData {
   pendingSyncStudents: Set<string>;
   // Gamification: track XP and streaks per student name (keyed by studentName for persistence across reconnects)
   scores: Record<string, { xp: number; streak: number; bestStreak: number; correct: number; total: number }>;
+  // Transient (NOT persisted): "<studentName>:<step>" keys that have already
+  // earned gate XP, so re-answering the same checkpoint can't farm XP.
+  gateAwarded: Set<string>;
   // Monotonic interaction sequence for ordering guarantees
   interactionSeq: number;
   // Temporary explanation content (persists so late-joining students see it)
@@ -253,6 +256,7 @@ async function startServer() {
       password: null,
       pendingSyncStudents: new Set(),
       scores: {},
+      gateAwarded: new Set(),
       interactionSeq: 0,
       tempContent: null,
       liveSnapshotHtml: null,
@@ -433,6 +437,13 @@ async function startServer() {
       whiteboard: room.whiteboard,
       annotations: room.annotations,
       whiteboardMode: room.whiteboardMode,
+      // Persist the temporary explanation overlay so a server restart mid-class
+      // doesn't drop it (SYNC.md lists tempContent as canonical state — it must
+      // survive restart like every other canonical field).
+      tempContent: room.tempContent,
+      // Persist which gates each student already earned XP for — without this a
+      // server restart forgets awards and the same checkpoint pays out again.
+      gateAwarded: Array.from(room.gateAwarded),
       claimed: !!room.claimed,
       claimedBy: room.claimedBy ?? null,
       claimedAt: room.claimedAt ?? null,
@@ -539,7 +550,7 @@ async function startServer() {
     'whiteboard_remove_text', 'whiteboard_clear', 'whiteboard_reset',
     'whiteboard_delete_stroke', 'whiteboard_delete_strokes', 'whiteboard_mode_toggle',
     'show_temp_content', 'clear_temp_content',
-    'set_step', 'add_gate', 'claim_room', 'hard_reset', 'send_chat',
+    'set_step', 'add_gate', 'gate_answer', 'claim_room', 'hard_reset', 'send_chat',
   ]);
 
   // Build an in-memory RoomData from a persisted blob. Shared by the eager
@@ -597,6 +608,12 @@ async function startServer() {
     room.claimedAt = raw.claimedAt ?? null;
     room.lastTeacherScroll = raw.lastTeacherScroll || null;
     room.zoomLevel = raw.zoomLevel || 1;
+    // Restore the temporary explanation overlay (see serializeRoom).
+    room.tempContent = (raw.tempContent && typeof raw.tempContent === 'object')
+      ? { html: String(raw.tempContent.html ?? ''), name: String(raw.tempContent.name ?? '') }
+      : null;
+    // Restore gate-XP awards so a restart can't be used to re-farm checkpoints.
+    room.gateAwarded = new Set(Array.isArray(raw.gateAwarded) ? raw.gateAwarded.filter((k: unknown) => typeof k === 'string') : []);
     return room;
   }
 
@@ -659,6 +676,13 @@ async function startServer() {
       list.push({ id, name: user.name, role: user.role });
     });
     return list;
+  }
+
+  function buildLeaderboard(room: RoomData) {
+    return Object.entries(room.scores)
+      .map(([n, sc]) => ({ studentName: n, xp: sc.xp, streak: sc.streak, bestStreak: sc.bestStreak, correct: sc.correct, total: sc.total }))
+      .sort((a, b) => b.xp - a.xp)
+      .slice(0, 20);
   }
 
   // ─── INPUT VALIDATION HELPERS ───
@@ -815,15 +839,42 @@ async function startServer() {
     }));
   }
 
+  // Quiz/gate answers must never reach students. buildSessionState includes
+  // the full gate definition (with correctIndex) because the teacher needs it;
+  // before any student-bound emit we replace correctIndex with -1 so the answer
+  // key can't be read out of devtools. Server-side grading (gate_answer) is
+  // unaffected — it reads from room.gates, not the wire payload.
+  function sanitizeGatesForStudent(gates: SessionStatePayload['gates']): SessionStatePayload['gates'] {
+    const out: SessionStatePayload['gates'] = {};
+    for (const [step, gate] of Object.entries(gates)) {
+      out[Number(step)] = { question: gate.question, options: gate.options, correctIndex: -1 };
+    }
+    return out;
+  }
+  function payloadForStudent(payload: SessionStatePayload): SessionStatePayload {
+    return { ...payload, gates: sanitizeGatesForStudent(payload.gates) };
+  }
+
   function emitSessionState(socketId: string, roomId: string, room: RoomData, reason: SessionStatePayload['reason'], requestId?: string) {
     const payload = buildSessionState(roomId, room, 'session_state', reason, requestId);
-    io.to(socketId).emit('session_state', payload);
+    const isTeacher = room.users.get(socketId)?.role === 'teacher';
+    io.to(socketId).emit('session_state', isTeacher ? payload : payloadForStudent(payload));
     logSync('session_state', { roomId, revision: payload.revision, requestId, socketId, reason });
   }
 
   function broadcastFullState(roomId: string, room: RoomData, reason: SessionStatePayload['reason'], requestId?: string) {
     const payload = buildSessionState(roomId, room, 'sync_full_state', reason, requestId);
-    io.to(roomId).emit('sync_full_state', payload);
+    // Teacher gets the answer key; everyone else gets the sanitized copy. When
+    // no live teacher socket is resolvable, the whole room gets sanitized — the
+    // safe default (students never receive correctIndex).
+    const teacherId = room.teacherSocketId;
+    const teacherLive = !!teacherId && room.users.get(teacherId)?.role === 'teacher';
+    if (teacherLive) {
+      io.to(teacherId!).emit('sync_full_state', payload);
+      io.to(roomId).except(teacherId!).emit('sync_full_state', payloadForStudent(payload));
+    } else {
+      io.to(roomId).emit('sync_full_state', payloadForStudent(payload));
+    }
     logSync('sync_full_state', { roomId, revision: payload.revision, requestId, reason });
   }
 
@@ -1059,7 +1110,7 @@ async function startServer() {
         scrollSyncEnabled: room.scrollSyncEnabled,
         studentInteractionAllowed: room.studentInteractionAllowed,
         currentStep: room.currentStep,
-        gates: room.gates,
+        gates: role === 'teacher' ? room.gates : sanitizeGatesForStudent(room.gates),
         revision: room.revision,
         users: getRoomUserList(room),
         chat: room.chat.slice(-50), // Last 50 messages
@@ -1100,6 +1151,13 @@ async function startServer() {
       // If temp explanation content is active, send it to the joining student
       if (role === 'student' && room.tempContent) {
         socket.emit('temp_content', { html: room.tempContent.html, name: room.tempContent.name });
+      }
+
+      // Deliver existing scores to the joining client so a refreshed student's
+      // XP/streak pill doesn't reset to 0 until the next gate answer (the
+      // client derives its own stats from leaderboard_update).
+      if (Object.keys(room.scores).length > 0) {
+        socket.emit('leaderboard_update', buildLeaderboard(room));
       }
 
       // Broadcast updated user list
@@ -1256,6 +1314,9 @@ Build a widget that teaches: ${safePrompt}`;
     socket.on('update_file', ({ roomId, fileId, html }: { roomId: string; fileId: string; html: string }) => {
       const room = rooms.get(roomId);
       if (!requireTeacher(room, socket.id)) return;
+      // Same 2MB cap as upload_file — otherwise the upload size limit is
+      // trivially bypassed by uploading a small file then "updating" it.
+      if (typeof html !== 'string' || html.length > MAX_FILE_SIZE) return;
       const file = room.files.find(f => f.id === fileId);
       if (file) {
         file.html = html;
@@ -1266,27 +1327,45 @@ Build a widget that teaches: ${safePrompt}`;
     socket.on('delete_file', ({ roomId, fileId }: { roomId: string; fileId: string }) => {
       const room = rooms.get(roomId);
       if (!requireTeacher(room, socket.id)) return;
+      const wasActive = room.activeFileId === fileId;
       room.files = room.files.filter(f => f.id !== fileId);
-      if (room.activeFileId === fileId) {
-        room.activeFileId = room.files.length > 0 ? room.files[0].id : null;
+      if (!wasActive) {
+        io.to(roomId).emit('file_deleted', { fileId, newActiveId: room.activeFileId });
+        return;
       }
+      // The active file was deleted — repoint canonical HTML at the next file
+      // (or clear it) and bump the revision, otherwise lastRunHtml /
+      // liveSnapshotHtml still hold the deleted lesson and students keep seeing
+      // it. Without the bump, late-join / reconnect would re-deliver the
+      // deleted content via session_state.
+      const nextFile = room.files[0] || null;
+      room.activeFileId = nextFile ? nextFile.id : null;
+      room.lastRunHtml = nextFile ? nextFile.html : null;
+      room.liveSnapshotHtml = null;
+      const revision = bumpRevision(room);
       io.to(roomId).emit('file_deleted', { fileId, newActiveId: room.activeFileId });
+      if (nextFile) {
+        io.to(roomId).emit('active_file_changed', { fileId: nextFile.id, fileName: nextFile.name, html: nextFile.html, currentStep: room.currentStep, revision });
+        io.to(roomId).emit('run_preview', { fileId: nextFile.id, html: nextFile.html, revision });
+      }
+      broadcastFullState(roomId, room, 'run_preview');
     });
 
     socket.on('switch_file', ({ roomId, fileId }: { roomId: string; fileId: string }) => {
       const room = rooms.get(roomId);
       if (!requireTeacher(room, socket.id)) return;
-      room.activeFileId = fileId;
       const file = room.files.find(f => f.id === fileId);
-      if (file) {
-        room.lastRunHtml = file.html;
-        room.liveSnapshotHtml = null;
-        const revision = bumpRevision(room);
-        // Send file content WITH the active_file_changed so student never reads stale state
-        io.to(roomId).emit('active_file_changed', { fileId, fileName: file.name, html: file.html, currentStep: room.currentStep, revision });
-        broadcastFullState(roomId, room, 'run_preview');
-        io.to(roomId).emit('run_preview', { fileId, html: file.html, revision });
-      }
+      // Validate the file exists BEFORE repointing activeFileId — otherwise a
+      // bad id leaves activeFileId dangling at a non-existent file.
+      if (!file) return;
+      room.activeFileId = fileId;
+      room.lastRunHtml = file.html;
+      room.liveSnapshotHtml = null;
+      const revision = bumpRevision(room);
+      // Send file content WITH the active_file_changed so student never reads stale state
+      io.to(roomId).emit('active_file_changed', { fileId, fileName: file.name, html: file.html, currentStep: room.currentStep, revision });
+      broadcastFullState(roomId, room, 'run_preview');
+      io.to(roomId).emit('run_preview', { fileId, html: file.html, revision });
     });
 
     // ─── RUN / REFRESH PREVIEW ───
@@ -1294,6 +1373,9 @@ Build a widget that teaches: ${safePrompt}`;
       updateRoomActivity(roomId);
       const room = rooms.get(roomId);
       if (!requireTeacher(room, socket.id)) return;
+      // Cap the broadcast HTML at the same 2MB limit as upload (this path also
+      // writes file.html / lastRunHtml, so an uncapped payload would bypass it).
+      if (typeof html !== 'string' || html.length === 0 || html.length > MAX_FILE_SIZE) return;
       // Update the file content
       const file = room.files.find(f => f.id === fileId);
       if (file) {
@@ -1308,7 +1390,7 @@ Build a widget that teaches: ${safePrompt}`;
       io.to(roomId).emit('run_preview', { fileId, html, revision });
     });
 
-    socket.on('sync_html_update', ({ roomId, html, requestId }: { roomId: string; html: string; requestId?: string }) => {
+    socket.on('sync_html_update', ({ roomId, html, requestId, hasCanvas }: { roomId: string; html: string; requestId?: string; hasCanvas?: boolean }) => {
       const room = rooms.get(roomId);
       // AUTONOMOUS: dropped the `!room.activeFileId` guard. Previously we
       // rejected any DOM snapshot if no file was active server-side. But
@@ -1319,13 +1401,13 @@ Build a widget that teaches: ${safePrompt}`;
       // file yet, the html still lands in liveSnapshotHtml so a student
       // join's HTML-delivery fallback can use it.
       if (!requireTeacher(room, socket.id)) return;
+      if (typeof html !== 'string' || html.length === 0 || html.length > MAX_FILE_SIZE) return;
       // Same reasoning as in dom_snapshot above: a passive snapshot ack does
       // NOT rewrite lastRunHtml or the persisted file source — only the live
-      // snapshot. Otherwise every late-joiner silently corrupts the teacher's
-      // uploaded HTML by overwriting it with whatever DOM state happened to
-      // be in the iframe at the moment they joined.
-      room.liveSnapshotHtml = html;
+      // snapshot. Canvas sims never store a snapshot at all (see dom_snapshot).
+      room.liveSnapshotHtml = hasCanvas ? null : html;
       const revision = bumpRevision(room);
+      const deliverHtml = hasCanvas ? (room.lastRunHtml || getSourceHtml(room) || html) : html;
       // Send to any students waiting for the teacher's live DOM
       // (these students joined after the teacher and need the current content).
       // We snapshot the pending set FIRST (delivery loop is async), then
@@ -1338,71 +1420,69 @@ Build a widget that teaches: ${safePrompt}`;
         for (const studentId of pending) {
           room.pendingSyncStudents.delete(studentId);
           emitSessionState(studentId, roomId, room, 'snapshot_ack', requestId);
-          io.to(studentId).emit('run_preview', { fileId: room.activeFileId, html, revision });
+          io.to(studentId).emit('run_preview', { fileId: room.activeFileId, html: deliverHtml, revision });
         }
         logSync('pending_snapshot_ack', { roomId, revision, requestId, reason: `pending=${pending.length}` });
       }
     });
 
-    socket.on('dom_snapshot', ({ roomId, html, requestId }: { roomId: string; html: string; requestId?: string }) => {
+    socket.on('dom_snapshot', ({ roomId, html, requestId, hasCanvas }: { roomId: string; html: string; requestId?: string; hasCanvas?: boolean }) => {
       const room = rooms.get(roomId);
       // AUTONOMOUS: dropped the `!room.activeFileId` guard, same reasoning
       // as sync_html_update above. Post-redeploy the teacher's iframe is
       // still loaded but server has no activeFileId; we want the snapshot
       // to land so pending students get unblocked.
       if (!requireTeacher(room, socket.id)) return;
+      if (typeof html !== 'string' || html.length === 0 || html.length > MAX_FILE_SIZE) return;
       const isForceSync = requestId?.startsWith('force-');
-      // ── Don't corrupt the source HTML on every late-join ack ──
-      // `liveSnapshotHtml` is the "current DOM right now" and is meant to
-      // change every snapshot. `lastRunHtml` is the last HTML the teacher
-      // actually ran (the file's pristine starting point); `file.html` is
-      // the saved source. Overwriting those on every late-join silently
-      // drifted the teacher's uploaded file away from what they uploaded —
-      // after a few lessons the "original" file was actually some random
-      // mid-state snapshot. Only force-sync (an explicit teacher request to
-      // re-baseline everyone) should rewrite the run/source.
-      room.liveSnapshotHtml = html;
-      if (isForceSync) {
-        room.lastRunHtml = html;
-        const file = room.files.find(f => f.id === room.activeFileId);
-        if (file) file.html = html;
+      // ── Canvas/WebGL sims never snapshot usefully ──
+      // outerHTML of a <canvas> is an empty shell — rebuilding a late-joiner
+      // (or force-syncing the room) from it produces a blank sim. When the
+      // teacher's iframe reports hasCanvas, we keep the pristine lastRunHtml
+      // as the canonical boot state instead: late-joiners get a clean,
+      // working sim and the event-replay stream brings them forward.
+      if (hasCanvas) {
+        room.liveSnapshotHtml = null;
+      } else {
+        // ── Don't corrupt the source HTML on every late-join ack ──
+        // `liveSnapshotHtml` is the "current DOM right now" and is meant to
+        // change every snapshot. `lastRunHtml` is the last HTML the teacher
+        // actually ran; `file.html` is the saved source. Only force-sync (an
+        // explicit teacher request to re-baseline everyone) rewrites those.
+        room.liveSnapshotHtml = html;
+        if (isForceSync) {
+          room.lastRunHtml = html;
+          const file = room.files.find(f => f.id === room.activeFileId);
+          if (file) file.html = html;
+        }
       }
       const revision = bumpRevision(room);
+      // What a client should boot from right now (clean source for canvas sims).
+      const deliverHtml = hasCanvas ? (room.lastRunHtml || getSourceHtml(room) || html) : html;
 
       if (isForceSync) {
-        // Genuine force-sync: every client should re-render to match the snapshot.
+        // Genuine force-sync: every client re-renders (full iframe rebuild, so
+        // the sim's scripts re-run from a clean state).
         broadcastFullState(roomId, room, 'force_sync', requestId);
-        io.to(roomId).emit('dom_snapshot', { fileId: room.activeFileId, html, revision, requestId });
+        io.to(roomId).emit('dom_snapshot', { fileId: room.activeFileId, html: deliverHtml, revision, requestId });
       } else {
-        // Snapshot-ack triggered by a join/retry: only the late-joining students
-        // need this fresh HTML. Existing students already have a coherent state
-        // from their own SYNC_* event stream — broadcasting the snapshot to them
-        // would force a needless iframe reload (the auto-refresh-during-use bug).
-        // Same reasoning as the sync_html_update handler above: snapshot the
-        // pending set, deliver one-by-one and remove only those we delivered
-        // to. Newly-arriving pending students don't get blanket-cleared.
+        // Snapshot-ack triggered by a join/retry: ONLY the late-joining
+        // students need this HTML. Existing students stay in sync through the
+        // interaction event-replay stream (SYNC_* → REMOTE_*) — the previous
+        // design ALSO pushed a `live_dom` body-swap to every student here,
+        // which destroyed the student sim's event listeners (their clicks
+        // stopped doing anything), detached the nodes the sim's own scripts
+        // animate (canvas/3D sims froze or blanked), and raced the replay
+        // stream (quiz drift). The live mirror is retired; snapshots are for
+        // late-join catch-up and explicit force-sync only.
         if (room.pendingSyncStudents.size > 0) {
           const pending = Array.from(room.pendingSyncStudents);
           for (const studentId of pending) {
             room.pendingSyncStudents.delete(studentId);
             emitSessionState(studentId, roomId, room, 'snapshot_ack', requestId);
-            io.to(studentId).emit('run_preview', { fileId: room.activeFileId, html, revision });
-            io.to(studentId).emit('dom_snapshot', { fileId: room.activeFileId, html, revision, requestId });
+            io.to(studentId).emit('run_preview', { fileId: room.activeFileId, html: deliverHtml, revision });
           }
         }
-        // Live follow-mirror: push the teacher's CURRENT DOM to every
-        // already-joined student so their screen tracks the teacher exactly.
-        // The student applies it as a flicker-free soft DOM swap (NOT an iframe
-        // reload — that's why this is now safe during use), which keeps
-        // stateful sims/quizzes in lockstep instead of drifting on replayed
-        // clicks. Only while the teacher is the driver; when the student
-        // drives, the teacher mirrors the student via student_state instead.
-        // Always mirror the teacher's DOM to students (single authoritative
-        // sim). In interactive mode the student's taps are relayed to the
-        // teacher (REMOTE_*) and drive the teacher's sim, whose result mirrors
-        // straight back — so the two sides run ONE sim and cannot diverge into
-        // different random problems.
-        socket.to(roomId).emit('live_dom', { html, revision });
       }
       logSync('snapshot_ack', { roomId, revision, requestId });
     });
@@ -1695,7 +1775,20 @@ Build a widget that teaches: ${safePrompt}`;
     socket.on('whiteboard_update_object', ({ roomId, object }: any) => {
       const room = rooms.get(roomId);
       if (!requireTeacherOrInteractive(room, socket.id)) return;
-      room.whiteboard.objects = room.whiteboard.objects.map(obj => obj.id === object.id ? object : obj);
+      if (!object || typeof object.id !== 'string') return;
+      // Same byte cap as whiteboard_add_image — otherwise the cap is bypassed
+      // by adding a tiny image then "updating" its src to an arbitrary blob.
+      if (typeof object.src === 'string' && object.src.length > MAX_IMAGE_OBJECT_BYTES) {
+        console.warn(`Rejected oversize whiteboard image update from ${socket.id}: ${object.src.length} bytes`);
+        return;
+      }
+      let found = false;
+      room.whiteboard.objects = room.whiteboard.objects.map(obj => {
+        if (obj.id === object.id) { found = true; return object; }
+        return obj;
+      });
+      // Don't broadcast updates for objects that don't exist (a stale/forged id).
+      if (!found) return;
       socket.to(roomId).emit('whiteboard_update_object', { object });
     });
 
@@ -2088,11 +2181,14 @@ Build a widget that teaches: ${safePrompt}`;
             io.to(teacherId).emit('interaction', event);
           }
         } else if (room.studentInteractionAllowed) {
-          // Student interactions → only to teacher (not other students)
-          const teacherId = resolveTeacherSocketId();
-          if (teacherId) {
-            io.to(teacherId).emit('interaction', event);
-          }
+          // Student interactions → everyone EXCEPT the sender. The teacher's
+          // iframe replays them (authoritative sim advances), and other
+          // students' sims replay them too so every instance sees the same
+          // event stream — without this, in a multi-student interactive room
+          // only the teacher tracked a driving student and the rest drifted.
+          // The sender is excluded (their own sim already applied the action
+          // locally; echoing it back would double-fire).
+          socket.to(roomId).emit('interaction', event);
         }
         // When not allowed: student events are silently dropped (view-only mode)
       }
@@ -2149,10 +2245,22 @@ Build a widget that teaches: ${safePrompt}`;
     socket.on('add_gate', ({ roomId, step, question, options, correctIndex }: { roomId: string; step: number; question: string; options: string[]; correctIndex: number }) => {
       const room = rooms.get(roomId);
       if (!requireTeacher(room, socket.id)) return;
-      room.gates[step] = { question, options, correctIndex };
+      // Validate so a malformed gate can't poison canonical state or break
+      // student rendering. Options must all be non-blank (order preserved so
+      // correctIndex stays valid) and correctIndex must be in range.
+      const safeStep = Math.floor(Number(step));
+      if (!Number.isFinite(safeStep) || safeStep < 1) return;
+      const safeQuestion = sanitizeString(question, MAX_QUIZ_QUESTION_LENGTH);
+      if (!safeQuestion || !Array.isArray(options) || options.length < 2) return;
+      const safeOptions = options.slice(0, 8).map(o => sanitizeString(o, 200));
+      if (safeOptions.length < 2 || safeOptions.some(o => !o)) return;
+      const safeCorrect = Math.floor(Number(correctIndex));
+      if (!Number.isInteger(safeCorrect) || safeCorrect < 0 || safeCorrect >= safeOptions.length) return;
+      room.gates[safeStep] = { question: safeQuestion, options: safeOptions, correctIndex: safeCorrect };
       const revision = bumpRevision(room);
-      io.to(roomId).emit('gate_added', { step, revision });
-      // No broadcastFullState — `gate_added` carries everything clients need.
+      // Broadcast the question + options (NOT correctIndex) so students can
+      // render the checkpoint immediately without leaking the answer key.
+      io.to(roomId).emit('gate_added', { step: safeStep, revision, question: safeQuestion, options: safeOptions });
     });
 
     socket.on('gate_answer', ({ roomId, step, answerIndex, studentName }: { roomId: string; step: number; answerIndex: number; studentName: string }) => {
@@ -2168,6 +2276,20 @@ Build a widget that teaches: ${safePrompt}`;
         room.scores[name] = { xp: 0, streak: 0, bestStreak: 0, correct: 0, total: 0 };
       }
       const s = room.scores[name];
+
+      // Anti-farm: once a student has earned XP for a given checkpoint, a repeat
+      // correct answer (e.g. via devtools or a reopened modal) earns nothing.
+      // We still return a result so the client UI proceeds. Wrong answers don't
+      // mark the gate as awarded, so a genuine retry-after-wrong still counts.
+      const awardKey = `${name}:${step}`;
+      if (isCorrect && room.gateAwarded.has(awardKey)) {
+        socket.emit('gate_result', {
+          correct: true, xpGained: 0, xp: s.xp, streak: s.streak,
+          level: Math.floor(s.xp / 100) + 1, levelUp: false,
+        });
+        return;
+      }
+
       s.total += 1;
       let xpGained = 0;
       let levelUp = false;
@@ -2181,6 +2303,7 @@ Build a widget that teaches: ${safePrompt}`;
         const newLevel = Math.floor(s.xp / 100);
         levelUp = newLevel > oldLevel;
         if (s.streak > s.bestStreak) s.bestStreak = s.streak;
+        room.gateAwarded.add(awardKey);
       } else {
         s.streak = 0;
       }
@@ -2199,11 +2322,7 @@ Build a widget that teaches: ${safePrompt}`;
         });
       }
       // Broadcast leaderboard to everyone in room
-      const leaderboard = Object.entries(room.scores)
-        .map(([n, sc]) => ({ studentName: n, xp: sc.xp, streak: sc.streak, bestStreak: sc.bestStreak, correct: sc.correct, total: sc.total }))
-        .sort((a, b) => b.xp - a.xp)
-        .slice(0, 20);
-      io.to(roomId).emit('leaderboard_update', leaderboard);
+      io.to(roomId).emit('leaderboard_update', buildLeaderboard(room));
     });
 
     // ─── HARD RESET (teacher only) ───
@@ -2245,6 +2364,7 @@ Build a widget that teaches: ${safePrompt}`;
       room.gates = {};
       room.isPaused = false;
       room.scores = {};
+      room.gateAwarded.clear();
       // Bump the canonical revision. Without this, any subsequent
       // session_state / force_sync_state carries the OLD revision and clients
       // with a higher local revision (stored before the reset) silently drop
@@ -2286,6 +2406,9 @@ Build a widget that teaches: ${safePrompt}`;
           const room = rooms.get(roomId)!;
           const user = room.users.get(socket.id);
           room.users.delete(socket.id);
+          // Clear any pending-snapshot membership for this socket so a dead id
+          // doesn't linger in the set until the next snapshot sweep.
+          room.pendingSyncStudents.delete(socket.id);
 
           io.to(roomId).emit('user_list', getRoomUserList(room));
           io.to(roomId).emit('user_left', { userId: socket.id, userName: user?.name || 'Unknown' });
@@ -2412,6 +2535,15 @@ Build a widget that teaches: ${safePrompt}`;
     const room = rooms.get(roomId);
     if (!room) {
       res.status(404).json({ error: 'Room not found' });
+      return;
+    }
+    // Respect the room password. This HTTP fallback is unauthenticated, so a
+    // password-protected room must NOT hand out its lesson HTML here — that
+    // would let anyone with the room code read content the socket path gates
+    // behind the password. Students in a password room join over the socket
+    // (with the password) and never need this fallback.
+    if (room.password) {
+      res.status(403).json({ error: 'This room is password protected' });
       return;
     }
     // AUTONOMOUS: Same permissive fallback as join_room — use any HTML

@@ -95,20 +95,41 @@ Payload shape: `SessionStatePayload` in `server.ts`. Includes `revision`,
 
 ```
 server → teacher : request_html_sync { requestId, reason }
-teacher → server : dom_snapshot      { roomId, html, requestId }
+teacher → server : dom_snapshot      { roomId, html, requestId, hasCanvas }
 server → room    : sync_full_state   { revision, requestId, reason }
 ```
+
+**Snapshots are for late-join catch-up and explicit Force Sync ONLY.**
+Already-connected students are never pushed a DOM snapshot — they stay in
+step via the interaction event-replay stream (§4.3). The former `live_dom`
+continuous body-swap mirror is RETIRED: swapping `body.innerHTML` destroyed
+the student sim's event listeners (their clicks stopped doing anything),
+detached the nodes the sim's own scripts animate (canvas/3D sims froze or
+blanked), and raced the replay stream (quiz drift). Do not reintroduce it.
+
+**`hasCanvas` rule:** `<canvas>`/WebGL content cannot be serialized via
+outerHTML — the snapshot is an empty shell. When the iframe reports
+`hasCanvas: true`, the server stores NO `liveSnapshotHtml` (and Force Sync
+does NOT rewrite `lastRunHtml` / `file.html`); late-joiners boot the pristine
+source and the replay stream brings them forward.
 
 `requestId` rules:
 - `late-<sid>-<ts>` — student joined late, needs current state.
 - `force-<sid>-<ts>` — teacher pressed Force Sync.
 - `retry-<sid>-<ts>` — student requested fresh content.
-- `snap-<...>`      — teacher debounced auto-snapshot after interaction.
+- `snap-<...>`      — teacher debounced auto-snapshot after interaction
+                      (and `snap-hb-` 2.5s heartbeat) — feeds the SERVER's
+                      liveSnapshotHtml for future late-joins; never pushed
+                      to connected students.
 
 ### 4.3 Incremental interactions
 
 `interaction { roomId, event }` — small deltas (`SYNC_CURSOR`, `SYNC_CLICK`,
 `SYNC_SCROLL`, `SYNC_INPUT`, ...). Broadcast teacher → all students.
+Student events (when `studentInteractionAllowed`): `SYNC_CURSOR` relays to
+the teacher only; discrete events broadcast to everyone EXCEPT the sender
+(teacher's authoritative sim + every other student's sim replay them, so all
+instances advance by the same event stream).
 Server stamps `serverSeq` and `serverTs`. Clients drop events with
 `serverSeq <= lastInboundSeqRef.current`.
 
@@ -122,6 +143,9 @@ state.
 `active_file_changed`. New code should not depend on these. They are now
 duplicated by `session_state` / `sync_full_state` and exist only so older
 client builds keep working during rollout.
+
+`live_dom` is fully retired (2026-06): the server no longer emits it and
+clients no longer listen. See §4.2 for why.
 
 ---
 

@@ -22,8 +22,19 @@
 //
 // The flags here are the union of what the major 3D libraries
 // (Three.js, Babylon, p5.js, A-Frame, model-viewer) request when they
-// boot up. Adding more doesn't make the iframe less safe — sandbox is
-// the security boundary; `allow` is just a permissions-policy gate.
+// boot up.
+//
+// SECURITY NOTE: the sandbox is NOT a hard boundary in this app. Lesson
+// HTML is loaded from a blob: URL created by the parent, so the document
+// inherits the parent's origin; `allow-same-origin` + `allow-scripts`
+// therefore lets sim code run same-origin with the app. We keep
+// `allow-same-origin` deliberately because the parent reads the iframe's
+// scroll position directly (annotation anchoring) and many sims use
+// localStorage — removing it breaks those. Because isolation is weak, the
+// `allow` permissions below are kept to the minimum a maths/3D sim plausibly
+// needs: camera, microphone, geolocation and midi are intentionally NOT
+// granted (no maths sim needs them, and they are the highest-impact privacy
+// grants for untrusted uploaded HTML).
 
 export const LESSON_IFRAME_SANDBOX =
   'allow-scripts ' +
@@ -38,12 +49,8 @@ export const LESSON_IFRAME_SANDBOX =
 export const LESSON_IFRAME_ALLOW =
   'accelerometer; ' +
   'autoplay; ' +
-  'camera; ' +
   'fullscreen; ' +
   'gamepad; ' +
-  'geolocation; ' +
   'gyroscope; ' +
   'magnetometer; ' +
-  'microphone; ' +
-  'midi; ' +
   'xr-spatial-tracking';

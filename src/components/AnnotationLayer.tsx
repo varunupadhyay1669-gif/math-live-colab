@@ -118,6 +118,7 @@ export default function AnnotationLayer({
   const isDrawingRef = useRef(false);
   const animFrameRef = useRef<number>();
   const localLaserRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
+  const laserDotRef = useRef<HTMLDivElement>(null);
 
   const eraserActive = interactive && eraserMode !== 'off';
   const shapeActive = interactive && shapeTool !== 'off';
@@ -441,7 +442,13 @@ export default function AnnotationLayer({
         scrollY: s.scrollY,
       }));
     renderStrokes();
-  }, [initialAnnotations, renderStrokes]);
+    // Depend ONLY on initialAnnotations. renderStrokes changes identity on
+    // every pen colour/width change; including it here re-ran this hydration on
+    // each pen tweak and clobbered strokesRef back to the last server snapshot,
+    // wiping everything drawn/received since. The rAF render loop (which does
+    // depend on renderStrokes) repaints with the fresh pen state.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialAnnotations]);
 
   useEffect(() => {
     if (!socket) return;
@@ -503,25 +510,35 @@ export default function AnnotationLayer({
     const px = nx * rect.width;
     const py = ny * rect.height;
     const tol = Math.max(ERASER_HIT_FLOOR_PX, eraserWidth / 2);
+    // Hit-test in the SAME coordinate space the strokes are RENDERED in. Each
+    // stroke is drawn offset by how far the iframe has scrolled since it was
+    // captured (renderStrokes applies `p.x * w - offsetX`). Without applying
+    // the identical offset here, the eraser tests the un-scrolled positions and
+    // misses every stroke once the lesson has scrolled.
+    const currentScroll = getIframeScroll();
     const hits: string[] = [];
     for (let i = strokesRef.current.length - 1; i >= 0; i--) {
       const stroke = strokesRef.current[i];
       if (stroke.kind === 'eraser-pixel') continue; // can't erase the eraser itself
       if (!stroke.id) continue;
+      const offsetX = currentScroll.x - (stroke.scrollX ?? currentScroll.x);
+      const offsetY = currentScroll.y - (stroke.scrollY ?? currentScroll.y);
       const half = stroke.width / 2 + tol;
       let hit = false;
       // Single-point strokes (a stroke that started and ended at the same
       // point) have only one entry. Treat that as a circle around the point.
       if (stroke.points.length === 1) {
         const a = stroke.points[0];
-        if (distanceToSegment(px, py, a.x * rect.width, a.y * rect.height, a.x * rect.width, a.y * rect.height) <= half) {
+        const ax = a.x * rect.width - offsetX;
+        const ay = a.y * rect.height - offsetY;
+        if (distanceToSegment(px, py, ax, ay, ax, ay) <= half) {
           hit = true;
         }
       } else {
         for (let j = 0; j < stroke.points.length - 1; j++) {
           const a = stroke.points[j];
           const b = stroke.points[j + 1];
-          if (distanceToSegment(px, py, a.x * rect.width, a.y * rect.height, b.x * rect.width, b.y * rect.height) <= half) {
+          if (distanceToSegment(px, py, a.x * rect.width - offsetX, a.y * rect.height - offsetY, b.x * rect.width - offsetX, b.y * rect.height - offsetY) <= half) {
             hit = true;
             break;
           }
@@ -530,7 +547,7 @@ export default function AnnotationLayer({
       if (hit) hits.push(stroke.id);
     }
     return hits;
-  }, [eraserWidth]);
+  }, [eraserWidth, getIframeScroll]);
 
   const eraseStrokeAt = useCallback((nx: number, ny: number) => {
     const ids = hitStrokesAt(nx, ny);
@@ -767,6 +784,14 @@ export default function AnnotationLayer({
     const x = (e.clientX - rect.left) / rect.width;
     const y = (e.clientY - rect.top) / rect.height;
     localLaserRef.current = { x, y };
+    // Move the local laser dot imperatively. Its position lived only in a ref,
+    // so nothing re-rendered on pointer-move and the teacher's own dot stayed
+    // frozen (remote viewers were fine — their dot is prop-driven). Updating
+    // the DOM directly tracks the cursor without a per-move React re-render.
+    if (laserDotRef.current) {
+      laserDotRef.current.style.left = `${x * 100}%`;
+      laserDotRef.current.style.top = `${y * 100}%`;
+    }
     if (laserMode && socket) {
       socket.emit('laser_pointer', { roomId, x, y, active: true });
     }
@@ -817,7 +842,7 @@ export default function AnnotationLayer({
       {/* Laser Pointer Dot */}
       {showLaser && (
         <div className="absolute inset-0 pointer-events-none z-20">
-          <div className="absolute w-4 h-4 rounded-full"
+          <div ref={laserDotRef} className="absolute w-4 h-4 rounded-full"
             style={{
               left: `${laserPos.x * 100}%`,
               top: `${laserPos.y * 100}%`,

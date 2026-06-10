@@ -97,14 +97,15 @@ export default function Home() {
   };
 
   // Turn a free-text class name into a valid, stable room id. Must satisfy
-  // the server's isValidRoomId rule: /^[a-zA-Z0-9_-]+$/. Capped so the link
-  // stays tidy and well within MAX_ROOM_ID_LENGTH.
+  // the server's isValidRoomId rule: /^[a-zA-Z0-9_-]+$/ AND length <= 20
+  // (MAX_ROOM_ID_LENGTH). The previous 32-char cap produced codes the server
+  // rejected on join — a custom code of 21-32 chars created a dead /room link.
   const slugifyCode = (s: string) =>
     s.trim().toLowerCase()
       .replace(/[^a-z0-9_-]+/g, "-")
       .replace(/-+/g, "-")
       .replace(/^-+|-+$/g, "")
-      .slice(0, 32);
+      .slice(0, 20);
 
   const createRoom = () => {
     const name = teacherName.trim();

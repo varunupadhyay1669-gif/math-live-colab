@@ -497,6 +497,7 @@ export default function Room() {
       // checked).
       if (wasReconnect && activeFileIdRef.current && previewHtmlRef.current) {
         newSocket.emit("run_preview", {
+          roomId,
           fileId: activeFileIdRef.current,
           html: previewHtmlRef.current,
         });
@@ -566,6 +567,7 @@ export default function Room() {
       showNotif(`⚠️ Upload failed: ${message}`);
     });
     newSocket.on("generate_lesson_done", ({ name }: { name: string }) => {
+      if (aiTimeoutRef.current) clearTimeout(aiTimeoutRef.current);
       setAiGenerating(false);
       setShowAiModal(false);
       setAiPrompt("");
@@ -573,6 +575,7 @@ export default function Room() {
       showNotif(`✨ Generated & loaded: ${name}`);
     });
     newSocket.on("generate_lesson_error", ({ message }: { message: string }) => {
+      if (aiTimeoutRef.current) clearTimeout(aiTimeoutRef.current);
       setAiGenerating(false);
       setAiError(message || 'AI generation failed.');
     });
@@ -767,6 +770,7 @@ export default function Room() {
       // a blank whiteboard with no HTML uploaded → no fallback needed.
       if (previewHtmlRef.current && activeFileIdRef.current) {
         newSocket.emit("run_preview", {
+          roomId,
           fileId: activeFileIdRef.current,
           html: previewHtmlRef.current,
         });
@@ -853,6 +857,9 @@ export default function Room() {
       setGates({});
       setStepLockEnabled(false);
       setZoomLevel(1);
+      // Server unpauses on reset (room.isPaused = false); mirror it locally so a
+      // reset-while-paused doesn't leave the PausedOverlay stuck on screen.
+      setIsPaused(false);
       setLeaderboard([]);
       setQuizAnswers([]);
       setHandRaised(null);
@@ -1034,17 +1041,20 @@ export default function Room() {
     }
   }, []);
 
-  // ── Heartbeat mirror ──
-  // When the teacher is the sole driver and an HTML lesson is loaded, re-snapshot
-  // every 2.5s so a following student converges to the teacher's EXACT screen even
-  // while the teacher is idle — otherwise a student who drifted (or joined on a
-  // different state) stays drifted until the teacher next interacts. The server
-  // forwards this as a flicker-free soft-swap, and the change-detection above
-  // skips identical DOM, so an idle teacher generates ~no traffic.
+  // ── Heartbeat snapshot (late-join freshness) ──
+  // Re-snapshot every 2.5s so the server's liveSnapshotHtml stays close to the
+  // teacher's current screen — that's what a LATE-JOINING student boots from.
+  // It is no longer pushed to already-connected students (the live `live_dom`
+  // body-swap mirror is retired — it destroyed sim listeners and broke
+  // canvas/3D sims); connected students stay in step via interaction replay.
+  // Identical-DOM change-detection above means an idle teacher costs nothing.
   useEffect(() => {
-    // Run in BOTH modes — the student always mirrors the teacher's single sim
-    // (in interactive mode their taps drive the teacher and mirror back).
-    if (whiteboardMode) return;
+    // Skip while on the whiteboard OR showing temporary explanation content:
+    // in those states iframeRef points at a DIFFERENT iframe (whiteboard has
+    // none; explanation has the temp iframe), and snapshotting it would publish
+    // the explainer DOM as the lesson's liveSnapshotHtml — corrupting what late
+    // joiners boot from.
+    if (whiteboardMode || showTempContent) return;
     const id = setInterval(() => {
       if (!iframeReadyRef.current || !previewHtmlRef.current) return;
       const requestId = `snap-hb-${Date.now()}`;
@@ -1052,7 +1062,7 @@ export default function Room() {
       postToIframe({ type: 'REQUEST_HTML', requestId });
     }, 2500);
     return () => clearInterval(id);
-  }, [studentInteractionAllowed, whiteboardMode, postToIframe]);
+  }, [studentInteractionAllowed, whiteboardMode, showTempContent, postToIframe]);
 
   // ── Iframe onLoad: flush pending messages ──
   const handleIframeLoad = useCallback(() => {
@@ -1143,10 +1153,10 @@ export default function Room() {
           }
           lastSentSnapshotRef.current = e.data.html;
           console.info('[sync]', { eventType: 'snapshot_ack', roomId, requestId, role: 'teacher' });
-          socket.emit("dom_snapshot", { roomId, html: e.data.html, requestId });
+          socket.emit("dom_snapshot", { roomId, html: e.data.html, requestId, hasCanvas: !!e.data.hasCanvas });
         } else {
           console.info('[sync]', { eventType: 'snapshot_ack_unrequested', roomId, requestId: e.data.requestId, role: 'teacher' });
-          socket.emit("sync_html_update", { roomId, html: e.data.html, requestId: e.data.requestId });
+          socket.emit("sync_html_update", { roomId, html: e.data.html, requestId: e.data.requestId, hasCanvas: !!e.data.hasCanvas });
         }
         return;
       }
@@ -1239,7 +1249,13 @@ export default function Room() {
     const url = URL.createObjectURL(blob);
     setIframeUrl(url);
     return () => URL.revokeObjectURL(url);
-  }, [previewHtml, stepLockEnabled]);
+    // NOT keyed on stepLockEnabled: the injected scripts are always present
+    // (the lock is driven on the live iframe via SET_STEP / DISABLE_STEP_LOCK
+    // postMessages in toggleStepLock). Rebuilding the blob on every toggle
+    // reloaded the whole simulation — losing runtime state and broadcasting the
+    // reset to students — for a routine toolbar button.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [previewHtml]);
 
   // ── Sync code when active file changes ──
   useEffect(() => {
@@ -1316,6 +1332,10 @@ export default function Room() {
 
   // ── Helpers ──
   const notifTimeoutRef = useRef<ReturnType<typeof setTimeout>>();
+  // Safety net for AI generation: if the done/error reply is lost (socket
+  // reconnected mid-generation), this timer recovers the modal instead of
+  // leaving it stuck on "Generating…" with both close buttons disabled.
+  const aiTimeoutRef = useRef<ReturnType<typeof setTimeout>>();
   const showNotif = (msg: string) => {
     if (notifTimeoutRef.current) clearTimeout(notifTimeoutRef.current);
     setNotification(msg);
@@ -1399,6 +1419,11 @@ export default function Room() {
     setAiError(null);
     setAiGenerating(true);
     socket.emit("generate_lesson", { roomId, prompt: aiPrompt.trim() });
+    if (aiTimeoutRef.current) clearTimeout(aiTimeoutRef.current);
+    aiTimeoutRef.current = setTimeout(() => {
+      setAiGenerating(false);
+      setAiError('The AI request timed out. Please try again.');
+    }, 60000);
   };
 
   const handlePasteSubmit = () => {
@@ -1494,6 +1519,16 @@ export default function Room() {
 
   const handleForceSync = () => {
     if (!socket) return;
+    // Force Sync re-baselines the lesson from the teacher's live iframe DOM —
+    // the server rewrites lastRunHtml AND the saved file.html from the snapshot.
+    // During explanation or whiteboard mode, iframeRef points at the temp /
+    // (no) iframe, so a force here would overwrite the real lesson source with
+    // the explainer DOM, unrecoverably. Refuse and tell the teacher to return
+    // to the lesson first.
+    if (showTempContent || whiteboardMode) {
+      showNotif('Return to the lesson before Force Sync (it would overwrite it).');
+      return;
+    }
     const requestId = `force-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     snapshotRequestRef.current = requestId;
     postToIframe({ type: 'REQUEST_HTML', requestId });

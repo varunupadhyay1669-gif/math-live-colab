@@ -4,7 +4,7 @@
  */
 
 import { lazy, Suspense } from 'react';
-import { BrowserRouter, Routes, Route } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Link } from 'react-router-dom';
 import Home from './pages/Home';
 import ErrorBoundary from './components/ErrorBoundary';
 import ShortcutsOverlay from './components/ShortcutsOverlay';
@@ -47,6 +47,48 @@ function RouteFallback() {
   );
 }
 
+// Catch-all for unknown URLs. Without this the server's SPA fallback served
+// index.html for any path and React matched no route, leaving a blank page.
+function NotFound() {
+  return (
+    <div
+      style={{
+        minHeight: '100vh',
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 16,
+        background: '#FAFAF9',
+        color: '#404040',
+        fontFamily: 'ui-sans-serif, system-ui, -apple-system, sans-serif',
+        padding: 24,
+        textAlign: 'center',
+      }}
+    >
+      <div style={{ fontSize: 48, fontWeight: 800, letterSpacing: -1 }}>404</div>
+      <div style={{ fontSize: 16, color: '#737373' }}>
+        That page doesn't exist. Check the link, or head back to the start.
+      </div>
+      <Link
+        to="/"
+        style={{
+          marginTop: 8,
+          padding: '10px 20px',
+          borderRadius: 10,
+          background: '#6366F1',
+          color: '#fff',
+          fontWeight: 600,
+          fontSize: 14,
+          textDecoration: 'none',
+        }}
+      >
+        Go to Math Live home
+      </Link>
+    </div>
+  );
+}
+
 export default function App() {
   return (
     // AUTONOMOUS: [ORDER-1 CRITICAL] - Wraps the whole tree so a crash on any
@@ -63,6 +105,8 @@ export default function App() {
               <Route path="/live/:roomId" element={<StudentView />} />
               {/* Backward compatibility */}
               <Route path="/student/:roomId" element={<StudentView />} />
+              {/* Catch-all 404 — must be last */}
+              <Route path="*" element={<NotFound />} />
             </Routes>
           </Suspense>
           {/* AUTONOMOUS: [ORDER-3 FRICTION] - Mounted once at the root so the

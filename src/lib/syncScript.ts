@@ -843,15 +843,23 @@ export const injectedSyncScript = `
         });
         var htmlClone = document.documentElement.cloneNode(true);
         try {
-          var syncScripts = htmlClone.querySelectorAll('#mathslive-sync-script');
-          syncScripts.forEach(function(script) { script.parentNode && script.parentNode.removeChild(script); });
+          // Strip BOTH injected scripts — they're re-injected on every iframe
+          // build. Leaving them in the serialized snapshot meant force-sync
+          // wrote them into the saved file, and each rebuild stacked another
+          // copy (N duplicate message listeners after N force-syncs).
+          var injected = htmlClone.querySelectorAll('#mathslive-sync-script, #mathslive-steplock-script');
+          injected.forEach(function(script) { script.parentNode && script.parentNode.removeChild(script); });
         } catch(ignore) {}
         window.parent.postMessage({
           type: 'SYNC_PROVIDE_HTML',
           requestId: data.requestId,
           html: '<!DOCTYPE html>\\n' + htmlClone.outerHTML,
           scrollX: window.scrollX,
-          scrollY: window.scrollY
+          scrollY: window.scrollY,
+          // Canvas/WebGL content can't be serialized via outerHTML — the
+          // parent/server use this to keep the pristine source as the boot
+          // state for late-joiners instead of a blank canvas shell.
+          hasCanvas: !!document.querySelector('canvas')
         }, '*');
       }
     });

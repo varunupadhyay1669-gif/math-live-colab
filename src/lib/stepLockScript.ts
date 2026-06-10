@@ -6,7 +6,7 @@
  * The teacher controls which step is currently visible.
  */
 export const stepLockScript = `
-<script>
+<script id="mathslive-steplock-script">
 (function() {
   let currentStep = 999; // Show all by default (no step-lock until teacher activates)
   let maxStep = 0;

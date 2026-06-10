@@ -27,15 +27,23 @@ export default function StepGate({ socket, roomId, mode, step, onSave, onClose, 
   const [hint, setHint] = useState(false);
 
   const handleCreateSave = () => {
-    if (!question.trim() || options.filter(o => o.trim()).length < 2) return;
+    const correctText = options[correctIndex];
     const validOptions = options.filter(o => o.trim());
-    onSave?.({ question: question.trim(), options: validOptions, correctIndex: Math.min(correctIndex, validOptions.length - 1) });
+    // The marked-correct option must itself be non-blank. Bail otherwise —
+    // saving a gate whose answer is a blank option produces an unanswerable gate.
+    if (!question.trim() || validOptions.length < 2 || !correctText || !correctText.trim()) return;
+    // Remap correctIndex into the FILTERED array. Blank options before the
+    // correct one shift its position; the old code clamped instead of remapping,
+    // so the stored answer pointed at the wrong option and the server misgraded.
+    const remapped = validOptions.indexOf(correctText);
+    const safeCorrectIndex = remapped >= 0 ? remapped : 0;
+    onSave?.({ question: question.trim(), options: validOptions, correctIndex: safeCorrectIndex });
     if (socket) {
       socket.emit('add_gate', {
         roomId, step,
         question: question.trim(),
         options: validOptions,
-        correctIndex: Math.min(correctIndex, validOptions.length - 1),
+        correctIndex: safeCorrectIndex,
       });
     }
     onClose();

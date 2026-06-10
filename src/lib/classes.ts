@@ -21,7 +21,10 @@ function slug(s: string): string {
     .replace(/[^a-z0-9_-]+/g, '-')
     .replace(/-+/g, '-')
     .replace(/^-+|-+$/g, '')
-    .slice(0, 24);
+    // Cap at 15 so the base PLUS a possible `-xxxx` collision suffix (5 chars)
+    // never exceeds the server's MAX_ROOM_ID_LENGTH of 20. Longer codes were
+    // rejected by isValidRoomId on join, producing permanently dead /live links.
+    .slice(0, 15);
 }
 
 function randSuffix(): string {
