@@ -179,6 +179,18 @@ export default function StudentView() {
 
   // ── Student Interaction Mode ──
   const [interactionAllowed, setInteractionAllowed] = useState(false);
+  // ── Control grant ("the chalk") ──
+  // The teacher can hand exclusive drive rights to ONE student. When this
+  // student holds it, their interactions drive the shared sim even if the
+  // room-wide interaction toggle is off. controlHolderName mirrors the
+  // canonical field; hasControl is the derived "is it me".
+  const [controlHolderName, setControlHolderName] = useState<string | null>(null);
+  const hasControl = !!controlHolderName && controlHolderName === studentName;
+  // The iframe should accept the local user's input when the room allows it
+  // OR this student personally holds control.
+  const canDrive = interactionAllowed || hasControl;
+  const canDriveRef = useRef(false);
+  useEffect(() => { canDriveRef.current = canDrive; }, [canDrive]);
 
   // ── Student Annotation Tools ──
   // AUTONOMOUS: Students can scribble on the HTML overlay the same
@@ -243,6 +255,7 @@ export default function StudentView() {
     if (typeof state.currentStep === 'number') setCurrentStep(state.currentStep);
     if (typeof state.zoomLevel === 'number') setZoomLevel(state.zoomLevel);
     if (state.gates && typeof state.gates === 'object') setGates(state.gates);
+    if ('controlHolderName' in state) setControlHolderName(state.controlHolderName ?? null);
     if (state.chat) setChatMessages(state.chat);
     if (state.whiteboard) setWhiteboardState(state.whiteboard);
     if (Array.isArray(state.annotations)) setAnnotations(state.annotations);
@@ -617,6 +630,24 @@ export default function StudentView() {
       showNotification(allowed ? '🖐️ You can now interact with the simulation' : '👁️ View-only mode — teacher is presenting');
     });
 
+    // ── Control grant ("the chalk") ──
+    newSocket.on("control_changed", ({ holderName }: { holderName: string | null }) => {
+      setControlHolderName(holderName);
+      if (holderName === studentName) {
+        showNotification('✋ You have control — your screen now drives the class');
+        sounds.success();
+      } else if (holderName) {
+        showNotification(`🎯 ${holderName} is driving the class`);
+      } else {
+        showNotification('👁️ Control returned to the teacher');
+      }
+    });
+
+    // ── Teacher peek: serialize this student's REAL screen and send it up ──
+    newSocket.on("request_student_snapshot", ({ requestId }: { requestId?: string }) => {
+      postToIframe({ type: 'REQUEST_HTML', requestId: requestId || `peek-${Date.now()}` });
+    });
+
     // ── Whiteboard Mutual Sync ──
     newSocket.on("whiteboard_sync_changed", ({ userId, enabled }: { userId: string; userName: string; enabled: boolean }) => {
       if (userId === newSocket.id) {
@@ -879,7 +910,11 @@ export default function StudentView() {
       // actual state (self-heals quiz/sim drift). Triggered by the debounced
       // REQUEST_HTML below, tagged with an 'sstate-' requestId.
       if (type === 'SYNC_PROVIDE_HTML') {
-        if (typeof e.data.requestId === 'string' && e.data.requestId.indexOf('sstate-') === 0 && e.data.html) {
+        const rid = e.data.requestId;
+        if (typeof rid === 'string' && rid.indexOf('peek-') === 0 && e.data.html) {
+          // Teacher is peeking at this student's real screen — answer it.
+          socket.emit('student_snapshot', { roomId, html: e.data.html, requestId: rid });
+        } else if (typeof rid === 'string' && rid.indexOf('sstate-') === 0 && e.data.html) {
           socket.emit('student_state', { roomId, html: e.data.html });
         }
         return;
@@ -887,8 +922,9 @@ export default function StudentView() {
       if (type === 'STEP_INFO') return;
 
       if (!type.startsWith('SYNC_')) return;
-      // Always allow cursor (teacher can see where students look)
-      if (type === 'SYNC_CURSOR') {
+      // Always allow cursor (teacher can see where students look) and pings
+      // (Alt+click "look here" — anyone can point at confusion, even view-only).
+      if (type === 'SYNC_CURSOR' || type === 'SYNC_PING') {
         socket.emit("interaction", {
           roomId,
           event: {
@@ -899,8 +935,9 @@ export default function StudentView() {
         });
         return;
       }
-      // Block all other interactions when not allowed (view-only mode)
-      if (!interactionAllowed) return;
+      // Block all other interactions unless the room allows it OR this
+      // student personally holds the control grant ("the chalk").
+      if (!canDriveRef.current) return;
       if (type === 'SYNC_SCROLL' && !scrollSyncEnabled) return;
       socket.emit("interaction", {
         roomId,
@@ -939,9 +976,10 @@ export default function StudentView() {
   }, [iframeUrl, showTempContent, whiteboardMode]);
 
   // ── Push interaction mode to iframe ──
+  // Unlock local input when the room allows it OR this student holds control.
   useEffect(() => {
-    postToIframe({ type: 'SET_INTERACTION_MODE', allowed: interactionAllowed });
-  }, [interactionAllowed, iframeUrl, postToIframe]);
+    postToIframe({ type: 'SET_INTERACTION_MODE', allowed: canDrive });
+  }, [canDrive, iframeUrl, postToIframe]);
 
   // ── Challenge Timer Countdown ──
   useEffect(() => {
@@ -1058,14 +1096,25 @@ export default function StudentView() {
 
           <div className="header-divider" />
 
-          {/* View-only / Interactive indicator */}
-          <span className="status-pill" style={{
-            background: interactionAllowed ? 'var(--accent-emerald-light)' : 'var(--accent-indigo-light)',
-            color: interactionAllowed ? 'var(--accent-emerald)' : 'var(--accent-indigo)',
-            fontSize: '11px', fontWeight: 700, letterSpacing: '0.03em', padding: '3px 10px',
-          }}>
-            {interactionAllowed ? 'INTERACTIVE' : 'VIEW ONLY'}
-          </span>
+          {/* Control / View-only / Interactive indicator */}
+          {hasControl ? (
+            <span className="status-pill" style={{
+              background: 'rgba(244,63,94,0.14)', color: '#E11D48',
+              fontSize: '11px', fontWeight: 800, letterSpacing: '0.03em', padding: '3px 10px',
+              display: 'inline-flex', alignItems: 'center', gap: 5,
+              boxShadow: '0 0 0 1px rgba(244,63,94,0.35)', animation: 'pulse 2s ease-in-out infinite',
+            }}>
+              ✋ YOU HAVE CONTROL
+            </span>
+          ) : (
+            <span className="status-pill" style={{
+              background: interactionAllowed ? 'var(--accent-emerald-light)' : 'var(--accent-indigo-light)',
+              color: interactionAllowed ? 'var(--accent-emerald)' : 'var(--accent-indigo)',
+              fontSize: '11px', fontWeight: 700, letterSpacing: '0.03em', padding: '3px 10px',
+            }}>
+              {controlHolderName ? `🎯 ${controlHolderName} DRIVING` : interactionAllowed ? 'INTERACTIVE' : 'VIEW ONLY'}
+            </span>
+          )}
 
           <div className="header-divider" />
 
@@ -1233,14 +1282,27 @@ export default function StudentView() {
                 allow={LESSON_IFRAME_ALLOW}
                 allowFullScreen
               />
-              {/* View-only overlay — blocks pointer events on content when not allowed */}
-              {!interactionAllowed && (
+              {/* View-only overlay — blocks pointer events on content unless the
+                  student may drive (room interactive OR holds the control grant).
+                  Alt+click still passes through so anyone can ping "look here". */}
+              {!canDrive && (
                 <div
                   className="absolute inset-0"
-                  style={{ pointerEvents: 'auto', zIndex: 1, cursor: 'not-allowed' }}
+                  style={{ pointerEvents: 'auto', zIndex: 1, cursor: 'crosshair' }}
                   onWheel={(e) => e.preventDefault()}
                   onTouchMove={(e) => e.preventDefault()}
-                  onMouseDown={(e) => e.preventDefault()}
+                  onMouseDown={(e) => { if (!e.altKey) e.preventDefault(); }}
+                  onClick={(e) => {
+                    // The overlay swallows clicks to the sim, but a view-only
+                    // student can still Alt+click to ping "look here" — show it
+                    // locally and relay it to the room.
+                    if (!e.altKey || !socket) return;
+                    const rect = e.currentTarget.getBoundingClientRect();
+                    const nx = (e.clientX - rect.left) / rect.width;
+                    const ny = (e.clientY - rect.top) / rect.height;
+                    postToIframe({ type: 'REMOTE_PING', clientX: nx, clientY: ny });
+                    socket.emit('interaction', { roomId, event: { type: 'SYNC_PING', clientX: nx, clientY: ny } });
+                  }}
                 />
               )}
             </>

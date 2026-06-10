@@ -18,10 +18,42 @@ understanding everything below.
 | Actor   | What they may mutate                                              |
 |---------|--------------------------------------------------------------------|
 | Teacher | Active file, live snapshot HTML, scroll/zoom, whiteboard, gates,  |
-|         | step, scroll-sync flag, student-interaction flag, temp content.   |
+|         | step, scroll-sync flag, student-interaction flag, temp content,   |
+|         | control grant, bookmarks (Time Machine).                          |
 | Server  | `revision`, persisted state, derived `effectiveHtml`.             |
-| Student | Own cursor, own answers, optionally interaction events            |
-|         | (only when `studentInteractionAllowed`).                          |
+| Student | Own cursor, own answers, element pings (always), interaction      |
+|         | events when `studentInteractionAllowed` OR this student is the    |
+|         | `controlHolderName` ("the chalk").                                |
+
+### 1.1 Control handoff ("the chalk")
+`controlHolderName` (canonical, keyed by display name) names the ONE student
+the teacher granted exclusive drive rights. The holder's interactions relay
+room-wide exactly like the global `studentInteractionAllowed` toggle but
+scoped to a single student; the teacher always drives regardless. Cleared on
+the holder's disconnect (no same-name socket left), on `hard_reset`, and by
+`grant_control { holderName: null }`. Events: `grant_control` (teacher→server),
+`control_changed` (server→room).
+
+### 1.2 Element ping ("look here")
+`SYNC_PING` (Alt+click in a sim) renders a 1.2s ripple at the element and is
+relayed room-wide like cursor traffic — ALWAYS, even from view-only students,
+because it mutates nothing. Replayed into every iframe as `REMOTE_PING`,
+anchored to the pinged element when it resolves.
+
+### 1.3 Student peek + per-student resync
+`peek_student` (teacher→server) → `request_student_snapshot` (server→that
+student) → `student_snapshot` (student→server→teacher only). Read-only; the
+teacher renders the serialized DOM WITHOUT re-running scripts (a frozen, true
+snapshot). `resync_student` rebuilds ONE drifted student from canonical state
+without disturbing the rest of the class.
+
+### 1.4 Lesson Time Machine
+`bookmark_create` captures canonical state (HTML + whiteboard + annotations +
+step + zoom; cap 8, FIFO, persisted, deep-copied). `bookmark_restore` rewinds
+the WHOLE class to that moment via `broadcastFullState('restore')` + a
+`run_preview` rebuild (clean script re-run, like Force Sync). Full payloads are
+server-side only; clients receive `{id,name,ts}` metadata via session state and
+`bookmarks_changed`.
 
 **Server enforces** authority via `requireTeacher(room, socket.id)` for every
 sync-critical event. Clients **must not** trust each other.
@@ -51,12 +83,17 @@ lastTeacherScroll        // last teacher SYNC_SCROLL event (for late-join catch-
 zoomLevel                // app-level zoom of the simulation viewport
 ```
 
+```
+controlHolderName       // student holding the exclusive control grant (or null)
+bookmarks               // Time Machine moments (full server-side; meta to clients)
+```
+
 If you add a new sync-critical field, you **must** update:
 
 1. `RoomData` in `server.ts`
 2. `SessionStatePayload` in `server.ts`
 3. `buildSessionState()` (so the field is included)
-4. `serializeRoom()` and `restoreRooms()` (so it survives restart)
+4. `serializeRoom()` and `hydrateRoom()` (so it survives restart)
 5. `applySessionState()` in `Room.tsx`
 6. `applySessionState()` in `StudentView.tsx`
 

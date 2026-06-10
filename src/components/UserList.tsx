@@ -20,9 +20,13 @@ interface UserListProps {
   isTeacher: boolean;
   socket: Socket | null;
   roomId: string;
+  // Control handoff: name of the student who currently holds "the chalk".
+  controlHolderName?: string | null;
+  onGrantControl?: (holderName: string | null) => void;
+  onPeek?: (studentId: string, studentName: string) => void;
 }
 
-export default function UserList({ users, attention, isTeacher, socket, roomId }: UserListProps) {
+export default function UserList({ users, attention, isTeacher, socket, roomId, controlHolderName, onGrantControl, onPeek }: UserListProps) {
   const handleKick = (userId: string) => {
     if (!socket) return;
     socket.emit('kick_user', { roomId, userId });
@@ -43,18 +47,19 @@ export default function UserList({ users, attention, isTeacher, socket, roomId }
         if (!isActive && elapsed > 30) dotColor = '#F43F5E';
         else if (!isActive && elapsed > 10) dotColor = '#F59E0B';
 
+        const holdsControl = user.role === 'student' && !!controlHolderName && user.name === controlHolderName;
         return (
           <div key={user.id}
             className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg transition-all group"
-            style={{ background: 'var(--bg-surface)' }}>
+            style={{ background: holdsControl ? 'rgba(244,63,94,0.10)' : 'var(--bg-surface)', boxShadow: holdsControl ? '0 0 0 1px rgba(244,63,94,0.35)' : 'none' }}>
             {/* Attention dot */}
             <div className="w-2 h-2 rounded-full shrink-0" style={{
               background: dotColor,
               boxShadow: `0 0 6px ${dotColor}50`,
             }} />
             {/* Name */}
-            <span className="text-[12px] font-medium truncate flex-1" style={{ color: 'var(--text-primary)', maxWidth: 120 }}>
-              {user.name}
+            <span className="text-[12px] font-medium truncate flex-1" style={{ color: 'var(--text-primary)', maxWidth: 110 }}>
+              {user.name}{holdsControl ? ' ✋' : ''}
             </span>
             {/* Role badge */}
             <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full"
@@ -64,14 +69,34 @@ export default function UserList({ users, attention, isTeacher, socket, roomId }
               }}>
               {user.role === 'teacher' ? '🎓' : '🎒'}
             </span>
-            {/* Kick button (teacher only, for students) */}
+            {/* Teacher controls for a student row */}
             {isTeacher && user.role === 'student' && (
-              <button onClick={() => handleKick(user.id)}
-                className="opacity-0 group-hover:opacity-100 transition-opacity text-[11px]"
-                style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer' }}
-                title="Remove student">
-                ✕
-              </button>
+              <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                {/* Peek at their real screen */}
+                {onPeek && (
+                  <button onClick={() => onPeek(user.id, user.name)}
+                    className="text-[12px]" title="See this student's screen"
+                    style={{ background: 'none', border: 'none', cursor: 'pointer', lineHeight: 1 }}>
+                    👁️
+                  </button>
+                )}
+                {/* Give / take back control */}
+                {onGrantControl && (
+                  <button onClick={() => onGrantControl(holdsControl ? null : user.name)}
+                    className="text-[12px]"
+                    title={holdsControl ? 'Take back control' : 'Give this student control'}
+                    style={{ background: 'none', border: 'none', cursor: 'pointer', lineHeight: 1, opacity: holdsControl ? 1 : 0.85 }}>
+                    {holdsControl ? '🔙' : '✋'}
+                  </button>
+                )}
+                {/* Kick */}
+                <button onClick={() => handleKick(user.id)}
+                  className="text-[11px]"
+                  style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', lineHeight: 1 }}
+                  title="Remove student">
+                  ✕
+                </button>
+              </div>
             )}
           </div>
         );

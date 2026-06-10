@@ -23,6 +23,7 @@ import StepControls from "../components/StepControls";
 import StepGate from "../components/StepGate";
 import AttentionIndicator from "../components/AttentionIndicator";
 import UserList from "../components/UserList";
+import StudentScreenPanel from "../components/StudentScreenPanel";
 import SimulationLibrary from "../components/SimulationLibrary";
 import ConnectionStatus from "../components/ConnectionStatus";
 import Leaderboard from "../components/Leaderboard";
@@ -300,6 +301,18 @@ export default function Room() {
   const [gates, setGates] = useState<Record<number, GateData>>({});
   const [showGateModal, setShowGateModal] = useState(false);
 
+  // ── Control handoff ("the chalk") ──
+  const [controlHolderName, setControlHolderName] = useState<string | null>(null);
+  // ── Student Peek (view a student's real screen) ──
+  const [peekStudent, setPeekStudent] = useState<{ id: string; name: string } | null>(null);
+  const [peekHtml, setPeekHtml] = useState<string | null>(null);
+  const [peekUpdatedAt, setPeekUpdatedAt] = useState(0);
+  const peekStudentRef = useRef<{ id: string; name: string } | null>(null);
+  useEffect(() => { peekStudentRef.current = peekStudent; }, [peekStudent]);
+  // ── Lesson Time Machine ──
+  const [bookmarks, setBookmarks] = useState<Array<{ id: string; name: string; ts: number }>>([]);
+  const [showTimeMachine, setShowTimeMachine] = useState(false);
+
   // ── Attention Detection ──
   const [attention, setAttention] = useState<Record<string, StudentAttention>>({});
 
@@ -378,6 +391,8 @@ export default function Room() {
     if (typeof state.currentStep === 'number') setCurrentStep(state.currentStep);
     if (typeof state.zoomLevel === 'number') setZoomLevel(state.zoomLevel);
     if (state.gates) setGates(state.gates);
+    if ('controlHolderName' in state) setControlHolderName(state.controlHolderName ?? null);
+    if (Array.isArray(state.bookmarks)) setBookmarks(state.bookmarks);
     if (state.tempContent) {
       setTempContent(state.tempContent);
       setShowTempContent(true);
@@ -832,6 +847,31 @@ export default function Room() {
     });
 
     // ── Step-Lock events ──
+    // ── Control handoff ──
+    newSocket.on("control_changed", ({ holderName }: { holderName: string | null }) => {
+      setControlHolderName(holderName);
+      showNotif(holderName ? `✋ ${holderName} now has control` : '👁️ You took back control');
+    });
+
+    // ── Student peek: a student answered our snapshot request ──
+    newSocket.on("student_snapshot", ({ html, studentId, studentName }: { html: string; studentId: string; studentName: string }) => {
+      const peeking = peekStudentRef.current;
+      if (peeking && peeking.id === studentId) {
+        setPeekHtml(html);
+        setPeekUpdatedAt(Date.now());
+      } else if (peeking && peeking.name === studentName) {
+        // Student reconnected with a new socket id mid-peek — re-anchor.
+        setPeekStudent({ id: studentId, name: studentName });
+        setPeekHtml(html);
+        setPeekUpdatedAt(Date.now());
+      }
+    });
+
+    // ── Time Machine: bookmark list changed ──
+    newSocket.on("bookmarks_changed", ({ bookmarks: bm }: { bookmarks: Array<{ id: string; name: string; ts: number }> }) => {
+      setBookmarks(bm || []);
+    });
+
     newSocket.on("gate_answered", ({ studentName, step, correct }: { studentName: string; step: number; correct: boolean }) => {
       showNotif(`${correct ? '✅' : '❌'} ${studentName} ${correct ? 'passed' : 'failed'} gate on Step ${step}`);
       if (correct) sounds.success();
@@ -1535,6 +1575,45 @@ export default function Room() {
     setLastSyncTime(Date.now());
   };
 
+  // ── Control handoff ──
+  const grantControl = (holderName: string | null) => {
+    if (!socket) return;
+    socket.emit("grant_control", { roomId, holderName });
+  };
+
+  // ── Student peek ──
+  const peekAtStudent = (studentId: string, studentName: string) => {
+    if (!socket) return;
+    setPeekStudent({ id: studentId, name: studentName });
+    setPeekHtml(null);
+    socket.emit("peek_student", { roomId, studentId });
+  };
+  const refreshPeek = () => {
+    if (!socket || !peekStudentRef.current) return;
+    socket.emit("peek_student", { roomId, studentId: peekStudentRef.current.id });
+  };
+  const resyncPeekStudent = () => {
+    if (!socket || !peekStudentRef.current) return;
+    socket.emit("resync_student", { roomId, studentId: peekStudentRef.current.id });
+    showNotif(`⟳ Resyncing ${peekStudentRef.current.name}…`);
+  };
+
+  // ── Time Machine ──
+  const createBookmark = () => {
+    if (!socket) return;
+    socket.emit("bookmark_create", { roomId });
+    showNotif('🔖 Moment saved — you can rewind here later');
+  };
+  const restoreBookmark = (bookmarkId: string) => {
+    if (!socket) return;
+    socket.emit("bookmark_restore", { roomId, bookmarkId });
+    showNotif('⏪ Rewound the class to a saved moment');
+  };
+  const deleteBookmark = (bookmarkId: string) => {
+    if (!socket) return;
+    socket.emit("bookmark_delete", { roomId, bookmarkId });
+  };
+
   const toggleScrollSync = () => {
     if (!socket) return;
     const newEnabled = !scrollSyncEnabled;
@@ -1818,7 +1897,65 @@ export default function Room() {
                       <p className="text-xs" style={{ color: 'var(--text-muted)' }}>No participants yet</p>
                     </div>
                   ) : (
-                    <UserList users={users} attention={attention} isTeacher={true} socket={socket} roomId={roomId!} />
+                    <UserList users={users} attention={attention} isTeacher={true} socket={socket} roomId={roomId!}
+                      controlHolderName={controlHolderName}
+                      onGrantControl={grantControl}
+                      onPeek={peekAtStudent} />
+                  )}
+                </div>
+              </>
+            )}
+          </div>
+
+          {/* Control banner — who's driving right now */}
+          {controlHolderName && (
+            <button onClick={() => grantControl(null)}
+              className="ml-btn ml-btn-sm"
+              title="Take back control"
+              style={{ background: 'rgba(244,63,94,0.12)', color: '#E11D48', fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+              ✋ {controlHolderName} driving · take back
+            </button>
+          )}
+
+          {/* Time Machine — bookmark + rewind the whole class */}
+          <div style={{ position: 'relative' }}>
+            <button onClick={() => setShowTimeMachine(v => !v)}
+              className={`tb-btn ${showTimeMachine ? 'active' : ''}`}
+              data-tip="Time Machine — save & rewind moments"
+              aria-haspopup="menu" aria-expanded={showTimeMachine}>
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l3 2"/>
+              </svg>
+            </button>
+            {showTimeMachine && (
+              <>
+                <div className="fixed inset-0" style={{ zIndex: 40 }} onClick={() => setShowTimeMachine(false)} />
+                <div className="ml-surface-elevated" style={{ position: 'absolute', top: '100%', right: 0, marginTop: 6, width: 260, zIndex: 50, borderRadius: 12, padding: 8, boxShadow: 'var(--shadow-xl)' }}>
+                  <button onClick={() => { createBookmark(); }}
+                    className="ml-btn ml-btn-sm ml-btn-primary ml-btn-block" style={{ marginBottom: 6 }}>
+                    🔖 Save this moment
+                  </button>
+                  {bookmarks.length === 0 ? (
+                    <div className="ml-caption" style={{ padding: '8px 6px', color: 'var(--text-muted)', textAlign: 'center' }}>
+                      No saved moments yet. Save one, then jump back to it anytime.
+                    </div>
+                  ) : (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 2, maxHeight: 240, overflowY: 'auto' }}>
+                      {[...bookmarks].reverse().map(bm => (
+                        <div key={bm.id} className="flex items-center gap-1 group" style={{ borderRadius: 8, padding: '2px 4px' }}>
+                          <button onClick={() => { restoreBookmark(bm.id); setShowTimeMachine(false); }}
+                            className="flex-1 text-left" title="Rewind the class to here"
+                            style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '6px', borderRadius: 6 }}>
+                            <div className="text-[12px] font-semibold" style={{ color: 'var(--text-primary)' }}>⏪ {bm.name}</div>
+                            <div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>{new Date(bm.ts).toLocaleTimeString()}</div>
+                          </button>
+                          <button onClick={() => deleteBookmark(bm.id)}
+                            className="opacity-0 group-hover:opacity-100 transition-opacity text-[11px]"
+                            style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer' }}
+                            title="Delete moment">✕</button>
+                        </div>
+                      ))}
+                    </div>
                   )}
                 </div>
               </>
@@ -2844,6 +2981,19 @@ export default function Room() {
         open={showLeaderboard}
         onClose={() => setShowLeaderboard(false)}
       />
+
+      {peekStudent && (
+        <StudentScreenPanel
+          studentName={peekStudent.name}
+          html={peekHtml}
+          updatedAt={peekUpdatedAt}
+          hasControl={controlHolderName === peekStudent.name}
+          onClose={() => { setPeekStudent(null); setPeekHtml(null); }}
+          onRefresh={refreshPeek}
+          onResync={resyncPeekStudent}
+          onToggleControl={() => grantControl(controlHolderName === peekStudent.name ? null : peekStudent.name)}
+        />
+      )}
 
     </div>
   );

@@ -208,6 +208,78 @@ async function run() {
   const echo = await senderEcho;
   assert(echo === null || echo?.type !== 'SYNC_CLICK', 'sender does NOT get their own click echoed', JSON.stringify(echo)?.slice(0, 80));
 
+  // ── Test I: control handoff lets a non-interactive student drive ──
+  console.log('Test I: control grant lets one student drive (toggle off)');
+  const ROOM3 = 'vctl' + Math.floor(Date.now() % 100000);
+  const t3 = track(connect()); await waitFor(t3, 'connect');
+  t3.emit('join_room', { roomId: ROOM3, userName: 'Tî', role: 'teacher' });
+  await waitFor(t3, 'room_state').catch(() => {});
+  const driver = track(connect()); await waitFor(driver, 'connect');
+  driver.emit('join_room', { roomId: ROOM3, userName: 'Mia', role: 'student' });
+  await waitFor(driver, 'room_state').catch(() => {});
+  const bystander = track(connect()); await waitFor(bystander, 'connect');
+  bystander.emit('join_room', { roomId: ROOM3, userName: 'Sam', role: 'student' });
+  await waitFor(bystander, 'room_state').catch(() => {});
+
+  // interaction toggle is OFF by default → a student's click must be dropped.
+  const noEcho = expectNo(t3, 'interaction', 700);
+  driver.emit('interaction', { roomId: ROOM3, event: { type: 'SYNC_CLICK', path: '#x' } });
+  const dropped = await noEcho;
+  assert(dropped === null || dropped?.type !== 'SYNC_CLICK', 'student click dropped when not interactive & not control-holder', JSON.stringify(dropped)?.slice(0, 60));
+
+  // grant control to Mia → her clicks now reach teacher + other students.
+  const ctlChanged = waitFor(bystander, 'control_changed', { match: p => p.holderName === 'Mia' });
+  t3.emit('grant_control', { roomId: ROOM3, holderName: 'Mia' });
+  await ctlChanged.then(() => ok('control_changed broadcast to the room')).catch(e => bad('control_changed broadcast', e.message));
+  const teacherSeesDriver = waitFor(t3, 'interaction', { match: p => p?.type === 'SYNC_CLICK' });
+  const otherSeesDriver = waitFor(bystander, 'interaction', { match: p => p?.type === 'SYNC_CLICK' });
+  driver.emit('interaction', { roomId: ROOM3, event: { type: 'SYNC_CLICK', path: '#y' } });
+  await teacherSeesDriver.then(() => ok('control holder drives the teacher sim')).catch(e => bad('control holder drives teacher', e.message));
+  await otherSeesDriver.then(() => ok('control holder drives other students')).catch(e => bad('control holder drives others', e.message));
+
+  // a NON-holder student still can't drive.
+  const noEcho2 = expectNo(t3, 'interaction', 700);
+  bystander.emit('interaction', { roomId: ROOM3, event: { type: 'SYNC_CLICK', path: '#z' } });
+  const dropped2 = await noEcho2;
+  assert(dropped2 === null || dropped2?.type !== 'SYNC_CLICK', 'non-holder student still cannot drive', JSON.stringify(dropped2)?.slice(0, 60));
+
+  // revoke → Mia can't drive anymore.
+  const revoked = waitFor(driver, 'control_changed', { match: p => p.holderName === null });
+  t3.emit('grant_control', { roomId: ROOM3, holderName: null });
+  await revoked.then(() => ok('control revoked broadcast')).catch(e => bad('control revoked', e.message));
+
+  // ── Test J: ping relays from a VIEW-ONLY student (no interaction, no control) ──
+  console.log('Test J: SYNC_PING relays even from a view-only student');
+  const pingSeen = waitFor(bystander, 'interaction', { match: p => p?.type === 'SYNC_PING' });
+  driver.emit('interaction', { roomId: ROOM3, event: { type: 'SYNC_PING', clientX: 0.5, clientY: 0.5 } });
+  await pingSeen.then(() => ok('view-only student ping reaches the room')).catch(e => bad('view-only ping reaches room', e.message));
+
+  // ── Test K: peek round-trip (teacher requests → student answers → teacher gets it) ──
+  console.log('Test K: student peek round-trip');
+  driver.on('request_student_snapshot', ({ requestId }) => {
+    driver.emit('student_snapshot', { roomId: ROOM3, html: '<!doctype html><body>MIA SCREEN</body>', requestId });
+  });
+  const driverId = driver.id;
+  const peekBack = waitFor(t3, 'student_snapshot', { match: p => p?.html?.includes('MIA SCREEN') });
+  t3.emit('peek_student', { roomId: ROOM3, studentId: driverId });
+  const peek = await peekBack.catch(() => null);
+  assert(peek && peek.studentName === 'Mia', 'teacher receives the peeked student screen', JSON.stringify(peek)?.slice(0, 80));
+
+  // ── Test L: Time Machine bookmark + restore rewinds canonical HTML ──
+  console.log('Test L: bookmark + restore rewinds the class');
+  t3.emit('upload_file', { roomId: ROOM3, file: { id: 'tm1', name: 'V1', html: '<!doctype html><body>VERSION ONE</body>', uploadedAt: Date.now() } });
+  await waitFor(driver, 'run_preview', { match: p => p.html?.includes('VERSION ONE') }).catch(() => {});
+  const bmAdded = waitFor(t3, 'bookmarks_changed', { match: p => Array.isArray(p.bookmarks) && p.bookmarks.length >= 1 });
+  t3.emit('bookmark_create', { roomId: ROOM3, name: 'Checkpoint A' });
+  const bmList = await bmAdded.catch(() => null);
+  assert(bmList && bmList.bookmarks[0]?.name === 'Checkpoint A', 'bookmark created + listed', JSON.stringify(bmList)?.slice(0, 80));
+  // move on to V2, then rewind to the bookmark
+  t3.emit('run_preview', { roomId: ROOM3, fileId: 'tm1', html: '<!doctype html><body>VERSION TWO</body>' });
+  await waitFor(driver, 'run_preview', { match: p => p.html?.includes('VERSION TWO') }).catch(() => {});
+  const restored = waitFor(driver, 'run_preview', { match: p => p.html?.includes('VERSION ONE') });
+  t3.emit('bookmark_restore', { roomId: ROOM3, bookmarkId: bmList.bookmarks[0].id });
+  await restored.then(() => ok('restoring a bookmark rewinds every client to that HTML')).catch(e => bad('bookmark restore rewinds clients', e.message));
+
   console.log(`\nRESULT: ${passed} passed, ${failed} failed`);
   for (const s of sockets) { try { s.close(); } catch {} }
   process.exit(failed === 0 ? 0 : 1);

@@ -92,6 +92,28 @@ interface RoomData {
   claimedAt?: number | null;
   lastTeacherScroll: any | null;
   zoomLevel: number;
+  // ── Control handoff ──
+  // Display name of the student currently holding exclusive control ("the
+  // chalk"). Keyed by NAME (like scores) so it survives the student's socket
+  // reconnecting. null = nobody; the global studentInteractionAllowed toggle
+  // is independent ("everyone may interact"). The teacher ALWAYS drives
+  // regardless of this field.
+  controlHolderName: string | null;
+  // ── Lesson Time Machine ──
+  // Teacher-captured moments of canonical state. Restoring one rewinds the
+  // whole class (HTML + whiteboard + annotations + step). Capped at
+  // MAX_BOOKMARKS, FIFO. Full payload lives server-side only; clients get
+  // {id,name,ts} metadata via session state.
+  bookmarks: Array<{
+    id: string;
+    name: string;
+    ts: number;
+    html: string | null;
+    whiteboard: RoomData['whiteboard'];
+    annotations: Array<{ senderId: string; stroke: any }>;
+    currentStep: number;
+    zoomLevel: number;
+  }>;
 }
 
 interface SessionStatePayload {
@@ -134,6 +156,10 @@ interface SessionStatePayload {
   expiresAt: number;
   lastTeacherScroll: any | null;
   zoomLevel: number;
+  // Control handoff: who currently holds "the chalk" (null = nobody).
+  controlHolderName: string | null;
+  // Time Machine metadata only — full bookmark payloads stay server-side.
+  bookmarks: Array<{ id: string; name: string; ts: number }>;
 }
 
 async function startServer() {
@@ -272,6 +298,8 @@ async function startServer() {
       claimedAt: null,
       lastTeacherScroll: null,
       zoomLevel: 1,
+      controlHolderName: null,
+      bookmarks: [],
     };
   }
 
@@ -444,6 +472,8 @@ async function startServer() {
       // Persist which gates each student already earned XP for — without this a
       // server restart forgets awards and the same checkpoint pays out again.
       gateAwarded: Array.from(room.gateAwarded),
+      controlHolderName: room.controlHolderName,
+      bookmarks: room.bookmarks,
       claimed: !!room.claimed,
       claimedBy: room.claimedBy ?? null,
       claimedAt: room.claimedAt ?? null,
@@ -551,6 +581,7 @@ async function startServer() {
     'whiteboard_delete_stroke', 'whiteboard_delete_strokes', 'whiteboard_mode_toggle',
     'show_temp_content', 'clear_temp_content',
     'set_step', 'add_gate', 'gate_answer', 'claim_room', 'hard_reset', 'send_chat',
+    'grant_control', 'bookmark_create', 'bookmark_restore', 'bookmark_delete',
   ]);
 
   // Build an in-memory RoomData from a persisted blob. Shared by the eager
@@ -614,6 +645,10 @@ async function startServer() {
       : null;
     // Restore gate-XP awards so a restart can't be used to re-farm checkpoints.
     room.gateAwarded = new Set(Array.isArray(raw.gateAwarded) ? raw.gateAwarded.filter((k: unknown) => typeof k === 'string') : []);
+    room.controlHolderName = typeof raw.controlHolderName === 'string' ? raw.controlHolderName : null;
+    room.bookmarks = Array.isArray(raw.bookmarks)
+      ? raw.bookmarks.filter((b: any) => b && typeof b.id === 'string').slice(0, 8)
+      : [];
     return room;
   }
 
@@ -822,6 +857,8 @@ async function startServer() {
       expiresAt: computeExpiresAt(room),
       lastTeacherScroll: room.lastTeacherScroll,
       zoomLevel: room.zoomLevel,
+      controlHolderName: room.controlHolderName,
+      bookmarks: room.bookmarks.map(b => ({ id: b.id, name: b.name, ts: b.ts })),
     };
   }
 
@@ -2180,14 +2217,20 @@ Build a widget that teaches: ${safePrompt}`;
           if (teacherId) {
             io.to(teacherId).emit('interaction', event);
           }
-        } else if (room.studentInteractionAllowed) {
-          // Student interactions → everyone EXCEPT the sender. The teacher's
-          // iframe replays them (authoritative sim advances), and other
-          // students' sims replay them too so every instance sees the same
-          // event stream — without this, in a multi-student interactive room
-          // only the teacher tracked a driving student and the rest drifted.
-          // The sender is excluded (their own sim already applied the action
-          // locally; echoing it back would double-fire).
+        } else if (event.type === 'SYNC_PING') {
+          // Element pings (Alt+click "look here" ripples) are ephemeral and
+          // harmless — always relayed room-wide, even from view-only
+          // students, so a confused student can point AT the thing they're
+          // confused about. Like reactions, they mutate nothing.
+          socket.to(roomId).emit('interaction', event);
+        } else if (room.studentInteractionAllowed || (user.name && user.name === room.controlHolderName)) {
+          // Student interactions → everyone EXCEPT the sender. Permitted when
+          // the room-wide interaction toggle is on OR this student holds the
+          // exclusive control grant ("the chalk"). The teacher's iframe
+          // replays them (authoritative sim advances), and other students'
+          // sims replay them too so every instance sees the same event
+          // stream. The sender is excluded (their own sim already applied
+          // the action locally; echoing it back would double-fire).
           socket.to(roomId).emit('interaction', event);
         }
         // When not allowed: student events are silently dropped (view-only mode)
@@ -2205,7 +2248,7 @@ Build a widget that teaches: ${safePrompt}`;
       if (!isMember(room, socket.id)) return;
       const user = room.users.get(socket.id);
       if (user?.role !== 'student') return;
-      if (!room.studentInteractionAllowed) return;
+      if (!room.studentInteractionAllowed && user.name !== room.controlHolderName) return;
       if (typeof html !== 'string' || html.length === 0 || html.length > MAX_FILE_SIZE) return;
       // Resolve the current teacher socket (self-healing, mirrors the
       // interaction relay so a stale teacherSocketId can't drop the stream).
@@ -2229,6 +2272,122 @@ Build a widget that teaches: ${safePrompt}`;
         isAttentive,
         timestamp,
       });
+    });
+
+    // ─── CONTROL HANDOFF ("give the chalk") ───
+    // Teacher grants exclusive drive rights to one student (or revokes with
+    // null). The holder's interactions relay room-wide exactly like the
+    // global interactive toggle, but scoped to a single student. Keyed by
+    // display name so it survives the student's socket reconnecting.
+    socket.on('grant_control', ({ roomId, holderName }: { roomId: string; holderName: string | null }) => {
+      const room = rooms.get(roomId);
+      if (!requireTeacher(room, socket.id)) return;
+      const safeName = holderName === null ? null : sanitizeString(holderName, MAX_USERNAME_LENGTH);
+      // Only grant to a student actually in the room (or clear with null).
+      if (safeName !== null) {
+        const exists = Array.from(room.users.values()).some(u => u.role === 'student' && u.name === safeName);
+        if (!exists) return;
+      }
+      room.controlHolderName = safeName || null;
+      bumpRevision(room);
+      io.to(roomId).emit('control_changed', { holderName: room.controlHolderName });
+      logSync('control_changed', { roomId, revision: room.revision, reason: room.controlHolderName ? `granted:${room.controlHolderName}` : 'revoked' });
+    });
+
+    // ─── STUDENT PEEK (teacher views a student's REAL screen) ───
+    // Teacher asks; server forwards to that student; the student's iframe
+    // serializes its actual DOM and the reply relays back to the teacher
+    // only. Read-only — nothing about the student's session changes.
+    socket.on('peek_student', ({ roomId, studentId }: { roomId: string; studentId: string }) => {
+      const room = rooms.get(roomId);
+      if (!requireTeacher(room, socket.id)) return;
+      if (typeof studentId !== 'string' || !room.users.has(studentId)) return;
+      io.to(studentId).emit('request_student_snapshot', { requestId: `peek-${socket.id}-${Date.now()}` });
+    });
+
+    socket.on('student_snapshot', ({ roomId, html, requestId }: { roomId: string; html: string; requestId?: string }) => {
+      const room = rooms.get(roomId);
+      if (!isMember(room, socket.id)) return;
+      const user = room.users.get(socket.id);
+      if (user?.role !== 'student') return;
+      if (typeof html !== 'string' || html.length === 0 || html.length > MAX_FILE_SIZE) return;
+      if (room.teacherSocketId) {
+        io.to(room.teacherSocketId).emit('student_snapshot', {
+          html, requestId, studentId: socket.id, studentName: user.name,
+        });
+      }
+    });
+
+    // Per-student re-sync: rebuild ONE drifted student from canonical state
+    // without disturbing the rest of the class (the surgical alternative to
+    // a room-wide Force Sync).
+    socket.on('resync_student', ({ roomId, studentId }: { roomId: string; studentId: string }) => {
+      const room = rooms.get(roomId);
+      if (!requireTeacher(room, socket.id)) return;
+      if (typeof studentId !== 'string' || !room.users.has(studentId)) return;
+      emitSessionState(studentId, roomId, room, 'force_sync', `resync-${studentId}-${Date.now()}`);
+      const html = room.liveSnapshotHtml || room.lastRunHtml || getSourceHtml(room);
+      if (html) {
+        io.to(studentId).emit('dom_snapshot', { fileId: room.activeFileId, html, revision: room.revision, requestId: `resync-${Date.now()}` });
+      }
+      logSync('resync_student', { roomId, revision: room.revision, socketId: studentId });
+    });
+
+    // ─── LESSON TIME MACHINE (bookmark + rewind canonical state) ───
+    const MAX_BOOKMARKS = 8;
+    const bookmarksMeta = (room: RoomData) => room.bookmarks.map(b => ({ id: b.id, name: b.name, ts: b.ts }));
+
+    socket.on('bookmark_create', ({ roomId, name }: { roomId: string; name?: string }) => {
+      const room = rooms.get(roomId);
+      if (!requireTeacher(room, socket.id)) return;
+      const html = room.liveSnapshotHtml || room.lastRunHtml || getSourceHtml(room);
+      const bm = {
+        id: `bm-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        name: sanitizeString(name, 40) || `Moment ${room.bookmarks.length + 1}`,
+        ts: Date.now(),
+        html,
+        // Deep-copy mutable structures so later edits can't mutate the bookmark.
+        whiteboard: structuredClone(room.whiteboard),
+        annotations: structuredClone(room.annotations),
+        currentStep: room.currentStep,
+        zoomLevel: room.zoomLevel,
+      };
+      room.bookmarks.push(bm);
+      if (room.bookmarks.length > MAX_BOOKMARKS) room.bookmarks = room.bookmarks.slice(-MAX_BOOKMARKS);
+      io.to(roomId).emit('bookmarks_changed', { bookmarks: bookmarksMeta(room) });
+      logSync('bookmark_create', { roomId, revision: room.revision, reason: bm.name });
+    });
+
+    socket.on('bookmark_restore', ({ roomId, bookmarkId }: { roomId: string; bookmarkId: string }) => {
+      const room = rooms.get(roomId);
+      if (!requireTeacher(room, socket.id)) return;
+      const bm = room.bookmarks.find(b => b.id === bookmarkId);
+      if (!bm) return;
+      // Rewind canonical state. The bookmark keeps its own deep copies, so we
+      // hand out fresh clones — restoring twice must work.
+      room.lastRunHtml = bm.html;
+      room.liveSnapshotHtml = null;
+      room.whiteboard = structuredClone(bm.whiteboard);
+      room.annotations = structuredClone(bm.annotations);
+      room.currentStep = bm.currentStep;
+      room.zoomLevel = bm.zoomLevel;
+      const revision = bumpRevision(room);
+      // Canonical broadcast hydrates whiteboard/annotations/step on every
+      // client; the run_preview rebroadcast rebuilds every iframe from the
+      // bookmarked HTML (clean script re-run — same as Force Sync).
+      broadcastFullState(roomId, room, 'restore');
+      if (bm.html) {
+        io.to(roomId).emit('run_preview', { fileId: room.activeFileId, html: bm.html, revision });
+      }
+      io.to(roomId).emit('step_changed', { step: room.currentStep, revision });
+      logSync('bookmark_restore', { roomId, revision, reason: bm.name });
+    });
+
+    socket.on('bookmark_delete', ({ roomId, bookmarkId }: { roomId: string; bookmarkId: string }) => {
+      const room = rooms.get(roomId);
+      if (!requireTeacher(room, socket.id)) return;
+      room.bookmarks = room.bookmarks.filter(b => b.id !== bookmarkId);
+      io.to(roomId).emit('bookmarks_changed', { bookmarks: bookmarksMeta(room) });
     });
 
     // ─── STEP-LOCK SYSTEM ───
@@ -2365,6 +2524,8 @@ Build a widget that teaches: ${safePrompt}`;
       room.isPaused = false;
       room.scores = {};
       room.gateAwarded.clear();
+      room.controlHolderName = null;
+      io.to(roomId).emit('control_changed', { holderName: null });
       // Bump the canonical revision. Without this, any subsequent
       // session_state / force_sync_state carries the OLD revision and clients
       // with a higher local revision (stored before the reset) silently drop
@@ -2457,6 +2618,20 @@ Build a widget that teaches: ${safePrompt}`;
               }, TEACHER_DISCONNECT_GRACE_MS),
             };
             console.log(`⏳ Teacher ${expectedTeacherName} disconnected — holding seat for ${TEACHER_DISCONNECT_GRACE_MS / 1000}s`);
+          }
+
+          // If the departing student held the control grant and no other
+          // socket with the same name remains (multi-tab), clear it so the
+          // room isn't stuck "driven" by someone who left. Their grant
+          // survives a quick reconnect only via the teacher re-granting —
+          // deliberate: control is a live privilege, not a persistent one.
+          if (user?.role === 'student' && user.name === room.controlHolderName) {
+            const stillHere = Array.from(room.users.values()).some(u => u.role === 'student' && u.name === user.name);
+            if (!stillHere) {
+              room.controlHolderName = null;
+              bumpRevision(room);
+              io.to(roomId).emit('control_changed', { holderName: null });
+            }
           }
 
           // Check if any students remain — if not, start the 2hr expiry countdown

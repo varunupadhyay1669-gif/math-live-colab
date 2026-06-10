@@ -194,11 +194,42 @@ export const injectedSyncScript = `
       }
     }, true);
 
+    // ── Element ping (Alt+click = "look here") ──
+    // Renders a 1.2s ripple at a point/element and syncs it to everyone.
+    // Works even in view-only mode (the parent/server treat SYNC_PING like
+    // cursor traffic) so a confused student can point at the exact thing.
+    function showPing(x, y) {
+      try {
+        var ping = document.createElement('div');
+        ping.setAttribute('data-mathslive-ping', '1');
+        ping.style.cssText = 'position:fixed;left:' + (x - 22) + 'px;top:' + (y - 22) + 'px;width:44px;height:44px;border-radius:50%;border:3px solid #F43F5E;background:rgba(244,63,94,0.18);pointer-events:none;z-index:2147483647;animation:mathslive-ping-pop 1.2s ease-out forwards;';
+        if (!document.getElementById('mathslive-ping-style')) {
+          var st = document.createElement('style');
+          st.id = 'mathslive-ping-style';
+          st.textContent = '@keyframes mathslive-ping-pop{0%{transform:scale(0.4);opacity:1}70%{transform:scale(1.6);opacity:0.7}100%{transform:scale(2.4);opacity:0}}';
+          (document.head || document.documentElement).appendChild(st);
+        }
+        (document.body || document.documentElement).appendChild(ping);
+        setTimeout(function() { ping.parentNode && ping.parentNode.removeChild(ping); }, 1300);
+      } catch(ignore) {}
+    }
+    // Capture-phase + stopImmediatePropagation: an Alt+click must PING, not
+    // activate the element underneath (we don't want "point at the button"
+    // to also press the button).
+    document.addEventListener('click', function(e) {
+      if (!e.altKey || !e.isTrusted || isRemote()) return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      showPing(e.clientX, e.clientY);
+      window.parent.postMessage({ type: 'SYNC_PING', path: getElementPath(e.target), clientX: e.clientX / window.innerWidth, clientY: e.clientY / window.innerHeight }, '*');
+    }, true);
+
     // ── Click events ──
     document.addEventListener('click', function(e) {
       if (isRemote()) return;
       if (blockLocalInteraction(e)) return;
       if (!e.isTrusted) return;
+      if (e.altKey) return; // Alt+click is a ping, handled above
       var path = getElementPath(e.target);
       if (path) {
         window.parent.postMessage({ type: 'SYNC_CLICK', path: path, clientX: e.clientX / window.innerWidth, clientY: e.clientY / window.innerHeight }, '*');
@@ -626,6 +657,16 @@ export const injectedSyncScript = `
               el.click();
             }
           } finally { exitRemote(); }
+        }
+      } else if (data.type === 'REMOTE_PING') {
+        // Anchor to the pinged ELEMENT when it resolves — layouts differ
+        // across screens, so the element's own rect beats raw coordinates.
+        var pingEl = data.path ? findElement(data.path) : null;
+        if (pingEl && pingEl.getBoundingClientRect) {
+          var pr = pingEl.getBoundingClientRect();
+          showPing(pr.left + pr.width / 2, pr.top + pr.height / 2);
+        } else if (data.clientX !== undefined) {
+          showPing(data.clientX * window.innerWidth, data.clientY * window.innerHeight);
         }
       } else if (data.type === 'REMOTE_SCROLL') {
         if (!scrollSyncEnabled) return;
