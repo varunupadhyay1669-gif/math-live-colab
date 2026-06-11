@@ -275,6 +275,27 @@ export default function Home() {
                   )}
                 </div>
               )}
+
+              {/* Quiet capability strip — what makes this different, in one
+                  glance. Pure presentation; chips are not buttons. */}
+              <ul className="ml-dark-features" aria-label="Platform capabilities">
+                <li className="ml-dark-feature">
+                  <span className="ml-dark-feature-icon" aria-hidden="true">✋</span>
+                  <span><strong>Hand the chalk</strong><em>one student drives, you take it back anytime</em></span>
+                </li>
+                <li className="ml-dark-feature">
+                  <span className="ml-dark-feature-icon" aria-hidden="true">👁️</span>
+                  <span><strong>See every screen</strong><em>peek at any student's live view</em></span>
+                </li>
+                <li className="ml-dark-feature">
+                  <span className="ml-dark-feature-icon" aria-hidden="true">⏪</span>
+                  <span><strong>Rewind the lesson</strong><em>bookmark moments, jump the whole class back</em></span>
+                </li>
+                <li className="ml-dark-feature">
+                  <span className="ml-dark-feature-icon" aria-hidden="true">⚡</span>
+                  <span><strong>Late joiners catch up</strong><em>sims replay the class automatically</em></span>
+                </li>
+              </ul>
             </>
           )}
 

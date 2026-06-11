@@ -1058,9 +1058,10 @@ export default function StudentView() {
             Maths<span style={{ color: 'var(--accent-indigo)' }}>Live</span>
           </span>
 
-          <div className="header-divider" />
+          <div className="header-divider hdr-hide-sm" />
 
-          <span className="text-[13px] font-semibold" style={{ color: 'var(--text-secondary)' }}>
+          {/* File name is context, not a control — first to go on phones. */}
+          <span className="text-[13px] font-semibold truncate hdr-hide-sm" style={{ color: 'var(--text-secondary)', maxWidth: 180 }}>
             {currentFileName || 'Session'}
           </span>
 
@@ -1341,8 +1342,22 @@ export default function StudentView() {
                 <div className="text-5xl mb-5 animate-gentle-bounce">⏳</div>
                 <h2 className="font-display text-2xl font-bold mb-3" style={{ color: 'var(--text-primary)' }}>Waiting for teacher...</h2>
                 <p className="text-sm" style={{ color: 'var(--text-muted)', lineHeight: '1.6' }}>
-                  Your teacher will load a simulation shortly.
+                  You're in! The lesson appears here the moment your teacher starts.
                 </p>
+                <div className="flex items-center justify-center gap-2 mt-4">
+                  <span className="text-[11px] font-mono font-bold px-2.5 py-1 rounded-md"
+                    style={{ background: 'var(--accent-indigo-light)', color: 'var(--accent-indigo)', letterSpacing: '0.06em' }}>
+                    ROOM {roomId}
+                  </span>
+                  <span className="text-[11px] font-semibold px-2.5 py-1 rounded-md inline-flex items-center gap-1.5"
+                    style={{
+                      background: connected ? 'var(--accent-emerald-light)' : 'rgba(244,63,94,0.10)',
+                      color: connected ? 'var(--accent-emerald)' : '#E11D48',
+                    }}>
+                    <span className="w-1.5 h-1.5 rounded-full" style={{ background: 'currentColor' }} />
+                    {connected ? 'Connected' : 'Reconnecting…'}
+                  </span>
+                </div>
                 <div className="flex items-center justify-center gap-2 mt-6">
                   {[0, 1, 2].map(i => (
                     <div key={i} className="w-2 h-2 rounded-full"

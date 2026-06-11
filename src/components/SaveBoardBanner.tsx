@@ -26,7 +26,9 @@ function formatTimeLeft(ms: number): string {
     // Round up to nearest hour for big numbers — Miro just shows "24h"
     return hours >= 2 ? `${hours}h` : `${hours}h ${minutes}m`;
   }
-  return `${minutes}m`;
+  // Final minute: "0m left" read like a bug — the 30s tick can sit there
+  // for most of a minute before flipping to expired.
+  return minutes < 1 ? 'less than a minute' : `${minutes}m`;
 }
 
 export default function SaveBoardBanner({ expiresAt, saving, onSave }: Props) {

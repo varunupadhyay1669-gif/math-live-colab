@@ -11,7 +11,8 @@ export default function TimerDisplay({ seconds, remaining }: TimerDisplayProps) 
   const timeStr = minutes > 0
     ? `${minutes}:${secs.toString().padStart(2, '0')}`
     : `${remaining}s`;
-  const progress = (remaining / seconds) * 100;
+  // Guard seconds=0 — NaN% width collapses the progress bar.
+  const progress = seconds > 0 ? (remaining / seconds) * 100 : 0;
   const isUrgent = remaining <= 10;
   const isCritical = remaining <= 5;
 

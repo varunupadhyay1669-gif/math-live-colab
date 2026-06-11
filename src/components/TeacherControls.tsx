@@ -1,4 +1,5 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Socket } from 'socket.io-client';
 
 interface TeacherControlsProps {
@@ -84,6 +85,23 @@ export default function TeacherControls({
 }: TeacherControlsProps) {
   const [showTimerMenu, setShowTimerMenu] = useState(false);
   const [showReactionMenu, setShowReactionMenu] = useState(false);
+  // Dropdowns render through a PORTAL anchored to their trigger's rect.
+  // Inside the toolbar they were clipped: `overflow-x-auto` forces
+  // overflow-y to auto (cutting absolutely-positioned menus at the ~40px
+  // toolbar edge) and the toolbar's backdrop-filter makes it the containing
+  // block for position:fixed children, confining the click-away backdrop.
+  const timerBtnRef = useRef<HTMLButtonElement>(null);
+  const reactionBtnRef = useRef<HTMLButtonElement>(null);
+  const [timerMenuPos, setTimerMenuPos] = useState<{ left: number; top: number } | null>(null);
+  const [reactionMenuPos, setReactionMenuPos] = useState<{ left: number; top: number } | null>(null);
+  const anchorMenu = (btn: HTMLButtonElement | null, menuWidth: number) => {
+    if (!btn) return null;
+    const r = btn.getBoundingClientRect();
+    return {
+      left: Math.max(8, Math.min(r.left, window.innerWidth - menuWidth - 8)),
+      top: r.bottom + 8,
+    };
+  };
 
   const isCursor = !drawMode && !laserMode;
   const isDraw = drawMode && penType === 'transient';
@@ -280,7 +298,11 @@ export default function TeacherControls({
 
         {/* ── Engage ── */}
         <div className="relative" style={{ display: 'inline-flex' }}>
-          <button onClick={() => setShowTimerMenu(!showTimerMenu)}
+          <button ref={timerBtnRef}
+            onClick={() => {
+              if (!showTimerMenu) setTimerMenuPos(anchorMenu(timerBtnRef.current, 170));
+              setShowTimerMenu(!showTimerMenu);
+            }}
             className={`tb-btn ${challengeTimer ? 'active' : ''}`}
             data-tip={challengeTimer ? `${challengeTimer.remaining}s remaining` : 'Challenge timer'}>
             {challengeTimer ? (
@@ -293,10 +315,11 @@ export default function TeacherControls({
               </svg>
             )}
           </button>
-          {showTimerMenu && (
+          {showTimerMenu && timerMenuPos && createPortal(
             <>
               <div className="fixed inset-0 z-40" onClick={() => setShowTimerMenu(false)} />
-              <div className="absolute top-full left-0 mt-2 z-50 animate-slide-down dropdown-menu">
+              <div className="animate-slide-down dropdown-menu"
+                style={{ position: 'fixed', left: timerMenuPos.left, top: timerMenuPos.top, zIndex: 50 }}>
                 {TIMER_OPTIONS.map(sec => (
                   <button key={sec} onClick={() => { onStartTimer(sec); setShowTimerMenu(false); }}
                     className="dropdown-item">
@@ -310,7 +333,8 @@ export default function TeacherControls({
                   </button>
                 )}
               </div>
-            </>
+            </>,
+            document.body
           )}
         </div>
 
@@ -375,15 +399,21 @@ export default function TeacherControls({
         </button>
 
         <div className="relative" style={{ display: 'inline-flex' }}>
-          <button onClick={() => setShowReactionMenu(!showReactionMenu)} className="tb-btn" data-tip="Send reaction">
+          <button ref={reactionBtnRef}
+            onClick={() => {
+              if (!showReactionMenu) setReactionMenuPos(anchorMenu(reactionBtnRef.current, 320));
+              setShowReactionMenu(!showReactionMenu);
+            }}
+            className="tb-btn" data-tip="Send reaction">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
               <circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/>
             </svg>
           </button>
-          {showReactionMenu && (
+          {showReactionMenu && reactionMenuPos && createPortal(
             <>
               <div className="fixed inset-0 z-40" onClick={() => setShowReactionMenu(false)} />
-              <div className="absolute top-full left-0 mt-2 z-50 animate-slide-down flex gap-1 dropdown-menu" style={{ padding: '6px' }}>
+              <div className="animate-slide-down flex gap-1 dropdown-menu"
+                style={{ position: 'fixed', left: reactionMenuPos.left, top: reactionMenuPos.top, zIndex: 50, padding: '6px' }}>
                 {REACTION_EMOJIS.map((emoji, i) => (
                   <button key={i} onClick={() => { onSendReaction(emoji); setShowReactionMenu(false); }}
                     style={{ width: '36px', height: '36px', display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: 'var(--radius-sm)', fontSize: '18px', border: 'none', background: 'transparent', cursor: 'pointer', transition: 'all 0.12s' }}
@@ -393,7 +423,8 @@ export default function TeacherControls({
                   </button>
                 ))}
               </div>
-            </>
+            </>,
+            document.body
           )}
         </div>
 
