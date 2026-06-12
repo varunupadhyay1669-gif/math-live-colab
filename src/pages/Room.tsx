@@ -5,6 +5,7 @@ import { io, Socket } from "socket.io-client";
 import { injectedSyncScript } from "../lib/syncScript";
 import { stepLockScript } from "../lib/stepLockScript";
 import { DEMO_LESSON_HTML, DEMO_LESSON_NAME } from "../lib/demoLesson";
+import { cleanDisplayName } from "../lib/displayName";
 import { sessionRecorder } from "../lib/sessionRecorder";
 import { sounds } from "../lib/sounds";
 import { savedBoards, templates } from "../lib/prefs";
@@ -86,7 +87,11 @@ export default function Room() {
   const authTokenRef = useRef<string | null>(null);
   useEffect(() => { authTokenRef.current = auth.session?.access_token ?? null; }, [auth.session]);
   const [searchParams] = useSearchParams();
-  const teacherName = searchParams.get('name') || 'Teacher';
+  // Never teach under a raw email: Dashboard links historically passed the
+  // account email as ?name= — students then saw it on cursors, chat and the
+  // participants list. cleanDisplayName turns it into a humane name and
+  // leaves normal names untouched.
+  const teacherName = cleanDisplayName(searchParams.get('name')) || 'Teacher';
   // AUTONOMOUS: Lesson templates — when arriving with ?template=ID,
   // we hydrate the fresh room with the saved snapshot from localStorage
   // (see prefs.ts templates store). Applied at most once per session
@@ -425,6 +430,35 @@ export default function Room() {
 
   // ── Refs ──
   const iframeRef = useRef<HTMLIFrameElement>(null);
+
+  // Re-anchor a remote SYNC_CURSOR to the element the sender was hovering,
+  // resolved against THIS client's iframe layout (same-origin). Raw viewport
+  // percentages put the cursor an option or two off whenever layouts differ
+  // (centered fixed-width lessons, different window sizes). Falls back to the
+  // sender's viewport fractions when the path doesn't resolve.
+  const resolveCursorPosition = useCallback((event: any): { x: number; y: number } => {
+    try {
+      if (event?.path && iframeRef.current) {
+        const doc = iframeRef.current.contentDocument;
+        const el = doc?.querySelector(event.path);
+        const iw = iframeRef.current.clientWidth;
+        const ih = iframeRef.current.clientHeight;
+        if (el && iw > 0 && ih > 0) {
+          const r = (el as HTMLElement).getBoundingClientRect();
+          if (r.width > 0 && r.height > 0) {
+            const ex = typeof event.ex === 'number' && isFinite(event.ex) ? Math.max(0, Math.min(1, event.ex)) : 0.5;
+            const ey = typeof event.ey === 'number' && isFinite(event.ey) ? Math.max(0, Math.min(1, event.ey)) : 0.5;
+            const x = (r.left + ex * r.width) / iw;
+            const y = (r.top + ey * r.height) / ih;
+            if (isFinite(x) && isFinite(y)) {
+              return { x: Math.max(0, Math.min(1, x)), y: Math.max(0, Math.min(1, y)) };
+            }
+          }
+        }
+      }
+    } catch { /* detached iframe — fall through */ }
+    return { x: event?.x ?? 0, y: event?.y ?? 0 };
+  }, []);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const inviteButtonRef = useRef<HTMLButtonElement>(null);
   const timerRef = useRef<ReturnType<typeof setInterval>>();
@@ -665,12 +699,16 @@ export default function Room() {
       // counters drift — e.g. after a teacher-only state change. serverSeq above
       // already prevents stale/replayed events.
       if (event.type === "SYNC_CURSOR") {
+        // Element-anchored: place the student's cursor on the same CONTENT in
+        // OUR layout (see resolveCursorPosition) — raw viewport percentages
+        // drift across differing window sizes / centered content.
+        const pos = resolveCursorPosition(event);
         setCursors(prev => ({
           ...prev,
           [event.userId]: {
-            x: event.x, y: event.y,
+            x: pos.x, y: pos.y,
             color: CURSOR_COLORS[event.userId.charCodeAt(0) % CURSOR_COLORS.length],
-            name: event.userName || 'Student',
+            name: cleanDisplayName(event.userName) || 'Student',
           },
         }));
       } else if (event.type === "SYNC_CLICK") {

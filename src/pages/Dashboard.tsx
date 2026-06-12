@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { useAuth } from "../lib/auth";
 import { listClasses, createClass, deleteClass, touchClass, type ClassRow } from "../lib/classes";
 import { listSessions, type SessionRow } from "../lib/sessions";
+import { cleanDisplayName } from "../lib/displayName";
 
 // Teacher hub: a private list of classes (one per student) with permanent
 // links, plus create / open / delete. Only reachable when auth is enabled and
@@ -47,7 +48,10 @@ export default function Dashboard() {
 
   const teacherName = (() => {
     const meta = auth.user?.user_metadata as { full_name?: string; name?: string } | undefined;
-    return meta?.full_name || meta?.name || auth.user?.email || "Teacher";
+    // Magic-link accounts have no profile name — the fallback used to be the
+    // RAW EMAIL, which students then saw on the teacher's cursor, in chat and
+    // in the participants list. cleanDisplayName turns it into a humane name.
+    return meta?.full_name || meta?.name || cleanDisplayName(auth.user?.email) || "Teacher";
   })();
 
   const studentLink = (code: string) => `${window.location.origin}/live/${code}`;

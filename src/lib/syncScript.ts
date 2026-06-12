@@ -254,7 +254,24 @@ export const injectedSyncScript = `
       var now = Date.now();
       if (now - lastMove > 50) {
         lastMove = now;
-        window.parent.postMessage({ type: 'SYNC_CURSOR', x: e.clientX / window.innerWidth, y: e.clientY / window.innerHeight }, '*');
+        // Element-anchor the cursor: viewport-percentage coords alone land in
+        // the wrong place on the other side whenever layouts differ (centered
+        // fixed-width content, different window sizes/toolbars). We also send
+        // the hovered element's path plus the relative offset INSIDE it; the
+        // receiver re-resolves that element in its own layout and positions
+        // the cursor there, falling back to the raw percentages.
+        var cpath = null, cex = 0.5, cey = 0.5;
+        try {
+          if (e.target && e.target !== document && e.target !== document.body && e.target !== document.documentElement) {
+            cpath = getElementPath(e.target);
+            var crect = e.target.getBoundingClientRect();
+            if (crect.width > 0 && crect.height > 0) {
+              cex = (e.clientX - crect.left) / crect.width;
+              cey = (e.clientY - crect.top) / crect.height;
+            }
+          }
+        } catch (ignore) {}
+        window.parent.postMessage({ type: 'SYNC_CURSOR', x: e.clientX / window.innerWidth, y: e.clientY / window.innerHeight, path: cpath, ex: cex, ey: cey }, '*');
       }
       // Mirror the drag itself (only for genuine local gestures — never replay
       // remote events back, never leak from a view-only student). Throttled

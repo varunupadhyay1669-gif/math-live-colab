@@ -2,6 +2,7 @@ import React, { useEffect, useState, useRef, useCallback, useMemo } from "react"
 import { useParams, useNavigate, useSearchParams } from "react-router-dom";
 import { io, Socket } from "socket.io-client";
 import { injectedSyncScript } from "../lib/syncScript";
+import { cleanDisplayName } from "../lib/displayName";
 import { stepLockScript } from "../lib/stepLockScript";
 import { setupAttentionDetection } from "../lib/attentionDetector";
 import { sounds } from "../lib/sounds";
@@ -313,6 +314,34 @@ export default function StudentView() {
 
   const iframeRef = useRef<HTMLIFrameElement>(null);
 
+  // Re-anchor a remote SYNC_CURSOR to the element the sender was hovering,
+  // resolved against THIS client's iframe layout (same-origin, so we can read
+  // it). Returns normalized overlay coordinates; falls back to the sender's
+  // raw viewport fractions when there's no path or it doesn't resolve.
+  const resolveCursorPosition = useCallback((event: any): { x: number; y: number } => {
+    try {
+      if (event?.path && iframeRef.current) {
+        const doc = iframeRef.current.contentDocument;
+        const el = doc?.querySelector(event.path);
+        const iw = iframeRef.current.clientWidth;
+        const ih = iframeRef.current.clientHeight;
+        if (el && iw > 0 && ih > 0) {
+          const r = (el as HTMLElement).getBoundingClientRect();
+          if (r.width > 0 && r.height > 0) {
+            const ex = typeof event.ex === 'number' && isFinite(event.ex) ? Math.max(0, Math.min(1, event.ex)) : 0.5;
+            const ey = typeof event.ey === 'number' && isFinite(event.ey) ? Math.max(0, Math.min(1, event.ey)) : 0.5;
+            const x = (r.left + ex * r.width) / iw;
+            const y = (r.top + ey * r.height) / ih;
+            if (isFinite(x) && isFinite(y)) {
+              return { x: Math.max(0, Math.min(1, x)), y: Math.max(0, Math.min(1, y)) };
+            }
+          }
+        }
+      }
+    } catch { /* cross-origin or detached iframe — fall through */ }
+    return { x: event?.x ?? 0, y: event?.y ?? 0 };
+  }, []);
+
   const notifTimeoutRef = useRef<ReturnType<typeof setTimeout>>();
   const showNotification = (msg: string) => {
     if (notifTimeoutRef.current) clearTimeout(notifTimeoutRef.current);
@@ -582,12 +611,18 @@ export default function StudentView() {
         setZoomLevel(event.zoom);
       }
       if (event.type === "SYNC_CURSOR") {
+        // Element-anchored cursor: re-resolve the sender's hovered element in
+        // OUR layout so the dot sits on the same CONTENT (e.g. the end of
+        // option C), not the same screen percentage — centered fixed-width
+        // lessons made raw percentages land an option or two off. Falls back
+        // to the viewport fractions when the path doesn't resolve.
+        const pos = resolveCursorPosition(event);
         setCursors(prev => ({
           ...prev,
           [event.userId]: {
-            x: event.x, y: event.y,
+            x: pos.x, y: pos.y,
             color: CURSOR_COLORS[event.userId.charCodeAt(0) % CURSOR_COLORS.length],
-            name: event.userName || 'Teacher',
+            name: cleanDisplayName(event.userName) || 'Teacher',
           },
         }));
       } else if (event.type === "SYNC_CLICK") {
