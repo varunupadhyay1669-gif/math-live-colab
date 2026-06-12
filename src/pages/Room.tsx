@@ -2,7 +2,7 @@
 import { createPortal } from "react-dom";
 import { useParams, useNavigate, useSearchParams } from "react-router-dom";
 import { io, Socket } from "socket.io-client";
-import { injectedSyncScript } from "../lib/syncScript";
+import { seededSyncScript } from "../lib/syncScript";
 import { stepLockScript } from "../lib/stepLockScript";
 import { DEMO_LESSON_HTML, DEMO_LESSON_NAME } from "../lib/demoLesson";
 import { cleanDisplayName } from "../lib/displayName";
@@ -148,6 +148,10 @@ export default function Room() {
   const [activeFileId, setActiveFileId] = useState<string | null>(null);
   const [htmlCode, setHtmlCode] = useState("");
   const [previewHtml, setPreviewHtml] = useState("");
+  // Server-issued deterministic RNG seed for the current lesson — injected
+  // into the sim so the teacher and every student draw the same Math.random()
+  // sequence (keeps non-deterministic sims, e.g. random quizzes, in lockstep).
+  const [randomSeed, setRandomSeed] = useState(0);
   // AUTONOMOUS: keep ref in sync so the connect handler can read the
   // current value without going stale.
   useEffect(() => { previewHtmlRef.current = previewHtml; }, [previewHtml]);
@@ -228,7 +232,7 @@ export default function Room() {
   // Memoize blob URL to prevent iframe from reloading on every render
   const tempContentUrl = useMemo(() => {
     if (!tempContent) return null;
-    const scripts = injectedSyncScript + stepLockScript;
+    const scripts = seededSyncScript(randomSeed) + stepLockScript;
     let content = tempContent.html;
     if (content.includes("<head>")) {
       content = content.replace("<head>", "<head>" + scripts);
@@ -237,7 +241,7 @@ export default function Room() {
     }
     const blob = new Blob([content], { type: 'text/html' });
     return URL.createObjectURL(blob);
-  }, [tempContent?.html, tempContent?.name]);
+  }, [tempContent?.html, tempContent?.name, randomSeed]);
 
   useEffect(() => {
     return () => {
@@ -414,6 +418,7 @@ export default function Room() {
     if (typeof state.currentStep === 'number') setCurrentStep(state.currentStep);
     if (typeof state.zoomLevel === 'number') setZoomLevel(state.zoomLevel);
     if (state.gates) setGates(state.gates);
+    if (typeof state.randomSeed === 'number') setRandomSeed(state.randomSeed);
     if ('controlHolderName' in state) setControlHolderName(state.controlHolderName ?? null);
     if (Array.isArray(state.bookmarks)) setBookmarks(state.bookmarks);
     if (state.tempContent) {
@@ -1183,8 +1188,11 @@ export default function Room() {
     for (const msg of pending) {
       iframeRef.current?.contentWindow?.postMessage(msg, '*');
     }
-    // Re-send current state
-    iframeRef.current?.contentWindow?.postMessage({ type: 'SET_PRESENTER_MODE', enabled: true }, '*');
+    // Re-send current state. presenter/interaction follow sole-writer so a
+    // teacher who handed off control reloads as a mirror, not a driver.
+    const soleWriter = !controlHolderName;
+    iframeRef.current?.contentWindow?.postMessage({ type: 'SET_PRESENTER_MODE', enabled: soleWriter }, '*');
+    iframeRef.current?.contentWindow?.postMessage({ type: 'SET_INTERACTION_MODE', allowed: soleWriter }, '*');
     if (scrollSyncEnabled !== undefined) {
       iframeRef.current?.contentWindow?.postMessage({ type: 'SET_SCROLL_SYNC', enabled: scrollSyncEnabled }, '*');
     }
@@ -1194,7 +1202,7 @@ export default function Room() {
     if (zoomLevel !== 1) {
       iframeRef.current?.contentWindow?.postMessage({ type: 'SET_ZOOM', zoom: zoomLevel }, '*');
     }
-  }, [scrollSyncEnabled, stepLockEnabled, currentStep, zoomLevel]);
+  }, [scrollSyncEnabled, stepLockEnabled, currentStep, zoomLevel, controlHolderName]);
 
   // â”€â”€ Mirror iframe onLoad: behave like a passive student view â”€â”€
   const handleMirrorLoad = useCallback(() => {
@@ -1311,13 +1319,17 @@ export default function Room() {
     };
   }, [socket, roomId, scrollSyncEnabled, dualView, postToMirror]);
 
-  // The teacher's iframe is the single authoritative sim and stays interactive
-  // in both modes â€” the student never runs an independent copy (it mirrors via
-  // live_dom), so there's no second driver to lock out. The student's taps are
-  // relayed to this iframe (REMOTE_*) and the result mirrors back.
+  // SINGLE-WRITER: the teacher drives the sim by default, but when the teacher
+  // hands the chalk to a student, the teacher becomes a MIRROR — its sim is
+  // driven by the student's replayed events, so the teacher's local clicks
+  // must be locked out (otherwise two drivers diverge). presenterMode +
+  // interaction-allowed both follow "am I the sole writer right now" = no
+  // student holds control.
+  const teacherIsSoleWriter = !controlHolderName;
   useEffect(() => {
-    postToIframe({ type: 'SET_INTERACTION_MODE', allowed: true });
-  }, [iframeUrl, postToIframe]);
+    postToIframe({ type: 'SET_INTERACTION_MODE', allowed: teacherIsSoleWriter });
+    postToIframe({ type: 'SET_PRESENTER_MODE', enabled: teacherIsSoleWriter });
+  }, [iframeUrl, teacherIsSoleWriter, postToIframe]);
 
   useEffect(() => {
     // syncEpoch must mirror the student-side dependency set so the two counters
@@ -1348,7 +1360,7 @@ export default function Room() {
     // Mark iframe as not ready while we rebuild it
     iframeReadyRef.current = false;
     let content = previewHtml;
-    const scripts = injectedSyncScript + stepLockScript;
+    const scripts = seededSyncScript(randomSeed) + stepLockScript;
     if (content.includes("<head>")) {
       content = content.replace("<head>", "<head>" + scripts);
     } else if (content.includes("<html>")) {
@@ -1364,9 +1376,10 @@ export default function Room() {
     // (the lock is driven on the live iframe via SET_STEP / DISABLE_STEP_LOCK
     // postMessages in toggleStepLock). Rebuilding the blob on every toggle
     // reloaded the whole simulation â€” losing runtime state and broadcasting the
-    // reset to students â€” for a routine toolbar button.
+    // reset to students â€” for a routine toolbar button. Keyed on randomSeed so
+    // a new lesson baseline rebuilds the sim with the matching seed.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [previewHtml]);
+  }, [previewHtml, randomSeed]);
 
   // â”€â”€ Sync code when active file changes â”€â”€
   useEffect(() => {
@@ -1402,9 +1415,11 @@ export default function Room() {
 
   // â”€â”€ Push scroll sync state to iframe â”€â”€
   useEffect(() => {
-    postToIframe({ type: 'SET_PRESENTER_MODE', enabled: true });
+    // presenterMode follows sole-writer (see the SET_INTERACTION_MODE effect):
+    // a teacher who handed off control is a mirror, not the presenter.
+    postToIframe({ type: 'SET_PRESENTER_MODE', enabled: teacherIsSoleWriter });
     postToIframe({ type: 'SET_SCROLL_SYNC', enabled: scrollSyncEnabled });
-  }, [scrollSyncEnabled, iframeUrl, postToIframe]);
+  }, [scrollSyncEnabled, iframeUrl, teacherIsSoleWriter, postToIframe]);
 
   // â”€â”€ Zoom: push to iframe when level changes â”€â”€
   useEffect(() => {

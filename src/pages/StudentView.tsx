@@ -1,7 +1,7 @@
 ﻿import React, { useEffect, useState, useRef, useCallback, useMemo } from "react";
 import { useParams, useNavigate, useSearchParams } from "react-router-dom";
 import { io, Socket } from "socket.io-client";
-import { injectedSyncScript } from "../lib/syncScript";
+import { seededSyncScript } from "../lib/syncScript";
 import { cleanDisplayName } from "../lib/displayName";
 import { stepLockScript } from "../lib/stepLockScript";
 import { setupAttentionDetection } from "../lib/attentionDetector";
@@ -63,6 +63,9 @@ export default function StudentView() {
   const [connected, setConnected] = useState(false);
   const [iframeUrl, setIframeUrl] = useState("");
   const [currentHtml, setCurrentHtml] = useState("");
+  // Server-issued deterministic RNG seed for the current lesson — injected
+  // into the sim so Math.random() matches the teacher's exactly.
+  const [randomSeed, setRandomSeed] = useState(0);
   const [currentFileName, setCurrentFileName] = useState("");
   const [isPaused, setIsPaused] = useState(false);
   const [cursors, setCursors] = useState<Record<string, Cursor>>({});
@@ -161,7 +164,7 @@ export default function StudentView() {
   // Memoize blob URL to prevent iframe from reloading on every render
   const tempContentUrl = useMemo(() => {
     if (!tempContent) return null;
-    const scripts = injectedSyncScript + stepLockScript;
+    const scripts = seededSyncScript(randomSeed) + stepLockScript;
     let content = tempContent.html;
     if (content.includes("<head>")) {
       content = content.replace("<head>", "<head>" + scripts);
@@ -170,7 +173,7 @@ export default function StudentView() {
     }
     const blob = new Blob([content], { type: 'text/html' });
     return URL.createObjectURL(blob);
-  }, [tempContent?.html, tempContent?.name]);
+  }, [tempContent?.html, tempContent?.name, randomSeed]);
 
   useEffect(() => {
     return () => {
@@ -187,9 +190,13 @@ export default function StudentView() {
   // canonical field; hasControl is the derived "is it me".
   const [controlHolderName, setControlHolderName] = useState<string | null>(null);
   const hasControl = !!controlHolderName && controlHolderName === studentName;
-  // The iframe should accept the local user's input when the room allows it
-  // OR this student personally holds control.
-  const canDrive = interactionAllowed || hasControl;
+  // SINGLE-WRITER: a student may drive the shared lesson sim ONLY while they
+  // personally hold the control grant ("the chalk"). The room-wide interaction
+  // toggle does NOT make a student a sim driver — two independent drivers
+  // each roll their own Math.random() and diverge instantly. (The toggle
+  // still enables annotations / whiteboard collaboration, which need no
+  // determinism and live in a layer above the sim.)
+  const canDrive = hasControl;
   const canDriveRef = useRef(false);
   useEffect(() => { canDriveRef.current = canDrive; }, [canDrive]);
 
@@ -272,6 +279,7 @@ export default function StudentView() {
     if (typeof state.currentStep === 'number') setCurrentStep(state.currentStep);
     if (typeof state.zoomLevel === 'number') setZoomLevel(state.zoomLevel);
     if (state.gates && typeof state.gates === 'object') setGates(state.gates);
+    if (typeof state.randomSeed === 'number') setRandomSeed(state.randomSeed);
     if ('controlHolderName' in state) setControlHolderName(state.controlHolderName ?? null);
     if (state.chat) setChatMessages(state.chat);
     if (state.whiteboard) setWhiteboardState(state.whiteboard);
@@ -376,7 +384,7 @@ export default function StudentView() {
     // Mark iframe as not ready while we rebuild it
     iframeReadyRef.current = false;
     let content = currentHtml;
-    const scripts = injectedSyncScript + stepLockScript;
+    const scripts = seededSyncScript(randomSeed) + stepLockScript;
     if (content.includes("<head>")) {
       content = content.replace("<head>", "<head>" + scripts);
     } else if (content.includes("<html>")) {
@@ -388,7 +396,9 @@ export default function StudentView() {
     const url = URL.createObjectURL(blob);
     setIframeUrl(url);
     return () => URL.revokeObjectURL(url);
-  }, [currentHtml]);
+    // Keyed on randomSeed too: a new lesson baseline reseeds, and the iframe
+    // must rebuild so the sim picks up the matching seed from question one.
+  }, [currentHtml, randomSeed]);
 
   // â”€â”€ Socket Connection â”€â”€
   useEffect(() => {
@@ -948,14 +958,10 @@ export default function StudentView() {
     for (const msg of pending) {
       iframeRef.current?.contentWindow?.postMessage(msg, '*');
     }
-    // AUTONOMOUS: ALWAYS re-push SET_INTERACTION_MODE on every iframe
-    // load. The injected sync script defaults interactionBlocked=false
-    // in fresh iframes, BUT in a hot iframe (same iframe element, page
-    // navigated internally) the script's state may be stale from a
-    // prior SET_INTERACTION_MODE message. Re-pushing the current value
-    // makes the iframe's filter state authoritative from the client's
-    // last-known truth, not from whatever the iframe happened to be in.
-    iframeRef.current?.contentWindow?.postMessage({ type: 'SET_INTERACTION_MODE', allowed: interactionAllowed }, '*');
+    // ALWAYS re-push SET_INTERACTION_MODE on every iframe load. A student is a
+    // mirror (blocked) unless they hold control; re-pushing canDrive makes the
+    // iframe's input filter authoritative regardless of fresh/hot state.
+    iframeRef.current?.contentWindow?.postMessage({ type: 'SET_INTERACTION_MODE', allowed: canDriveRef.current }, '*');
     // Re-send current state
     iframeRef.current?.contentWindow?.postMessage({ type: 'SET_SCROLL_SYNC', enabled: scrollSyncEnabled }, '*');
     if (currentStep < 999) {
@@ -965,7 +971,7 @@ export default function StudentView() {
       // Use REMOTE_ZOOM on student side so it applies silently without echoing back
       iframeRef.current?.contentWindow?.postMessage({ type: 'REMOTE_ZOOM', zoom: zoomLevel }, '*');
     }
-  }, [scrollSyncEnabled, currentStep, zoomLevel, interactionAllowed]);
+  }, [scrollSyncEnabled, currentStep, zoomLevel]);
 
   // Re-push zoom when level changes
   useEffect(() => {
@@ -1197,11 +1203,11 @@ export default function StudentView() {
             </span>
           ) : (
             <span className="status-pill" style={{
-              background: interactionAllowed ? 'var(--accent-emerald-light)' : 'var(--accent-indigo-light)',
-              color: interactionAllowed ? 'var(--accent-emerald)' : 'var(--accent-indigo)',
+              background: 'var(--accent-indigo-light)',
+              color: 'var(--accent-indigo)',
               fontSize: '11px', fontWeight: 700, letterSpacing: '0.03em', padding: '3px 10px',
             }}>
-              {controlHolderName ? `ðŸŽ¯ ${controlHolderName} DRIVING` : interactionAllowed ? 'INTERACTIVE' : 'VIEW ONLY'}
+              {controlHolderName ? `ðŸŽ¯ ${controlHolderName} DRIVING` : 'FOLLOWING TEACHER'}
             </span>
           )}
 

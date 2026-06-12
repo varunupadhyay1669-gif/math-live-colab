@@ -92,6 +92,14 @@ interface RoomData {
   claimedAt?: number | null;
   lastTeacherScroll: any | null;
   zoomLevel: number;
+  // ── Deterministic shared randomness ──
+  // A single seed every client injects into the sim's Math.random override,
+  // so a non-deterministic lesson (e.g. a quiz that rolls a random question
+  // on "Next") produces the IDENTICAL sequence on the teacher and every
+  // student. Regenerated on each content baseline (new lesson load), so each
+  // lesson run is fresh but locked across screens. 0 = none (legacy / clients
+  // fall back to a body-text hash).
+  randomSeed: number;
   // ── Control handoff ──
   // Display name of the student currently holding exclusive control ("the
   // chalk"). Keyed by NAME (like scores) so it survives the student's socket
@@ -171,6 +179,8 @@ interface SessionStatePayload {
   controlHolderName: string | null;
   // Time Machine metadata only — full bookmark payloads stay server-side.
   bookmarks: Array<{ id: string; name: string; ts: number }>;
+  // Shared deterministic-random seed (see RoomData.randomSeed).
+  randomSeed: number;
 }
 
 async function startServer() {
@@ -324,7 +334,20 @@ async function startServer() {
       bookmarks: [],
       eventLog: [],
       eventLogOverflow: false,
+      randomSeed: 0,
     };
+  }
+
+  // A fresh positive 31-bit seed for a new lesson baseline. Server-side
+  // Math.random is fine here (plain Node, not a workflow context).
+  function newRandomSeed(): number {
+    return (Math.floor(Math.random() * 2147483646) + 1);
+  }
+  // Establishing a new content baseline: a brand-new lesson is on screen, so
+  // the journal restarts AND every client re-seeds its RNG identically.
+  function newContentBaseline(room: RoomData) {
+    resetEventJournal(room);
+    room.randomSeed = newRandomSeed();
   }
 
   // ── Event journal helpers ──
@@ -528,6 +551,7 @@ async function startServer() {
       gateAwarded: Array.from(room.gateAwarded),
       controlHolderName: room.controlHolderName,
       bookmarks: room.bookmarks,
+      randomSeed: room.randomSeed,
       // Bounded (EVENT_LOG_MAX) — survives restart so a late joiner right
       // after a redeploy still converges.
       eventLog: room.eventLog,
@@ -709,6 +733,7 @@ async function startServer() {
       : [];
     room.eventLog = Array.isArray(raw.eventLog) ? raw.eventLog.slice(0, 400) : [];
     room.eventLogOverflow = !!raw.eventLogOverflow;
+    room.randomSeed = typeof raw.randomSeed === 'number' ? raw.randomSeed : 0;
     return room;
   }
 
@@ -931,6 +956,7 @@ async function startServer() {
       zoomLevel: room.zoomLevel,
       controlHolderName: room.controlHolderName,
       bookmarks: room.bookmarks.map(b => ({ id: b.id, name: b.name, ts: b.ts })),
+      randomSeed: room.randomSeed,
     };
   }
 
@@ -1350,7 +1376,7 @@ async function startServer() {
       room.activeFileId = file.id;
       room.lastRunHtml = file.html;
       room.liveSnapshotHtml = null;
-      resetEventJournal(room);
+      newContentBaseline(room);
       // Uploading a new HTML file is an unambiguous "show this to the
       // student" intent. If the teacher was on the whiteboard surface,
       // exit whiteboard mode so the broadcast iframe actually surfaces
@@ -1419,7 +1445,7 @@ Build a widget that teaches: ${safePrompt}`;
         room.activeFileId = file.id;
         room.lastRunHtml = html;
         room.liveSnapshotHtml = null;
-        resetEventJournal(room);
+        newContentBaseline(room);
         const wasWhiteboard = room.whiteboardMode;
         if (wasWhiteboard) room.whiteboardMode = false;
         const revision = bumpRevision(room);
@@ -1467,7 +1493,7 @@ Build a widget that teaches: ${safePrompt}`;
       room.activeFileId = nextFile ? nextFile.id : null;
       room.lastRunHtml = nextFile ? nextFile.html : null;
       room.liveSnapshotHtml = null;
-      resetEventJournal(room);
+      newContentBaseline(room);
       const revision = bumpRevision(room);
       io.to(roomId).emit('file_deleted', { fileId, newActiveId: room.activeFileId });
       if (nextFile) {
@@ -1487,7 +1513,7 @@ Build a widget that teaches: ${safePrompt}`;
       room.activeFileId = fileId;
       room.lastRunHtml = file.html;
       room.liveSnapshotHtml = null;
-      resetEventJournal(room);
+      newContentBaseline(room);
       const revision = bumpRevision(room);
       // Send file content WITH the active_file_changed so student never reads stale state
       io.to(roomId).emit('active_file_changed', { fileId, fileName: file.name, html: file.html, currentStep: room.currentStep, revision });
@@ -1511,7 +1537,7 @@ Build a widget that teaches: ${safePrompt}`;
       room.activeFileId = fileId;
       room.lastRunHtml = html;
       room.liveSnapshotHtml = null;
-      resetEventJournal(room);
+      newContentBaseline(room);
       const revision = bumpRevision(room);
       broadcastFullState(roomId, room, 'run_preview');
       // Send to everyone (including sender for confirmation)
@@ -2345,14 +2371,16 @@ Build a widget that teaches: ${safePrompt}`;
           // students, so a confused student can point AT the thing they're
           // confused about. Like reactions, they mutate nothing.
           socket.to(roomId).emit('interaction', event);
-        } else if (room.studentInteractionAllowed || (user.name && user.name === room.controlHolderName)) {
-          // Student interactions → everyone EXCEPT the sender. Permitted when
-          // the room-wide interaction toggle is on OR this student holds the
-          // exclusive control grant ("the chalk"). The teacher's iframe
-          // replays them (authoritative sim advances), and other students'
-          // sims replay them too so every instance sees the same event
-          // stream. The sender is excluded (their own sim already applied
-          // the action locally; echoing it back would double-fire).
+        } else if (user.name && user.name === room.controlHolderName) {
+          // SINGLE-WRITER: the lesson sim has exactly one driver at a time.
+          // A student drives ONLY while they hold the control grant ("the
+          // chalk"). The room-wide interaction toggle deliberately does NOT
+          // make students drive the lesson sim — two independent drivers each
+          // roll their own Math.random() in their own order and diverge
+          // instantly (the "she's on a different question" bug). The toggle
+          // still governs whiteboard/annotation collaboration, which needs no
+          // determinism. When a student holds control the teacher becomes a
+          // mirror, so this single stream drives every screen identically.
           journalEvent(room, event);
           socket.to(roomId).emit('interaction', event);
         }
@@ -2371,7 +2399,9 @@ Build a widget that teaches: ${safePrompt}`;
       if (!isMember(room, socket.id)) return;
       const user = room.users.get(socket.id);
       if (user?.role !== 'student') return;
-      if (!room.studentInteractionAllowed && user.name !== room.controlHolderName) return;
+      // Only the control-holder drives the sim, so only their true DOM state
+      // is meaningful to stream up to the teacher.
+      if (user.name !== room.controlHolderName) return;
       if (typeof html !== 'string' || html.length === 0 || html.length > MAX_FILE_SIZE) return;
       // Resolve the current teacher socket (self-healing, mirrors the
       // interaction relay so a stale teacherSocketId can't drop the stream).
@@ -2490,7 +2520,7 @@ Build a widget that teaches: ${safePrompt}`;
       // hand out fresh clones — restoring twice must work.
       room.lastRunHtml = bm.html;
       room.liveSnapshotHtml = null;
-      resetEventJournal(room);
+      newContentBaseline(room);
       room.whiteboard = structuredClone(bm.whiteboard);
       room.annotations = structuredClone(bm.annotations);
       room.currentStep = bm.currentStep;

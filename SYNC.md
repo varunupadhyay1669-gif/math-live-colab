@@ -80,6 +80,36 @@ Capped at 400 events; on overflow replay is disabled until the next
 baseline (a partial replay would diverge worse than none) and effectiveHtml
 falls back to the snapshot.
 
+### 1.36 Determinism: shared seed + single writer (non-deterministic sims)
+Replay only keeps screens in lockstep if every sim is DETERMINISTIC. Two
+things guarantee that:
+
+**Shared RNG seed.** `injectedSyncScript` overrides `Math.random` with a
+seeded PRNG. The seed is SERVER-ISSUED (`room.randomSeed`, canonical,
+persisted), regenerated on each content baseline (`newContentBaseline`), and
+baked into the script at blob-build time via `seededSyncScript(seed)` — so
+it's a literal constant present before any sim code runs. The teacher and
+every student inject the SAME seed → identical `Math.random()` sequences.
+Never inject `injectedSyncScript` raw (it carries a placeholder that is
+invalid JS); always go through `seededSyncScript`.
+
+**Single writer.** The lesson sim has exactly ONE driver at a time:
+- teacher by default;
+- the control-holder student when the chalk is handed over (the teacher then
+  becomes a MIRROR — its local sim input is blocked, it replays the holder).
+A non-holder student NEVER drives the lesson sim, even with the room-wide
+interaction toggle on (two independent drivers each roll their own
+`Math.random()` in their own order and diverge instantly). The toggle still
+governs whiteboard/annotation collaboration, which needs no determinism.
+Server enforces this: student `interaction` and `student_state` relay only
+when `user.name === room.controlHolderName`. Clients gate the iframe input
+filter on `canDrive` (student: `hasControl`; teacher: `!controlHolderName`).
+
+Together: same seed + single ordered writer ⇒ every screen renders the
+identical state, including random quizzes — verified end-to-end (a student's
+injected seed == the server seed, and its rendered question sequence matches
+the PRNG prediction exactly).
+
 ### 1.4 Lesson Time Machine
 `bookmark_create` captures canonical state (HTML + whiteboard + annotations +
 step + zoom; cap 8, FIFO, persisted, deep-copied). `bookmark_restore` rewinds

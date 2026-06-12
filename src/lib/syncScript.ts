@@ -107,7 +107,17 @@ export const injectedSyncScript = `
     }
 
     // ── Deterministic Randomness ──
+    // The seed is the lynchpin of syncing non-deterministic sims (a quiz that
+    // rolls a random question, a sim that scatters particles). Every screen
+    // MUST seed identically, BEFORE the sim's own scripts run, or the very
+    // first Math.random() draw diverges. The server issues ONE seed per
+    // lesson baseline and the parent injects it here at blob-build time
+    // (replacing the placeholder below) — so it's a literal constant present
+    // synchronously when this script executes, ahead of the sim. When no seed
+    // is injected (legacy / 0) we fall back to a body-text hash, which is only
+    // approximately stable.
     (function() {
+      var INJECTED_SEED = __MATHSLIVE_SEED__;
       function hashCode(str) {
         var hash = 0;
         for (var i = 0; i < str.length; i++) {
@@ -125,7 +135,9 @@ export const injectedSyncScript = `
       }
 
       var seed;
-      if (document.readyState === 'loading') {
+      if (typeof INJECTED_SEED === 'number' && INJECTED_SEED > 0) {
+        seed = INJECTED_SEED; // server-shared, identical on every screen
+      } else if (document.readyState === 'loading') {
         seed = 12345;
         document.addEventListener('DOMContentLoaded', function() {
           seed = getStableSeed();
@@ -924,3 +936,13 @@ export const injectedSyncScript = `
   })();
 </script>
 `;
+
+// Bake the server-issued deterministic seed into the script at blob-build
+// time. The raw template carries a placeholder that is INVALID JS on its own,
+// so always build the injected script through this — never inject
+// `injectedSyncScript` directly. seed 0/absent → the script falls back to a
+// body-text hash.
+export function seededSyncScript(seed: number | null | undefined): string {
+  const n = typeof seed === 'number' && Number.isFinite(seed) && seed > 0 ? Math.floor(seed) : 0;
+  return injectedSyncScript.replace('__MATHSLIVE_SEED__', String(n));
+}

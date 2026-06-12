@@ -192,21 +192,26 @@ async function run() {
   assert(canvasState && canvasState.liveSnapshotHtml === null, 'hasCanvas snapshot NOT stored as liveSnapshotHtml', `liveSnapshotHtml=${String(canvasState?.liveSnapshotHtml).slice(0, 60)}`);
   assert(canvasState && canvasState.effectiveHtml && !canvasState.effectiveHtml.includes('EMPTY SHELL'), 'effectiveHtml falls back to pristine source for canvas sims', String(canvasState?.effectiveHtml).slice(0, 60));
 
-  // ── Test H: interactive student events broadcast to other students, not sender ──
-  console.log('Test H: student interaction broadcast (interactive mode)');
-  t2.emit('toggle_student_interaction', { roomId: ROOM2, allowed: true });
-  await delay(250);
+  // ── Test H: the control-HOLDER's clicks drive teacher + other students, not the sender ──
+  // (Single-writer: a non-holder never drives even with the interaction toggle
+  // on — that's Test R. Here we grant control and confirm the one driver
+  // reaches everyone else.)
+  console.log('Test H: control-holder drives teacher + other students (not sender)');
   const s3 = track(connect()); await waitFor(s3, 'connect');
   s3.emit('join_room', { roomId: ROOM2, userName: 'Dee', role: 'student' });
   await waitFor(s3, 'room_state').catch(() => {});
+  t2.emit('grant_control', { roomId: ROOM2, holderName: 'Cy' }); // Cy = s2
+  await delay(250);
   const otherGets = waitFor(s3, 'interaction', { match: p => p?.type === 'SYNC_CLICK' });
   const teacherGets = waitFor(t2, 'interaction', { match: p => p?.type === 'SYNC_CLICK' });
   const senderEcho = expectNo(s2, 'interaction', 900);
   s2.emit('interaction', { roomId: ROOM2, event: { type: 'SYNC_CLICK', path: '#btn', clientX: 0.5, clientY: 0.5 } });
-  await otherGets.then(() => ok('other student receives the click')).catch(e => bad('other student receives the click', e.message));
-  await teacherGets.then(() => ok('teacher receives the click')).catch(e => bad('teacher receives the click', e.message));
+  await otherGets.then(() => ok('other student receives the holder click')).catch(e => bad('other student receives the holder click', e.message));
+  await teacherGets.then(() => ok('teacher receives the holder click')).catch(e => bad('teacher receives the holder click', e.message));
   const echo = await senderEcho;
   assert(echo === null || echo?.type !== 'SYNC_CLICK', 'sender does NOT get their own click echoed', JSON.stringify(echo)?.slice(0, 80));
+  t2.emit('grant_control', { roomId: ROOM2, holderName: null }); // revoke for later tests
+  await delay(150);
 
   // ── Test I: control handoff lets a non-interactive student drive ──
   console.log('Test I: control grant lets one student drive (toggle off)');
@@ -352,6 +357,52 @@ async function run() {
   await kicked.then(() => ok('same-name join kicks the old socket (dedupe intact)')).catch(e => bad('same-name dedupe', e.message));
   const rp6 = await jsReplay2.catch(() => null);
   assert(rp6 && rp6.events.length === 3, 'rejoined tab gets the full journal (client seq-filter decides what to apply)', `events=${rp6 && rp6.events.length}`);
+
+  // ── Test Q: shared deterministic RNG seed in canonical state ──
+  console.log('Test Q: shared random seed (stable per lesson, fresh per upload)');
+  const ROOM6 = 'vseed' + Math.floor(Date.now() % 100000);
+  const t6 = track(connect()); await waitFor(t6, 'connect');
+  t6.emit('join_room', { roomId: ROOM6, userName: 'SeedT', role: 'teacher' });
+  await waitFor(t6, 'room_state').catch(() => {});
+  t6.emit('upload_file', { roomId: ROOM6, file: { id: 'sd1', name: 'S', html: '<!doctype html><body>seed</body>', uploadedAt: Date.now() } });
+  const tState = await waitFor(t6, 'sync_full_state', { match: p => typeof p?.randomSeed === 'number' && p.randomSeed > 0 }).catch(() => null);
+  assert(tState && tState.randomSeed > 0, 'upload issues a positive shared seed', `seed=${tState && tState.randomSeed}`);
+  const seed1 = tState.randomSeed;
+  // A late joiner sees the SAME seed (so its sim draws identically)
+  const sSeed = track(connect()); await waitFor(sSeed, 'connect');
+  const sState = waitFor(sSeed, 'session_state', { match: p => typeof p?.randomSeed === 'number' });
+  sSeed.emit('join_room', { roomId: ROOM6, userName: 'SeedKid', role: 'student' });
+  const seedState = await sState.catch(() => null);
+  assert(seedState && seedState.randomSeed === seed1, 'student receives the identical seed', `teacher=${seed1} student=${seedState && seedState.randomSeed}`);
+  // A new lesson upload reseeds (fresh randomness per lesson)
+  const reseed = waitFor(t6, 'sync_full_state', { match: p => typeof p?.randomSeed === 'number' && p.randomSeed !== seed1 });
+  t6.emit('upload_file', { roomId: ROOM6, file: { id: 'sd2', name: 'S2', html: '<!doctype html><body>seed2</body>', uploadedAt: Date.now() } });
+  await reseed.then(() => ok('a new lesson upload issues a fresh seed')).catch(e => bad('new upload reseeds', e.message));
+
+  // ── Test R: single-writer — only the control-holder drives the sim ──
+  console.log('Test R: only the control-holder drives the lesson sim');
+  const ROOM7 = 'vsw' + Math.floor(Date.now() % 100000);
+  const t7 = track(connect()); await waitFor(t7, 'connect');
+  t7.emit('join_room', { roomId: ROOM7, userName: 'SwT', role: 'teacher' });
+  await waitFor(t7, 'room_state').catch(() => {});
+  const swStu = track(connect()); await waitFor(swStu, 'connect');
+  swStu.emit('join_room', { roomId: ROOM7, userName: 'SwKid', role: 'student' });
+  await waitFor(swStu, 'room_state').catch(() => {});
+  // Even with the global interaction toggle ON, a non-holder student's sim
+  // click must NOT be relayed (single-writer — would diverge a random sim).
+  t7.emit('toggle_student_interaction', { roomId: ROOM7, allowed: true });
+  await delay(200);
+  const noDrive = expectNo(t7, 'interaction', 800);
+  swStu.emit('interaction', { roomId: ROOM7, event: { type: 'SYNC_CLICK', path: '#x' } });
+  const nd = await noDrive;
+  assert(nd === null || nd?.type !== 'SYNC_CLICK', 'interactive (non-holder) student does NOT drive the sim', JSON.stringify(nd)?.slice(0, 60));
+  // Grant control → now her clicks drive.
+  await waitFor(swStu, 'control_changed', { match: p => p.holderName === 'SwKid', timeout: 3000 }).catch(() => {});
+  t7.emit('grant_control', { roomId: ROOM7, holderName: 'SwKid' });
+  await delay(250);
+  const drives = waitFor(t7, 'interaction', { match: p => p?.type === 'SYNC_CLICK' });
+  swStu.emit('interaction', { roomId: ROOM7, event: { type: 'SYNC_CLICK', path: '#y' } });
+  await drives.then(() => ok('the control-holder DOES drive the sim')).catch(e => bad('control-holder drives', e.message));
 
   console.log(`\nRESULT: ${passed} passed, ${failed} failed`);
   for (const s of sockets) { try { s.close(); } catch {} }
