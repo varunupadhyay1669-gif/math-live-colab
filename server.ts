@@ -178,8 +178,19 @@ async function startServer() {
   const PORT = parseInt(process.env.PORT || '3000', 10);
 
   const httpServer = createServer(app);
+  // CORS: open by default (same-origin serving means the browser never
+  // actually needs cross-origin socket access), lockable for production by
+  // setting ALLOWED_ORIGINS to a comma-separated list of exact origins,
+  // e.g. ALLOWED_ORIGINS=https://math-live-colab.onrender.com
+  // This closes the DEPLOY.md production-checklist item without changing
+  // behaviour for anyone who hasn't set the variable.
+  const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || '')
+    .split(',').map(s => s.trim()).filter(Boolean);
+  if (ALLOWED_ORIGINS.length > 0) {
+    console.log(`🔐 Socket CORS restricted to: ${ALLOWED_ORIGINS.join(', ')}`);
+  }
   const io = new Server(httpServer, {
-    cors: { origin: '*' },
+    cors: { origin: ALLOWED_ORIGINS.length > 0 ? ALLOWED_ORIGINS : '*' },
     maxHttpBufferSize: 5e6, // 5MB for large HTML files
     // AUTONOMOUS: Survive backgrounded tabs.
     // Browsers heavily throttle setInterval/setTimeout (and therefore

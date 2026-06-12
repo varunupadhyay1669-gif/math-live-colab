@@ -110,14 +110,14 @@ Then point your domain at the server and front it with Caddy/Nginx for HTTPS.
 - [ ] Persistent volume mounted at `.rooms/` if you want sessions to survive
       restarts (optional).
 - [ ] `PORT` env var respected — server reads `process.env.PORT`.
-- [ ] CORS — `server.ts` currently uses `cors: { origin: '*' }`. Tighten this
-      to your real domain before going to production:
+- [ ] CORS — open (`*`) by default. To lock it to your real domain, set the
+      env var (no code change needed):
 
-      ```ts
-      const io = new Server(httpServer, {
-        cors: { origin: ['https://yourdomain.com'] },
-      });
       ```
+      ALLOWED_ORIGINS=https://yourdomain.com
+      ```
+
+      Comma-separate multiple origins. Unset keeps the open default.
 
 ---
 
