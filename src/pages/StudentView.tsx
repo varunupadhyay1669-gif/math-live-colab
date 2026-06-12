@@ -82,7 +82,7 @@ export default function StudentView() {
   const reactionIdRef = useRef(0);
 
   // ── Quiz ──
-  const [quizModal, setQuizModal] = useState<{ question: string } | null>(null);
+  const [quizModal, setQuizModal] = useState<{ question: string; options?: string[] } | null>(null);
   const [quizAnswer, setQuizAnswer] = useState("");
   const [quizSubmitted, setQuizSubmitted] = useState(false);
 
@@ -535,8 +535,9 @@ export default function StudentView() {
       setTimeout(() => setReactions(prev => prev.filter(r => r.id !== id)), 3000);
     });
 
-    newSocket.on("quiz", ({ question }: { question: string }) => {
-      setQuizModal({ question });
+    newSocket.on("quiz", ({ question, options }: { question: string; options?: string[] }) => {
+      const validOptions = Array.isArray(options) ? options.filter(o => typeof o === 'string' && o.trim()) : [];
+      setQuizModal({ question, options: validOptions.length >= 2 ? validOptions : undefined });
       setQuizAnswer("");
       setQuizSubmitted(false);
       showNotification("🎯 You have a question from your teacher!");
@@ -1039,6 +1040,15 @@ export default function StudentView() {
   const submitQuizAnswer = () => {
     if (!socket || !quizAnswer.trim()) return;
     socket.emit("quiz_answer", { roomId, answer: quizAnswer.trim(), studentName });
+    setQuizSubmitted(true);
+    sounds.success();
+  };
+
+  // Multiple-choice path: tapping a choice submits it directly.
+  const submitQuizChoice = (choice: string) => {
+    if (!socket) return;
+    socket.emit("quiz_answer", { roomId, answer: choice, studentName });
+    setQuizAnswer(choice);
     setQuizSubmitted(true);
     sounds.success();
   };
@@ -1581,6 +1591,24 @@ export default function StudentView() {
                 </p>
               </div>
               {!quizSubmitted ? (
+                quizModal.options ? (
+                  <>
+                    {/* Multiple choice — one tap answers. */}
+                    <div className="flex flex-col gap-2 mb-4">
+                      {quizModal.options.map((opt, i) => (
+                        <button key={i} onClick={() => submitQuizChoice(opt)}
+                          className="btn-secondary w-full text-left"
+                          style={{ justifyContent: 'flex-start', padding: '12px 16px', fontSize: 15 }}>
+                          <span style={{ fontWeight: 800, color: 'var(--accent-indigo)', marginRight: 10 }}>
+                            {String.fromCharCode(65 + i)}
+                          </span>
+                          {opt}
+                        </button>
+                      ))}
+                    </div>
+                    <button onClick={() => setQuizModal(null)} className="btn-secondary w-full">Skip</button>
+                  </>
+                ) : (
                 <>
                   <textarea
                     value={quizAnswer}
@@ -1598,6 +1626,7 @@ export default function StudentView() {
                     </button>
                   </div>
                 </>
+                )
               ) : (
                 <div className="text-center py-4">
                   <div className="text-4xl mb-2 animate-bounce-in">✅</div>

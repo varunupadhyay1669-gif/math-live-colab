@@ -4,6 +4,7 @@ import { useParams, useNavigate, useSearchParams } from "react-router-dom";
 import { io, Socket } from "socket.io-client";
 import { injectedSyncScript } from "../lib/syncScript";
 import { stepLockScript } from "../lib/stepLockScript";
+import { DEMO_LESSON_HTML, DEMO_LESSON_NAME } from "../lib/demoLesson";
 import { sessionRecorder } from "../lib/sessionRecorder";
 import { sounds } from "../lib/sounds";
 import { savedBoards, templates } from "../lib/prefs";
@@ -156,6 +157,9 @@ export default function Room() {
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [showQuizModal, setShowQuizModal] = useState(false);
   const [quizQuestion, setQuizQuestion] = useState("");
+  // Optional multiple-choice answers. ≥2 non-blank → students get tap-to-answer
+  // buttons; otherwise the quiz stays free-text exactly as before.
+  const [quizOptions, setQuizOptions] = useState<string[]>(["", "", "", ""]);
   const [quizAnswers, setQuizAnswers] = useState<Array<{ answer: string; studentName: string }>>([]);
   const [handRaised, setHandRaised] = useState<{ studentName: string } | null>(null);
   const [reactions, setReactions] = useState<Array<{ id: number; emoji: string }>>([]);
@@ -1708,9 +1712,16 @@ export default function Room() {
 
   const sendQuiz = () => {
     if (!socket || !quizQuestion.trim()) return;
-    socket.emit("send_quiz", { roomId, question: quizQuestion.trim() });
+    const options = quizOptions.map(o => o.trim()).filter(Boolean);
+    socket.emit("send_quiz", {
+      roomId,
+      question: quizQuestion.trim(),
+      // ≥2 choices → multiple-choice on student screens; else free-text.
+      ...(options.length >= 2 ? { options } : {}),
+    });
     setQuizAnswers([]);
     setShowQuizModal(false);
+    setQuizOptions(["", "", "", ""]);
     showNotif("🎯 Quiz sent!");
   };
 
@@ -1762,11 +1773,18 @@ export default function Room() {
     setStepLockEnabled(newEnabled);
     if (!newEnabled) {
       postToIframe({ type: 'DISABLE_STEP_LOCK' });
+      // Tell the SERVER too — room.currentStep is canonical (late joiners and
+      // reconnects hydrate from it). Without this emit, toggling the lock was
+      // local-only and a reconnect snapped everyone back to the stale step.
+      // 999 is the established "no lock / show all" sentinel (stepLockScript
+      // defaults to it; students broadcast it on step_changed).
+      if (socket) socket.emit('set_step', { roomId, step: 999 });
     }
     if (newEnabled) {
       setCurrentStep(1);
       postToIframe({ type: 'GET_MAX_STEP' });
       postToIframe({ type: 'SET_STEP', step: 1 });
+      if (socket) socket.emit('set_step', { roomId, step: 1 });
     }
   };
 
@@ -2699,6 +2717,26 @@ export default function Room() {
                             </svg>
                             Paste snippet
                           </button>
+                          <button
+                            onClick={() => {
+                              if (!socket) return;
+                              const file: FileEntry = {
+                                id: `demo-${Date.now()}`,
+                                name: DEMO_LESSON_NAME,
+                                html: DEMO_LESSON_HTML,
+                                uploadedAt: Date.now(),
+                              };
+                              socket.emit("upload_file", { roomId, file });
+                              showNotif('▶ Demo lesson loaded — try Step Lock, pings and control handoff');
+                            }}
+                            className="ml-mode-card-action ml-mode-card-action-ghost"
+                            title="No file handy? Load the built-in Equivalent Fractions Lab"
+                          >
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                              <polygon points="6 3 20 12 6 21 6 3" />
+                            </svg>
+                            Try the demo lesson
+                          </button>
                         </div>
                       </div>
                     </div>
@@ -2936,7 +2974,18 @@ export default function Room() {
               <h3 className="font-display text-lg font-bold mb-4">🎯 Pop Quiz</h3>
               <textarea value={quizQuestion} onChange={(e) => setQuizQuestion(e.target.value)}
                 placeholder="Type your question... e.g. What is 3/4 + 1/2?"
-                className="input-field mb-4" style={{ minHeight: '90px', resize: 'vertical' }} />
+                className="input-field mb-3" style={{ minHeight: '90px', resize: 'vertical' }} />
+              <div className="text-[10px] font-bold mb-2" style={{ color: 'var(--text-muted)', letterSpacing: '0.05em' }}>
+                CHOICES (OPTIONAL — FILL 2+ FOR MULTIPLE CHOICE, LEAVE BLANK FOR FREE TEXT)
+              </div>
+              <div className="grid grid-cols-2 gap-2 mb-4">
+                {quizOptions.map((opt, i) => (
+                  <input key={i} value={opt}
+                    onChange={(e) => setQuizOptions(prev => prev.map((o, j) => j === i ? e.target.value : o))}
+                    placeholder={`${String.fromCharCode(65 + i)})`}
+                    className="input-field" style={{ height: 36, fontSize: 13 }} />
+                ))}
+              </div>
               {quizAnswers.length > 0 && (
                 <div className="mb-4 p-3 rounded-xl" style={{ background: 'var(--bg-surface)' }}>
                   <div className="text-[10px] font-bold mb-2" style={{ color: 'var(--text-muted)', letterSpacing: '0.05em' }}>ANSWERS RECEIVED</div>

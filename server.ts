@@ -1717,7 +1717,16 @@ Build a widget that teaches: ${safePrompt}`;
       if (!requireTeacher(room, socket.id)) return;
       const safeQuestion = sanitizeString(question, MAX_QUIZ_QUESTION_LENGTH);
       if (!safeQuestion) return;
-      io.to(roomId).emit('quiz', { question: safeQuestion, options, senderId: socket.id });
+      // Optional multiple-choice: sanitize each option, drop blanks, cap at 6.
+      // Fewer than 2 survivors → free-text quiz (no options field).
+      const safeOptions = Array.isArray(options)
+        ? options.slice(0, 6).map(o => sanitizeString(o, 200)).filter(Boolean)
+        : [];
+      io.to(roomId).emit('quiz', {
+        question: safeQuestion,
+        ...(safeOptions.length >= 2 ? { options: safeOptions } : {}),
+        senderId: socket.id,
+      });
     });
 
     socket.on('quiz_answer', ({ roomId, answer, studentName }: { roomId: string; answer: string; studentName: string }) => {
