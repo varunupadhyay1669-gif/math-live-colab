@@ -897,6 +897,18 @@ async function startServer() {
     return !!room.studentInteractionAllowed;
   }
 
+  // May this socket SKETCH over the lesson (annotation overlay)? Teacher
+  // always; a student only when interaction is enabled OR they hold control.
+  // A view-only student is a pure viewer — strokes are rejected so they can't
+  // scribble on everyone's screen via devtools.
+  function requireTeacherOrAnnotator(room: RoomData | undefined, socketId: string): room is RoomData {
+    if (!room || !room.users.has(socketId)) return false;
+    if (room.teacherSocketId === socketId) return true;
+    if (room.studentInteractionAllowed) return true;
+    const u = room.users.get(socketId);
+    return !!(u && u.name && u.name === room.controlHolderName);
+  }
+
   function bumpRevision(room: RoomData): number {
     room.revision += 1;
     return room.revision;
@@ -1827,7 +1839,10 @@ Build a widget that teaches: ${safePrompt}`;
     const MAX_ANNOTATIONS = 2000;
     socket.on('draw_stroke', ({ roomId, ...rest }: any) => {
       const room = rooms.get(roomId);
-      if (!isMember(room, socket.id)) return;
+      // Sketching the lesson is gated: teacher always, students only when
+      // interaction is enabled or they hold control. A view-only student is a
+      // pure viewer (the toolbar is also hidden client-side).
+      if (!requireTeacherOrAnnotator(room, socket.id)) return;
       if (!rest || !Array.isArray(rest.points) || rest.points.length === 0) return;
       // Validate every point — one bad coord would corrupt the persisted state
       for (const p of rest.points) {

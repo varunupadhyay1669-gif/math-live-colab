@@ -199,24 +199,30 @@ export default function StudentView() {
   const canDrive = hasControl;
   const canDriveRef = useRef(false);
   useEffect(() => { canDriveRef.current = canDrive; }, [canDrive]);
+  // Whether the student may SKETCH over the lesson. When the teacher is just
+  // presenting (view-only), the student is a pure viewer — no button presses
+  // AND no drawing. Sketching is unlocked only when the teacher enables
+  // interaction OR hands this student control.
+  const canAnnotate = interactionAllowed || hasControl;
 
   // â”€â”€ Student Annotation Tools â”€â”€
-  // AUTONOMOUS: Students can scribble on the HTML overlay the same
-  // way the teacher does. The server's `draw_stroke` handler is
-  // already permissive (no requireTeacher gate), so we only need to
-  // wire up the UI here. Default off so taps still fall through to
-  // the simulation content beneath; the student opts in via the
-  // floating toolbar.
-  //
-  // Independent of `interactionAllowed`: that gate controls whether
-  // clicks reach the iframe content; annotations live in a layer
-  // ABOVE the content and are always permissible.
-  //
-  // Pen colour defaults to rose so the student's strokes are visually
-  // distinct from the teacher's default indigo â€” a classroom-friendly
-  // convention that makes "who drew this" obvious at a glance.
+  // Students can scribble on the HTML overlay — but ONLY when sketching is
+  // unlocked (canAnnotate: interactive mode or this student holds control).
+  // When the teacher is presenting (view-only) the student is a pure viewer:
+  // the sketch toolbar is hidden, the overlay is non-interactive, and the
+  // server rejects stray strokes. Pen colour defaults to rose so a student's
+  // strokes are visually distinct from the teacher's indigo.
   const [studentDrawMode, setStudentDrawMode] = useState(false);
   const [studentEraser, setStudentEraser] = useState<'off' | 'stroke'>('off');
+  // The moment sketching is revoked (teacher switches to view-only / takes
+  // back control), drop any active pen/eraser so a mid-draw student stops
+  // immediately instead of finishing the current stroke.
+  useEffect(() => {
+    if (!canAnnotate) {
+      setStudentDrawMode(false);
+      setStudentEraser('off');
+    }
+  }, [canAnnotate]);
   const STUDENT_COLORS = ['#F43F5E', '#F59E0B', '#10B981', '#0EA5E9', '#8B5CF6', '#0F172A'];
   const [studentPenColor, setStudentPenColor] = useState<string>(STUDENT_COLORS[0]);
 
@@ -1451,7 +1457,7 @@ export default function StudentView() {
               The toolbar lets the student opt in to drawing; until
               they activate a tool, taps still pass through to the
               simulation. */}
-          {!whiteboardMode && !showTempContent && iframeUrl && (
+          {!whiteboardMode && !showTempContent && iframeUrl && canAnnotate && (
             <div
               role="toolbar"
               aria-label="Annotation tools"
@@ -1559,7 +1565,7 @@ export default function StudentView() {
             eraserMode={studentEraser}
             eraserWidth={22}
             iframeRef={iframeRef}
-            interactive={studentDrawMode || studentEraser !== 'off'}
+            interactive={canAnnotate && (studentDrawMode || studentEraser !== 'off')}
             laserPointer={laserPointer}
             initialAnnotations={annotations}
           />

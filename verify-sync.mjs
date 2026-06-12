@@ -404,6 +404,28 @@ async function run() {
   swStu.emit('interaction', { roomId: ROOM7, event: { type: 'SYNC_CLICK', path: '#y' } });
   await drives.then(() => ok('the control-holder DOES drive the sim')).catch(e => bad('control-holder drives', e.message));
 
+  // ── Test S: view-only students cannot SKETCH; interactive/holder can ──
+  console.log('Test S: sketching gated to interactive / control-holder');
+  const ROOM8 = 'vsk' + Math.floor(Date.now() % 100000);
+  const t8 = track(connect()); await waitFor(t8, 'connect');
+  t8.emit('join_room', { roomId: ROOM8, userName: 'SkT', role: 'teacher' });
+  await waitFor(t8, 'room_state').catch(() => {});
+  const skStu = track(connect()); await waitFor(skStu, 'connect');
+  skStu.emit('join_room', { roomId: ROOM8, userName: 'SkKid', role: 'student' });
+  await waitFor(skStu, 'room_state').catch(() => {});
+  const stroke = { roomId: ROOM8, id: 'k1', points: [{ x: 0.1, y: 0.1 }, { x: 0.2, y: 0.2 }], color: '#f00', width: 3, kind: 'pen' };
+  // view-only by default → the teacher must NOT receive the student's stroke
+  const noStroke = expectNo(t8, 'draw_stroke', 800);
+  skStu.emit('draw_stroke', stroke);
+  const ns = await noStroke;
+  assert(ns === null, 'view-only student stroke is rejected (no sketching)', JSON.stringify(ns)?.slice(0, 60));
+  // enable interaction → now the student's stroke relays
+  t8.emit('toggle_student_interaction', { roomId: ROOM8, allowed: true });
+  await delay(250);
+  const gotStroke = waitFor(t8, 'draw_stroke', { match: p => p?.id === 'k2' });
+  skStu.emit('draw_stroke', { ...stroke, id: 'k2' });
+  await gotStroke.then(() => ok('interactive student CAN sketch (stroke relays)')).catch(e => bad('interactive student can sketch', e.message));
+
   console.log(`\nRESULT: ${passed} passed, ${failed} failed`);
   for (const s of sockets) { try { s.close(); } catch {} }
   process.exit(failed === 0 ? 0 : 1);
