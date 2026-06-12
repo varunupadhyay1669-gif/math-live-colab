@@ -314,6 +314,45 @@ async function run() {
   const nr = await noReplay;
   assert(nr === null, 'no replay after run_preview baseline (journal cleared)', JSON.stringify(nr)?.slice(0, 60));
 
+  // ── Test O: journal SURVIVES passive snapshots; joiners boot PRISTINE ──
+  console.log('Test O: journal survives snapshots; pristine boot when replayable');
+  const ROOM5 = 'vjs' + Math.floor(Date.now() % 100000);
+  const t5 = track(connect()); await waitFor(t5, 'connect');
+  t5.emit('join_room', { roomId: ROOM5, userName: 'JsT', role: 'teacher' });
+  await waitFor(t5, 'room_state').catch(() => {});
+  const PRISTINE = '<!doctype html><body><div id="s">WELCOME</div><button id="n">next</button></body>';
+  t5.emit('upload_file', { roomId: ROOM5, file: { id: 'js1', name: 'JS', html: PRISTINE, uploadedAt: Date.now() } });
+  await delay(250);
+  t5.emit('interaction', { roomId: ROOM5, event: { type: 'SYNC_CLICK', path: '#n' } });
+  t5.emit('interaction', { roomId: ROOM5, event: { type: 'SYNC_CLICK', path: '#n' } });
+  await delay(250);
+  // Passive heartbeat snapshot lands mid-lesson (DOM shows QUESTION 2)…
+  t5.emit('dom_snapshot', { roomId: ROOM5, html: '<!doctype html><body><div id="s">QUESTION 2 SNAPSHOT</div></body>', requestId: `snap-hb-${Date.now()}` });
+  await delay(250);
+  // …and one more click AFTER the snapshot.
+  t5.emit('interaction', { roomId: ROOM5, event: { type: 'SYNC_CLICK', path: '#n' } });
+  await delay(250);
+  const sJs = track(connect()); await waitFor(sJs, 'connect');
+  const jsState = waitFor(sJs, 'session_state', { match: p => !!p?.effectiveHtml });
+  const jsReplay = waitFor(sJs, 'interaction_replay');
+  sJs.emit('join_room', { roomId: ROOM5, userName: 'JsKid', role: 'student' });
+  const st5 = await jsState.catch(() => null);
+  const rp5 = await jsReplay.catch(() => null);
+  assert(st5 && st5.effectiveHtml.includes('WELCOME') && !st5.effectiveHtml.includes('SNAPSHOT'),
+    'joiner boots the PRISTINE lesson, not the DOM snapshot', String(st5?.effectiveHtml).slice(0, 60));
+  assert(rp5 && rp5.events.length === 3, 'journal survived the snapshot — all 3 clicks replay', `events=${rp5 && rp5.events.length}`);
+  assert(rp5 && rp5.events.every(e => typeof e.serverSeq === 'number'), 'replay events carry serverSeq for client gap-filtering', JSON.stringify(rp5?.events?.[0])?.slice(0, 80));
+
+  // ── Test P: rejoin after same-name kick still receives the journal ──
+  console.log('Test P: kicked-and-rejoined student receives the journal again');
+  const sJs2 = track(connect()); await waitFor(sJs2, 'connect');
+  const kicked = waitFor(sJs, 'session_taken_over', { timeout: 5000 });
+  const jsReplay2 = waitFor(sJs2, 'interaction_replay');
+  sJs2.emit('join_room', { roomId: ROOM5, userName: 'JsKid', role: 'student' }); // same name → dedupe kicks sJs
+  await kicked.then(() => ok('same-name join kicks the old socket (dedupe intact)')).catch(e => bad('same-name dedupe', e.message));
+  const rp6 = await jsReplay2.catch(() => null);
+  assert(rp6 && rp6.events.length === 3, 'rejoined tab gets the full journal (client seq-filter decides what to apply)', `events=${rp6 && rp6.events.length}`);
+
   console.log(`\nRESULT: ${passed} passed, ${failed} failed`);
   for (const s of sockets) { try { s.close(); } catch {} }
   process.exit(failed === 0 ? 0 : 1);

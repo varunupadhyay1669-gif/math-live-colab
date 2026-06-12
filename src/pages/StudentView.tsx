@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useRef, useCallback, useMemo } from "react";
+﻿import React, { useEffect, useState, useRef, useCallback, useMemo } from "react";
 import { useParams, useNavigate, useSearchParams } from "react-router-dom";
 import { io, Socket } from "socket.io-client";
 import { injectedSyncScript } from "../lib/syncScript";
@@ -8,7 +8,7 @@ import { setupAttentionDetection } from "../lib/attentionDetector";
 import { sounds } from "../lib/sounds";
 import { LESSON_IFRAME_SANDBOX, LESSON_IFRAME_ALLOW } from "../lib/iframeAttrs";
 
-// ── Components ──
+// â”€â”€ Components â”€â”€
 import ChatPanel from "../components/ChatPanel";
 import StudentReactions from "../components/StudentReactions";
 import PausedOverlay from "../components/PausedOverlay";
@@ -21,7 +21,7 @@ import ConnectionStatus from "../components/ConnectionStatus";
 import Leaderboard from "../components/Leaderboard";
 import Whiteboard from "../components/Whiteboard";
 
-// ── Types ──
+// â”€â”€ Types â”€â”€
 interface FileEntry {
   id: string;
   name: string;
@@ -58,7 +58,7 @@ export default function StudentView() {
   const [searchParams] = useSearchParams();
   const studentName = searchParams.get('name') || 'Student';
 
-  // ── Core State ──
+  // â”€â”€ Core State â”€â”€
   const [socket, setSocket] = useState<Socket | null>(null);
   const [connected, setConnected] = useState(false);
   const [iframeUrl, setIframeUrl] = useState("");
@@ -73,26 +73,26 @@ export default function StudentView() {
   const [whiteboardSyncEnabled, setWhiteboardSyncEnabled] = useState(true);
   const [peerSyncEnabled, setPeerSyncEnabled] = useState(true);
 
-  // ── Chat ──
+  // â”€â”€ Chat â”€â”€
   const [chatOpen, setChatOpen] = useState(false);
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [unreadChat, setUnreadChat] = useState(0);
 
-  // ── Reactions ──
+  // â”€â”€ Reactions â”€â”€
   const [reactions, setReactions] = useState<Array<{ id: number; emoji: string; x: number }>>([]);
   const reactionIdRef = useRef(0);
 
-  // ── Quiz ──
+  // â”€â”€ Quiz â”€â”€
   const [quizModal, setQuizModal] = useState<{ question: string; options?: string[] } | null>(null);
   const [quizAnswer, setQuizAnswer] = useState("");
   const [quizSubmitted, setQuizSubmitted] = useState(false);
 
-  // ── Misc ──
+  // â”€â”€ Misc â”€â”€
   const [notification, setNotification] = useState("");
   const [files, setFiles] = useState<FileEntry[]>([]);
   const [activeFileId, setActiveFileId] = useState<string | null>(null);
 
-  // ── Engagement ──
+  // â”€â”€ Engagement â”€â”€
   const [laserPointer, setLaserPointer] = useState<{ x: number; y: number; active: boolean }>({ x: 0, y: 0, active: false });
   const [challengeTimer, setChallengeTimer] = useState<{ seconds: number; remaining: number } | null>(null);
   const challengeTimerRef = useRef<ReturnType<typeof setInterval>>();
@@ -100,11 +100,11 @@ export default function StudentView() {
   const [celebrationType, setCelebrationType] = useState<'confetti' | 'fireworks' | 'stars'>('confetti');
   const [spotlight, setSpotlight] = useState<{ x: number; y: number; active: boolean } | null>(null);
 
-  // ── Step-Lock ──
+  // â”€â”€ Step-Lock â”€â”€
   const [currentStep, setCurrentStep] = useState(999);
   const [gateModal, setGateModal] = useState<{ step: number; gate: GateData } | null>(null);
   // Checkpoint gates by step (question + options; correctIndex is never sent to
-  // students — graded server-side). Hydrated from session_state and gate_added.
+  // students â€” graded server-side). Hydrated from session_state and gate_added.
   const [gates, setGates] = useState<Record<number, GateData>>({});
   // Steps we've already auto-opened the gate for, so reaching the same gated
   // step again (or re-hydration) doesn't keep re-popping the modal.
@@ -114,7 +114,7 @@ export default function StudentView() {
   const gateModalRef = useRef<{ step: number; gate: GateData } | null>(null);
   useEffect(() => { gateModalRef.current = gateModal; }, [gateModal]);
   // Correctly-answered gates survive a page refresh via sessionStorage (per
-  // room, per tab) — without this the modal re-opened on every reload because
+  // room, per tab) â€” without this the modal re-opened on every reload because
   // currentStep + gates re-hydrate identically. Server-side anti-farm already
   // makes re-answering worthless; this removes the UX annoyance.
   const gateDoneKey = `mathlive:gatesDone:${roomId ?? ''}`;
@@ -122,16 +122,16 @@ export default function StudentView() {
     try { const raw = sessionStorage.getItem(gateDoneKey); const arr = raw ? JSON.parse(raw) : []; return Array.isArray(arr) ? arr.filter((n: unknown) => typeof n === 'number') : []; } catch { return []; }
   }, [gateDoneKey]);
   const markGateDone = useCallback((step: number) => {
-    try { const next = Array.from(new Set([...readGatesDone(), step])); sessionStorage.setItem(gateDoneKey, JSON.stringify(next)); } catch { /* storage unavailable — modal may re-open after refresh, harmless */ }
+    try { const next = Array.from(new Set([...readGatesDone(), step])); sessionStorage.setItem(gateDoneKey, JSON.stringify(next)); } catch { /* storage unavailable â€” modal may re-open after refresh, harmless */ }
   }, [gateDoneKey, readGatesDone]);
 
-  // ── Scroll Sync ──
+  // â”€â”€ Scroll Sync â”€â”€
   const [scrollSyncEnabled, setScrollSyncEnabled] = useState(true);
 
-  // ── Zoom Sync (read-only; controlled by teacher) ──
+  // â”€â”€ Zoom Sync (read-only; controlled by teacher) â”€â”€
   const [zoomLevel, setZoomLevel] = useState(1);
 
-  // ── Gamification ──
+  // â”€â”€ Gamification â”€â”€
   const [myXp, setMyXp] = useState(0);
   const [myStreak, setMyStreak] = useState(0);
   const [myLevel, setMyLevel] = useState(1);
@@ -140,7 +140,7 @@ export default function StudentView() {
   const [leaderboard, setLeaderboard] = useState<Array<{ studentName: string; xp: number; streak: number }>>([]);
   const [showLeaderboard, setShowLeaderboard] = useState(false);
 
-  // ── Whiteboard ──
+  // â”€â”€ Whiteboard â”€â”€
   const [whiteboardMode, setWhiteboardMode] = useState(false);
   const [whiteboardScrollX, setWhiteboardScrollX] = useState(0);
   const [whiteboardScrollY, setWhiteboardScrollY] = useState(0);
@@ -151,10 +151,10 @@ export default function StudentView() {
   const [annotations, setAnnotations] = useState<Array<{ senderId: string; stroke: any }> | undefined>(undefined);
   const whiteboardRef = useRef<import('../components/Whiteboard').WhiteboardRef>(null);
 
-  // ── Follow Teacher Clicks ──
+  // â”€â”€ Follow Teacher Clicks â”€â”€
   const [followTeacherClicks, setFollowTeacherClicks] = useState(false);
 
-  // ── Temporary Explanation Content ──
+  // â”€â”€ Temporary Explanation Content â”€â”€
   const [tempContent, setTempContent] = useState<{ html: string; name: string } | null>(null);
   const [showTempContent, setShowTempContent] = useState(false);
 
@@ -178,9 +178,9 @@ export default function StudentView() {
     };
   }, [tempContentUrl]);
 
-  // ── Student Interaction Mode ──
+  // â”€â”€ Student Interaction Mode â”€â”€
   const [interactionAllowed, setInteractionAllowed] = useState(false);
-  // ── Control grant ("the chalk") ──
+  // â”€â”€ Control grant ("the chalk") â”€â”€
   // The teacher can hand exclusive drive rights to ONE student. When this
   // student holds it, their interactions drive the shared sim even if the
   // room-wide interaction toggle is off. controlHolderName mirrors the
@@ -192,11 +192,8 @@ export default function StudentView() {
   const canDrive = interactionAllowed || hasControl;
   const canDriveRef = useRef(false);
   useEffect(() => { canDriveRef.current = canDrive; }, [canDrive]);
-  // True when this tab already had a running sim at (re)connect time — used
-  // to skip the event-journal replay on socket-blip reconnects (see connect).
-  const hadContentAtConnectRef = useRef(false);
 
-  // ── Student Annotation Tools ──
+  // â”€â”€ Student Annotation Tools â”€â”€
   // AUTONOMOUS: Students can scribble on the HTML overlay the same
   // way the teacher does. The server's `draw_stroke` handler is
   // already permissive (no requireTeacher gate), so we only need to
@@ -209,29 +206,29 @@ export default function StudentView() {
   // ABOVE the content and are always permissible.
   //
   // Pen colour defaults to rose so the student's strokes are visually
-  // distinct from the teacher's default indigo — a classroom-friendly
+  // distinct from the teacher's default indigo â€” a classroom-friendly
   // convention that makes "who drew this" obvious at a glance.
   const [studentDrawMode, setStudentDrawMode] = useState(false);
   const [studentEraser, setStudentEraser] = useState<'off' | 'stroke'>('off');
   const STUDENT_COLORS = ['#F43F5E', '#F59E0B', '#10B981', '#0EA5E9', '#8B5CF6', '#0F172A'];
   const [studentPenColor, setStudentPenColor] = useState<string>(STUDENT_COLORS[0]);
 
-  // ── Attention Check ──
+  // â”€â”€ Attention Check â”€â”€
   const [attentionCheckModal, setAttentionCheckModal] = useState(false);
   const attentionTimeoutRef = useRef<ReturnType<typeof setTimeout>>();
 
-  // ── Teacher Status ──
+  // â”€â”€ Teacher Status â”€â”€
   const [teacherDisconnected, setTeacherDisconnected] = useState(false);
   const teacherDisconnectedRef = useRef(false);
 
-  // ── Join Error ──
+  // â”€â”€ Join Error â”€â”€
   const [joinError, setJoinError] = useState<string | null>(null);
 
-  // ── Sound ──
+  // â”€â”€ Sound â”€â”€
   // AUTONOMOUS: [ORDER-2 ESSENTIAL] - hydrate from persisted mute pref.
   const [soundMuted, setSoundMuted] = useState(() => sounds.isMuted());
 
-  // ── Iframe readiness ──
+  // â”€â”€ Iframe readiness â”€â”€
   const iframeReadyRef = useRef(false);
   const pendingMessagesRef = useRef<any[]>([]);
   const syncEpochRef = useRef(0);
@@ -245,6 +242,22 @@ export default function StudentView() {
   const currentHtmlRef = useRef('');
   useEffect(() => { interactionAllowedRef.current = interactionAllowed; }, [interactionAllowed]);
   useEffect(() => { currentHtmlRef.current = currentHtml; }, [currentHtml]);
+
+  // THE single entry point for changing the sim's HTML. Dedupe lives here
+  // (identical html â†’ no rebuild, sim instance survives), and when the html
+  // genuinely changes we zero the applied-seq tracker SYNCHRONOUSLY â€” the
+  // tracker belongs to the sim instance, and the next journal replay must
+  // re-live the lesson into the fresh sim from seq 0. Doing this inside the
+  // setter (not a post-render effect) closes the race where a replay
+  // arriving between render and effect would be mis-filtered.
+  const setSimHtml = useCallback((html: string | null | undefined) => {
+    if (typeof html !== 'string' || html.length === 0) return;
+    setCurrentHtml(prev => {
+      if (prev === html) return prev;
+      lastInboundSeqRef.current = 0; // idempotent â€” safe under StrictMode double-invoke
+      return html;
+    });
+  }, []);
 
   const applySessionState = useCallback((state: any) => {
     if (typeof state.revision === 'number') {
@@ -266,12 +279,12 @@ export default function StudentView() {
     // Whiteboard mode (teacher is on the whiteboard surface, not HTML) is
     // server-persisted so a late-joining student lands on the right surface.
     // Without this, a student joining mid-lesson would sit on "Waiting for
-    // teacher" forever — the server has no lastRunHtml to deliver because
+    // teacher" forever â€” the server has no lastRunHtml to deliver because
     // the teacher chose whiteboard instead of uploading HTML.
     if (typeof state.whiteboardMode === 'boolean') setWhiteboardMode(state.whiteboardMode);
     // Temp explanation content: handle BOTH branches explicitly. If the
     // teacher cleared temp content while this student was offline, the
-    // reconnect's session_state arrives with tempContent: null — the old
+    // reconnect's session_state arrives with tempContent: null â€” the old
     // code's `if (state.tempContent)` only handled truthy, so the student
     // stayed stuck on the cleared explanation forever.
     if (state.tempContent) {
@@ -292,13 +305,13 @@ export default function StudentView() {
     if (html) {
       const activeFile = state.files?.find((f: FileEntry) => f.id === state.activeFileId);
       setCurrentFileName(activeFile?.name || 'Simulation');
-      setCurrentHtml(prev => prev === html ? prev : html);
+      setSimHtml(html);
     }
   }, []);
 
   // Auto-open the checkpoint gate when the class reaches a gated step the
   // student hasn't been prompted for yet. This is the trigger that was missing
-  // — gates were created and stored but never shown to students. Reacting to
+  // â€” gates were created and stored but never shown to students. Reacting to
   // currentStep/gates state covers every path (step_changed, gate_added, and
   // session_state hydration on join/reconnect). promptedGatesRef makes it
   // fire once per step so frequent re-hydration doesn't re-pop the modal.
@@ -338,7 +351,7 @@ export default function StudentView() {
           }
         }
       }
-    } catch { /* cross-origin or detached iframe — fall through */ }
+    } catch { /* cross-origin or detached iframe â€” fall through */ }
     return { x: event?.x ?? 0, y: event?.y ?? 0 };
   }, []);
 
@@ -354,10 +367,10 @@ export default function StudentView() {
     const next = !whiteboardSyncEnabled;
     setWhiteboardSyncEnabled(next);
     socket.emit('set_whiteboard_sync', { roomId, enabled: next });
-    showNotification(next ? '📖 Shared view: pan and zoom mirror both sides' : '🔓 Independent view: your canvas moves only for you');
+    showNotification(next ? 'ðŸ“– Shared view: pan and zoom mirror both sides' : 'ðŸ”“ Independent view: your canvas moves only for you');
   };
 
-  // ── Build iframe URL ──
+  // â”€â”€ Build iframe URL â”€â”€
   useEffect(() => {
     if (!currentHtml) { setIframeUrl(""); return; }
     // Mark iframe as not ready while we rebuild it
@@ -377,7 +390,7 @@ export default function StudentView() {
     return () => URL.revokeObjectURL(url);
   }, [currentHtml]);
 
-  // ── Socket Connection ──
+  // â”€â”€ Socket Connection â”€â”€
   useEffect(() => {
     if (!roomId) { navigate("/"); return; }
 
@@ -388,50 +401,51 @@ export default function StudentView() {
 
     newSocket.on("connect", () => {
       setConnected(true);
-      // Reset inbound de-dupe guards on (re)connect — the server's per-room
-      // interactionSeq/revision can restart at 0 after a cold-start while
-      // these refs survive, which would otherwise make us drop every fresh
-      // post-reconnect event as "stale". See the matching note in Room.tsx.
-      lastInboundSeqRef.current = 0;
+      // Revision guard resets on (re)connect: a room recreated after expiry
+      // restarts revisions at 0 and a stale high guard would silently drop
+      // every fresh session_state. Re-applying an identical state is
+      // harmless (hydration is idempotent), so zeroing is safe.
       lastRevisionRef.current = 0;
-      // Event-journal guard: only a tab that had NO sim yet (true late join /
-      // full page load) may apply the server's interaction replay. A socket
-      // blip reconnect keeps the live iframe, whose sim already lived those
-      // events — replaying would double-apply every click.
-      hadContentAtConnectRef.current = !!currentHtmlRef.current;
+      // NOTE: lastInboundSeqRef is deliberately NOT reset here. It tracks the
+      // highest serverSeq THIS SIM INSTANCE has applied â€” that's what lets a
+      // reconnect replay exactly the missed gap and nothing twice. It resets
+      // only when the iframe genuinely rebuilds (new sim instance).
       newSocket.emit("join_room", { roomId, userName: studentName, role: 'student' });
       // Start attention detection
       cleanupAttention = setupAttentionDetection(newSocket, roomId, studentName);
     });
 
-    // ── Event-journal replay (late-join convergence) ──
-    // The server sends the discrete interaction stream recorded since the
-    // baseline we just booted from. Feed it through the queued transport:
-    // messages wait until the fresh iframe fires onLoad, then flush in
-    // order — our sim re-lives the class's clicks and converges, including
-    // canvas/JS-stateful sims that DOM snapshots can't capture.
+    // â”€â”€ Event-journal replay (late-join + reconnect convergence) â”€â”€
+    // The server attaches the full journal (discrete events since the last
+    // content baseline) to every hydration. We apply ONLY events newer than
+    // what this sim instance already lived (serverSeq filter), through the
+    // queued transport â€” so a fresh iframe re-lives the whole lesson, a
+    // kicked-and-reloaded tab catches up exactly, and a tab whose socket
+    // merely blipped replays nothing it already applied.
     newSocket.on("interaction_replay", ({ events }: { events: any[] }) => {
-      if (hadContentAtConnectRef.current) return; // reconnect — sim already lived these
       if (!Array.isArray(events) || events.length === 0) return;
+      let applied = 0;
       for (const ev of events.slice(0, 400)) {
-        if (ev && typeof ev.type === 'string' && ev.type.startsWith('SYNC_')) {
-          postToIframe({ ...ev, type: ev.type.replace('SYNC_', 'REMOTE_') });
-        }
+        if (!ev || typeof ev.type !== 'string' || !ev.type.startsWith('SYNC_')) continue;
+        if (typeof ev.serverSeq !== 'number' || ev.serverSeq <= lastInboundSeqRef.current) continue;
+        lastInboundSeqRef.current = ev.serverSeq;
+        postToIframe({ ...ev, type: ev.type.replace('SYNC_', 'REMOTE_') });
+        applied++;
       }
-      showNotification(`⚡ Catching you up — replayed ${events.length} class steps`);
+      if (applied > 0) showNotification(`âš¡ Catching you up â€” replayed ${applied} class steps`);
     });
 
     newSocket.on("disconnect", () => {
       setConnected(false);
-      showNotification("⚠️ Disconnected. Reconnecting...");
+      showNotification("âš ï¸ Disconnected. Reconnecting...");
     });
 
     newSocket.on("reconnect" as any, () => {
       setConnected(true);
-      lastInboundSeqRef.current = 0;
       lastRevisionRef.current = 0;
+      // lastInboundSeqRef intentionally kept â€” see the connect handler.
       newSocket.emit("join_room", { roomId, userName: studentName, role: 'student' });
-      showNotification("✅ Reconnected!");
+      showNotification("âœ… Reconnected!");
     });
 
     // AUTONOMOUS: The server forcibly disconnected us because another
@@ -441,7 +455,7 @@ export default function StudentView() {
     // ourselves so the auto-reconnect loop doesn't immediately rejoin
     // and kick the user OUT of their good tab.
     newSocket.on("session_taken_over" as any, () => {
-      showNotification("📱 Your session moved to another tab.");
+      showNotification("ðŸ“± Your session moved to another tab.");
       newSocket.io.opts.reconnection = false;
       newSocket.disconnect();
     });
@@ -459,10 +473,10 @@ export default function StudentView() {
       if (state.lastRunHtml) {
         const f = state.files?.find((f: FileEntry) => f.id === state.activeFileId);
         setCurrentFileName(f?.name || 'Simulation');
-        setCurrentHtml(state.lastRunHtml);
+        setSimHtml(state.lastRunHtml);
       } else if (state.activeFileId && state.files) {
         const f = state.files.find((f: FileEntry) => f.id === state.activeFileId);
-        if (f) { setCurrentFileName(f.name); setCurrentHtml(f.html); }
+        if (f) { setCurrentFileName(f.name); setSimHtml(f.html); }
       }
     });
 
@@ -471,7 +485,7 @@ export default function StudentView() {
 
     newSocket.on("file_uploaded", (file: FileEntry) => {
       setFiles(prev => [...prev, file]);
-      showNotification(`📄 Teacher uploaded: ${file.name}`);
+      showNotification(`ðŸ“„ Teacher uploaded: ${file.name}`);
       sounds.join();
     });
 
@@ -486,8 +500,8 @@ export default function StudentView() {
       }
       if (data.html) {
         setCurrentFileName(data.fileName || 'Simulation');
-        // File switch is a genuine reload — update HTML
-        setCurrentHtml(data.html);
+        // File switch is a genuine reload â€” update HTML
+        setSimHtml(data.html);
         showNotification(`Switched to: ${data.fileName || 'new file'}`);
       }
     });
@@ -497,8 +511,8 @@ export default function StudentView() {
         if (revision < lastRevisionRef.current) return;
         lastRevisionRef.current = revision;
       }
-      // Only update if HTML actually changed — avoids full iframe reload (blink + scroll reset)
-      setCurrentHtml(prev => prev === html ? prev : html);
+      // Only update if HTML actually changed â€” avoids full iframe reload (blink + scroll reset)
+      setSimHtml(html);
     });
 
     newSocket.on("dom_snapshot", ({ html, revision }: { fileId: string; html: string; revision?: number }) => {
@@ -510,12 +524,12 @@ export default function StudentView() {
       // streams per-interaction snapshots to joined students). Treat it as a
       // genuine content load: full iframe rebuild so the sim's scripts re-run
       // from a clean state. The old REMOTE_DOM body-swap "soft mirror" is
-      // retired — swapping body.innerHTML destroyed the sim's event listeners
+      // retired â€” swapping body.innerHTML destroyed the sim's event listeners
       // (student clicks stopped doing anything), detached the nodes the sim's
       // own scripts animate (canvas/3D froze or blanked), and raced the
       // click-replay stream (quiz drift). Live following is done by replaying
       // interaction events into the student's own live sim instance.
-      setCurrentHtml(prev => prev === html ? prev : html);
+      setSimHtml(html);
     });
 
     // NOTE: the legacy `live_dom` continuous follow-mirror is retired (see
@@ -530,7 +544,7 @@ export default function StudentView() {
       if (state.activeFileId) setActiveFileId(state.activeFileId);
       if (state.lastRunHtml) {
         // Only rebuild iframe if HTML actually changed
-        setCurrentHtml(prev => prev === state.lastRunHtml ? prev : state.lastRunHtml);
+        setSimHtml(state.lastRunHtml);
         const f = state.files?.find((f: FileEntry) => f.id === state.activeFileId);
         setCurrentFileName(f?.name || 'Simulation');
       }
@@ -544,11 +558,11 @@ export default function StudentView() {
 
     newSocket.on("session_paused", () => {
       setIsPaused(true);
-      showNotification("⏸ Teacher paused the session");
+      showNotification("â¸ Teacher paused the session");
     });
     newSocket.on("session_resumed", () => {
       setIsPaused(false);
-      showNotification("▶ Session resumed!");
+      showNotification("â–¶ Session resumed!");
     });
 
     newSocket.on("chat_message", (msg: ChatMessage) => {
@@ -569,19 +583,19 @@ export default function StudentView() {
       setQuizModal({ question, options: validOptions.length >= 2 ? validOptions : undefined });
       setQuizAnswer("");
       setQuizSubmitted(false);
-      showNotification("🎯 You have a question from your teacher!");
+      showNotification("ðŸŽ¯ You have a question from your teacher!");
       sounds.raiseHand();
     });
 
-    // ── Temporary Explanation Content ──
+    // â”€â”€ Temporary Explanation Content â”€â”€
     newSocket.on("temp_content", ({ html, name }: { html: string; name: string }) => {
       setTempContent({ html, name });
       setShowTempContent(true);
-      showNotification(`📚 Teacher is showing explanation: ${name}`);
+      showNotification(`ðŸ“š Teacher is showing explanation: ${name}`);
     });
     newSocket.on("clear_temp_content", () => {
       setShowTempContent(false);
-      showNotification('↩️ Back to main content');
+      showNotification('â†©ï¸ Back to main content');
     });
 
     newSocket.on("spotlight", (data: { x: number; y: number; active: boolean }) => {
@@ -600,10 +614,10 @@ export default function StudentView() {
         lastInboundSeqRef.current = event.serverSeq;
       }
       // syncEpoch comparison was removed (it was already removed on the
-      // teacher side). syncEpoch is a per-CLIENT local counter — comparing
+      // teacher side). syncEpoch is a per-CLIENT local counter â€” comparing
       // the teacher's number to the student's silently dropped every event
       // whenever the two counters drifted (eg after the student rebuilt the
-      // iframe on a file switch — first teacher event after that arrived
+      // iframe on a file switch â€” first teacher event after that arrived
       // with a smaller epoch and was discarded). serverSeq above is the
       // canonical, server-issued ordering and is sufficient on its own.
       // Track zoom level so we can re-apply on iframe reload
@@ -613,7 +627,7 @@ export default function StudentView() {
       if (event.type === "SYNC_CURSOR") {
         // Element-anchored cursor: re-resolve the sender's hovered element in
         // OUR layout so the dot sits on the same CONTENT (e.g. the end of
-        // option C), not the same screen percentage — centered fixed-width
+        // option C), not the same screen percentage â€” centered fixed-width
         // lessons made raw percentages land an option or two off. Falls back
         // to the viewport fractions when the path doesn't resolve.
         const pos = resolveCursorPosition(event);
@@ -642,12 +656,12 @@ export default function StudentView() {
       }
     });
 
-    // ── Laser Pointer ──
+    // â”€â”€ Laser Pointer â”€â”€
     newSocket.on("laser_pointer", (data: { x: number; y: number; active: boolean }) => {
       setLaserPointer(data);
     });
 
-    // ── Challenge Timer ──
+    // â”€â”€ Challenge Timer â”€â”€
     newSocket.on("timer_started", ({ seconds }: { seconds: number }) => {
       setChallengeTimer({ seconds, remaining: seconds });
     });
@@ -656,7 +670,7 @@ export default function StudentView() {
       if (challengeTimerRef.current) clearInterval(challengeTimerRef.current);
     });
 
-    // ── Celebration ──
+    // â”€â”€ Celebration â”€â”€
     newSocket.on("celebration", ({ type }: { type?: string }) => {
       setCelebrationType((type as any) || 'confetti');
       setShowCelebration(true);
@@ -664,14 +678,14 @@ export default function StudentView() {
       setTimeout(() => setShowCelebration(false), 4000);
     });
 
-    // ── Step-Lock ──
+    // â”€â”€ Step-Lock â”€â”€
     newSocket.on("step_changed", ({ step }: { step: number }) => {
       setCurrentStep(step);
       postToIframe({ type: 'SET_STEP', step });
     });
 
     newSocket.on("gate_added", ({ step, question, options }: { step: number; question?: string; options?: string[] }) => {
-      showNotification(`🚧 Checkpoint added at Step ${step}`);
+      showNotification(`ðŸš§ Checkpoint added at Step ${step}`);
       // Store the gate so the auto-open effect can prompt the student when the
       // class reaches this step. correctIndex stays -1 (graded server-side).
       if (question && Array.isArray(options) && options.length >= 2) {
@@ -679,37 +693,37 @@ export default function StudentView() {
       }
     });
 
-    // ── Scroll Sync ──
+    // â”€â”€ Scroll Sync â”€â”€
     newSocket.on("scroll_sync_changed", ({ enabled }: { enabled: boolean }) => {
       setScrollSyncEnabled(enabled);
-      showNotification(enabled ? '🔗 Scroll sync enabled' : '🔓 Free scroll — you can scroll independently');
+      showNotification(enabled ? 'ðŸ”— Scroll sync enabled' : 'ðŸ”“ Free scroll â€” you can scroll independently');
     });
 
-    // ── Student Interaction Mode ──
+    // â”€â”€ Student Interaction Mode â”€â”€
     newSocket.on("student_interaction_changed", ({ allowed }: { allowed: boolean }) => {
       setInteractionAllowed(allowed);
-      showNotification(allowed ? '🖐️ You can now interact with the simulation' : '👁️ View-only mode — teacher is presenting');
+      showNotification(allowed ? 'ðŸ–ï¸ You can now interact with the simulation' : 'ðŸ‘ï¸ View-only mode â€” teacher is presenting');
     });
 
-    // ── Control grant ("the chalk") ──
+    // â”€â”€ Control grant ("the chalk") â”€â”€
     newSocket.on("control_changed", ({ holderName }: { holderName: string | null }) => {
       setControlHolderName(holderName);
       if (holderName === studentName) {
-        showNotification('✋ You have control — your screen now drives the class');
+        showNotification('âœ‹ You have control â€” your screen now drives the class');
         sounds.success();
       } else if (holderName) {
-        showNotification(`🎯 ${holderName} is driving the class`);
+        showNotification(`ðŸŽ¯ ${holderName} is driving the class`);
       } else {
-        showNotification('👁️ Control returned to the teacher');
+        showNotification('ðŸ‘ï¸ Control returned to the teacher');
       }
     });
 
-    // ── Teacher peek: serialize this student's REAL screen and send it up ──
+    // â”€â”€ Teacher peek: serialize this student's REAL screen and send it up â”€â”€
     newSocket.on("request_student_snapshot", ({ requestId }: { requestId?: string }) => {
       postToIframe({ type: 'REQUEST_HTML', requestId: requestId || `peek-${Date.now()}` });
     });
 
-    // ── Whiteboard Mutual Sync ──
+    // â”€â”€ Whiteboard Mutual Sync â”€â”€
     newSocket.on("whiteboard_sync_changed", ({ userId, enabled }: { userId: string; userName: string; enabled: boolean }) => {
       if (userId === newSocket.id) {
         setWhiteboardSyncEnabled(enabled);
@@ -718,33 +732,33 @@ export default function StudentView() {
       }
     });
 
-    // ── Whiteboard Mode ──
+    // â”€â”€ Whiteboard Mode â”€â”€
     newSocket.on("whiteboard_mode_changed", ({ active }: { active: boolean }) => {
       setWhiteboardMode(active);
     });
 
-    // ── Whiteboard Scroll Sync ──
+    // â”€â”€ Whiteboard Scroll Sync â”€â”€
     newSocket.on("whiteboard_scroll", ({ scrollX, scrollY }: { scrollX: number; scrollY: number }) => {
       setWhiteboardScrollX(scrollX);
       setWhiteboardScrollY(scrollY);
     });
 
-    // ── Zoom Sync ──
+    // â”€â”€ Zoom Sync â”€â”€
     newSocket.on("zoom_changed", ({ zoom }: { zoom: number }) => {
       setZoomLevel(zoom);
     });
 
-    // ── Reset View ──
+    // â”€â”€ Reset View â”€â”€
     newSocket.on("reset_view", () => {
       postToIframe({ type: 'RESET_VIEW' });
     });
 
-    // ── Join Error ──
+    // â”€â”€ Join Error â”€â”€
     newSocket.on("join_error", ({ message }: { message: string }) => {
       setJoinError(message);
     });
 
-    // ── Teacher Disconnected ──
+    // â”€â”€ Teacher Disconnected â”€â”€
     // AUTONOMOUS: track current "is teacher disconnected" state via a ref
     // so the user_list listener doesn't capture a stale value. Without
     // this, "Teacher reconnected!" toast never fired because the listener's
@@ -752,7 +766,7 @@ export default function StudentView() {
     newSocket.on("teacher_disconnected", () => {
       setTeacherDisconnected(true);
       teacherDisconnectedRef.current = true;
-      showNotification("⚠️ Teacher disconnected — waiting for reconnection...");
+      showNotification("âš ï¸ Teacher disconnected â€” waiting for reconnection...");
     });
 
     // Clear teacher disconnected when a new user list arrives with a teacher
@@ -761,11 +775,11 @@ export default function StudentView() {
       if (hasTeacher && teacherDisconnectedRef.current) {
         setTeacherDisconnected(false);
         teacherDisconnectedRef.current = false;
-        showNotification("✅ Teacher reconnected!");
+        showNotification("âœ… Teacher reconnected!");
       }
     });
 
-    // ── Attention Check ──
+    // â”€â”€ Attention Check â”€â”€
     newSocket.on("attention_check", () => {
       setAttentionCheckModal(true);
       if (sounds && !soundMuted) sounds.raiseHand();
@@ -774,13 +788,13 @@ export default function StudentView() {
       attentionTimeoutRef.current = setTimeout(() => setAttentionCheckModal(false), 30000);
     });
 
-    // ── Kick ──
+    // â”€â”€ Kick â”€â”€
     newSocket.on("kicked", () => {
       showNotification("You have been removed from the session");
       setTimeout(() => navigate("/"), 2000);
     });
 
-    // ── Gamification ──
+    // â”€â”€ Gamification â”€â”€
     newSocket.on("gate_result", ({ correct, xpGained, xp, streak, level, levelUp }: {
       correct: boolean; xpGained?: number; xp?: number; streak?: number; level?: number; levelUp?: boolean;
     }) => {
@@ -817,7 +831,7 @@ export default function StudentView() {
       }
     });
 
-    // ── Hard Reset (content preserved — only session progress is cleared) ──
+    // â”€â”€ Hard Reset (content preserved â€” only session progress is cleared) â”€â”€
     newSocket.on("room_reset", (payload?: { activeFileId?: string | null; files?: FileEntry[]; lastRunHtml?: string | null; revision?: number }) => {
       // Track the bumped revision so subsequent session_state isn't dropped
       // by the freshness guard against this client's pre-reset value.
@@ -841,18 +855,18 @@ export default function StudentView() {
       // Keep uploaded files list in sync with authoritative server state
       if (payload?.files) setFiles(payload.files);
       if (payload?.activeFileId !== undefined) setActiveFileId(payload.activeFileId);
-      // Reload the active file into preview so it restarts fresh from the top —
+      // Reload the active file into preview so it restarts fresh from the top â€”
       // but DO NOT blank out the iframe (content stays visible)
       if (payload?.activeFileId && payload.files) {
         const active = payload.files.find(f => f.id === payload.activeFileId);
         if (active) {
-          setCurrentHtml(active.html);
+          setSimHtml(active.html);
           setCurrentFileName(active.name);
         }
       } else if (payload?.lastRunHtml) {
-        setCurrentHtml(payload.lastRunHtml);
+        setSimHtml(payload.lastRunHtml);
       }
-      showNotification("🔄 Teacher restarted the session");
+      showNotification("ðŸ”„ Teacher restarted the session");
     });
 
     return () => {
@@ -862,7 +876,7 @@ export default function StudentView() {
     };
   }, [roomId, navigate, studentName]);
 
-  // ── HTTP Fallback: fetch content if Socket.io delivery fails ──
+  // â”€â”€ HTTP Fallback: fetch content if Socket.io delivery fails â”€â”€
   // This handles cases where the student is far away (e.g., different country)
   // and the large HTML payload gets dropped by Socket.io or network proxies.
   const httpFallbackRef = useRef<ReturnType<typeof setTimeout>>();
@@ -880,12 +894,12 @@ export default function StudentView() {
         if (data.html && (typeof data.revision !== 'number' || data.revision >= lastRevisionRef.current) && !currentHtml) {
           if (typeof data.revision === 'number') lastRevisionRef.current = data.revision;
           setCurrentFileName(data.fileName || 'Simulation');
-          setCurrentHtml(data.html);
-          showNotification("✅ Content loaded");
+          setSimHtml(data.html);
+          showNotification("âœ… Content loaded");
         }
       }
     } catch {
-      // Silently fail — socket path may still deliver
+      // Silently fail â€” socket path may still deliver
     }
   }, [roomId, currentHtml, socket, connected]);
 
@@ -913,7 +927,7 @@ export default function StudentView() {
     return () => { timers.forEach(t => clearTimeout(t)); };
   }, [connected, currentHtml, fetchContentViaHttp]);
 
-  // ── Helper: safely post message to iframe (queues if not ready) ──
+  // â”€â”€ Helper: safely post message to iframe (queues if not ready) â”€â”€
   const postToIframe = useCallback((msg: any) => {
     if (iframeReadyRef.current && iframeRef.current?.contentWindow) {
       iframeRef.current.contentWindow.postMessage(msg, '*');
@@ -925,7 +939,7 @@ export default function StudentView() {
     }
   }, []);
 
-  // ── Iframe onLoad: flush pending messages ──
+  // â”€â”€ Iframe onLoad: flush pending messages â”€â”€
   const handleIframeLoad = useCallback(() => {
     iframeReadyRef.current = true;
     // Flush pending messages
@@ -958,7 +972,7 @@ export default function StudentView() {
     postToIframe({ type: 'REMOTE_ZOOM', zoom: zoomLevel });
   }, [zoomLevel, postToIframe]);
 
-  // ── Relay iframe messages ──
+  // â”€â”€ Relay iframe messages â”€â”€
   useEffect(() => {
     const handler = (e: MessageEvent) => {
       if (!socket) return;
@@ -966,14 +980,14 @@ export default function StudentView() {
       const type = e.data?.type;
       if (!type) return;
 
-      // Student → teacher absolute-state snapshot response: forward the
+      // Student â†’ teacher absolute-state snapshot response: forward the
       // student's REAL DOM up so the teacher's view tracks the student's
       // actual state (self-heals quiz/sim drift). Triggered by the debounced
       // REQUEST_HTML below, tagged with an 'sstate-' requestId.
       if (type === 'SYNC_PROVIDE_HTML') {
         const rid = e.data.requestId;
         if (typeof rid === 'string' && rid.indexOf('peek-') === 0 && e.data.html) {
-          // Teacher is peeking at this student's real screen — answer it.
+          // Teacher is peeking at this student's real screen â€” answer it.
           socket.emit('student_snapshot', { roomId, html: e.data.html, requestId: rid });
         } else if (typeof rid === 'string' && rid.indexOf('sstate-') === 0 && e.data.html) {
           socket.emit('student_state', { roomId, html: e.data.html });
@@ -984,7 +998,7 @@ export default function StudentView() {
 
       if (!type.startsWith('SYNC_')) return;
       // Always allow cursor (teacher can see where students look) and pings
-      // (Alt+click "look here" — anyone can point at confusion, even view-only).
+      // (Alt+click "look here" â€” anyone can point at confusion, even view-only).
       if (type === 'SYNC_CURSOR' || type === 'SYNC_PING') {
         socket.emit("interaction", {
           roomId,
@@ -1015,7 +1029,7 @@ export default function StudentView() {
       // dropped or mis-targeted, the teacher's view snaps to the student's TRUE
       // current state (e.g. the right quiz question).
       // Typing (SYNC_INPUT/SYNC_CHANGE) is synced field-by-field via
-      // REMOTE_INPUT, which doesn't disturb the teacher's DOM — so it must NOT
+      // REMOTE_INPUT, which doesn't disturb the teacher's DOM â€” so it must NOT
       // trigger a full-DOM snapshot (that was wiping the teacher's focused
       // field). Snapshot only on discrete navigation (clicks, pointer, keys),
       // debounced so a burst collapses to one.
@@ -1032,17 +1046,18 @@ export default function StudentView() {
 
   useEffect(() => {
     syncEpochRef.current += 1;
-    // Reset iframe readiness when content source changes — the new iframe needs to fire onLoad
+    // Reset iframe readiness when content source changes â€” the new iframe needs to fire onLoad
     iframeReadyRef.current = false;
   }, [iframeUrl, showTempContent, whiteboardMode]);
 
-  // ── Push interaction mode to iframe ──
+
+  // â”€â”€ Push interaction mode to iframe â”€â”€
   // Unlock local input when the room allows it OR this student holds control.
   useEffect(() => {
     postToIframe({ type: 'SET_INTERACTION_MODE', allowed: canDrive });
   }, [canDrive, iframeUrl, postToIframe]);
 
-  // ── Challenge Timer Countdown ──
+  // â”€â”€ Challenge Timer Countdown â”€â”€
   useEffect(() => {
     if (!challengeTimer) return;
     if (challengeTimerRef.current) clearInterval(challengeTimerRef.current);
@@ -1059,19 +1074,19 @@ export default function StudentView() {
     return () => { if (challengeTimerRef.current) clearInterval(challengeTimerRef.current); };
   }, [challengeTimer?.seconds]);
 
-  // ── Push scroll sync state to iframe ──
+  // â”€â”€ Push scroll sync state to iframe â”€â”€
   useEffect(() => {
     postToIframe({ type: 'SET_SCROLL_SYNC', enabled: scrollSyncEnabled });
   }, [scrollSyncEnabled, iframeUrl, postToIframe]);
 
-  // ── Step sync to iframe ──
+  // â”€â”€ Step sync to iframe â”€â”€
   useEffect(() => {
     if (currentStep < 999) {
       postToIframe({ type: 'SET_STEP', step: currentStep });
     }
   }, [currentStep, iframeUrl, postToIframe]);
 
-  // ── Handlers ──
+  // â”€â”€ Handlers â”€â”€
   const submitQuizAnswer = () => {
     if (!socket || !quizAnswer.trim()) return;
     socket.emit("quiz_answer", { roomId, answer: quizAnswer.trim(), studentName });
@@ -1096,7 +1111,7 @@ export default function StudentView() {
   return (
     <div className="h-screen w-screen flex flex-col overflow-hidden" style={{ background: 'var(--bg-primary)' }}>
 
-      {/* ══════ HEADER ══════ */}
+      {/* â•â•â•â•â•â• HEADER â•â•â•â•â•â• */}
       <header className="app-header">
         <div className="header-section">
           <span className="font-display font-extrabold text-[15px]" style={{ color: 'var(--text-primary)', letterSpacing: '-0.03em' }}>
@@ -1105,7 +1120,7 @@ export default function StudentView() {
 
           <div className="header-divider hdr-hide-sm" />
 
-          {/* File name is context, not a control — first to go on phones. */}
+          {/* File name is context, not a control â€” first to go on phones. */}
           <span className="text-[13px] font-semibold truncate hdr-hide-sm" style={{ color: 'var(--text-secondary)', maxWidth: 180 }}>
             {currentFileName || 'Session'}
           </span>
@@ -1142,7 +1157,7 @@ export default function StudentView() {
             </span>
             {myStreak >= 2 && (
               <span style={{ fontSize: 11, fontWeight: 700, color: '#F59E0B', marginLeft: 2 }}>
-                🔥{myStreak}
+                ðŸ”¥{myStreak}
               </span>
             )}
             {/* Floating +XP animation */}
@@ -1178,7 +1193,7 @@ export default function StudentView() {
               display: 'inline-flex', alignItems: 'center', gap: 5,
               boxShadow: '0 0 0 1px rgba(244,63,94,0.35)', animation: 'pulse 2s ease-in-out infinite',
             }}>
-              ✋ YOU HAVE CONTROL
+              âœ‹ YOU HAVE CONTROL
             </span>
           ) : (
             <span className="status-pill" style={{
@@ -1186,7 +1201,7 @@ export default function StudentView() {
               color: interactionAllowed ? 'var(--accent-emerald)' : 'var(--accent-indigo)',
               fontSize: '11px', fontWeight: 700, letterSpacing: '0.03em', padding: '3px 10px',
             }}>
-              {controlHolderName ? `🎯 ${controlHolderName} DRIVING` : interactionAllowed ? 'INTERACTIVE' : 'VIEW ONLY'}
+              {controlHolderName ? `ðŸŽ¯ ${controlHolderName} DRIVING` : interactionAllowed ? 'INTERACTIVE' : 'VIEW ONLY'}
             </span>
           )}
 
@@ -1230,13 +1245,13 @@ export default function StudentView() {
         </div>
       </header>
 
-      {/* ══════ JOIN ERROR ══════ */}
+      {/* â•â•â•â•â•â• JOIN ERROR â•â•â•â•â•â• */}
       {joinError && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4"
           style={{ background: 'rgba(0,0,0,0.4)', backdropFilter: 'blur(6px)' }}>
           <div className="w-full max-w-sm animate-bounce-in text-center"
             style={{ background: 'var(--bg-card)', borderRadius: '12px', border: '2px solid #E5394B', boxShadow: '0 8px 32px rgba(229,57,75,0.25)', padding: '32px 24px' }}>
-            <div className="text-4xl mb-4">⚠️</div>
+            <div className="text-4xl mb-4">âš ï¸</div>
             <h3 className="font-display text-lg font-bold mb-2" style={{ color: 'var(--text-primary)' }}>Cannot Join Room</h3>
             <p className="text-sm mb-6" style={{ color: 'var(--text-secondary)' }}>{joinError}</p>
             <button onClick={() => navigate('/')} className="btn-primary w-full justify-center" style={{ height: '44px', fontSize: '15px', borderRadius: '8px' }}>
@@ -1246,15 +1261,15 @@ export default function StudentView() {
         </div>
       )}
 
-      {/* ══════ TEACHER DISCONNECTED BANNER ══════ */}
+      {/* â•â•â•â•â•â• TEACHER DISCONNECTED BANNER â•â•â•â•â•â• */}
       {teacherDisconnected && (
         <div className="animate-slide-down px-4 py-2 text-center text-sm font-semibold shrink-0"
           style={{ background: 'rgba(245,158,11,0.12)', color: '#B45309', borderBottom: '1px solid rgba(245,158,11,0.2)' }}>
-          ⚠️ Teacher disconnected — waiting for reconnection...
+          âš ï¸ Teacher disconnected â€” waiting for reconnection...
         </div>
       )}
 
-      {/* ══════ MAIN AREA ══════ */}
+      {/* â•â•â•â•â•â• MAIN AREA â•â•â•â•â•â• */}
       <div className="flex-1 flex overflow-hidden relative">
 
         {/* Full-Screen Iframe */}
@@ -1292,7 +1307,7 @@ export default function StudentView() {
             >
               <button
                 onClick={toggleWhiteboardSync}
-                title={whiteboardSyncEnabled ? 'Pan/zoom mirrors both sides — click to go independent' : 'Independent view — click to share again'}
+                title={whiteboardSyncEnabled ? 'Pan/zoom mirrors both sides â€” click to go independent' : 'Independent view â€” click to share again'}
                 style={{
                   display: 'flex', alignItems: 'center', gap: 8,
                   padding: '6px 12px',
@@ -1330,7 +1345,7 @@ export default function StudentView() {
           )}
 
           {showTempContent && tempContent && tempContentUrl ? (
-            // Temporary explanation content overlay — uses same ref so scroll sync works
+            // Temporary explanation content overlay â€” uses same ref so scroll sync works
             <iframe
               ref={iframeRef}
               src={tempContentUrl}
@@ -1356,7 +1371,7 @@ export default function StudentView() {
                 allow={LESSON_IFRAME_ALLOW}
                 allowFullScreen
               />
-              {/* View-only overlay — blocks pointer events on content unless the
+              {/* View-only overlay â€” blocks pointer events on content unless the
                   student may drive (room interactive OR holds the control grant).
                   Alt+click still passes through so anyone can ping "look here". */}
               {!canDrive && (
@@ -1368,7 +1383,7 @@ export default function StudentView() {
                   onMouseDown={(e) => { if (!e.altKey) e.preventDefault(); }}
                   onClick={(e) => {
                     // The overlay swallows clicks to the sim, but a view-only
-                    // student can still Alt+click to ping "look here" — show it
+                    // student can still Alt+click to ping "look here" â€” show it
                     // locally and relay it to the room.
                     if (!e.altKey || !socket) return;
                     const rect = e.currentTarget.getBoundingClientRect();
@@ -1384,7 +1399,7 @@ export default function StudentView() {
             <div className="flex items-center justify-center h-full" style={{ background: 'var(--bg-primary)' }}>
               <div className="text-center animate-slide-up p-12 rounded-2xl"
                 style={{ background: 'var(--bg-card)', border: '1px solid var(--border-subtle)', boxShadow: 'var(--shadow-lg)' }}>
-                <div className="text-5xl mb-5 animate-gentle-bounce">⏳</div>
+                <div className="text-5xl mb-5 animate-gentle-bounce">â³</div>
                 <h2 className="font-display text-2xl font-bold mb-3" style={{ color: 'var(--text-primary)' }}>Waiting for teacher...</h2>
                 <p className="text-sm" style={{ color: 'var(--text-muted)', lineHeight: '1.6' }}>
                   You're in! The lesson appears here the moment your teacher starts.
@@ -1400,7 +1415,7 @@ export default function StudentView() {
                       color: connected ? 'var(--accent-emerald)' : '#E11D48',
                     }}>
                     <span className="w-1.5 h-1.5 rounded-full" style={{ background: 'currentColor' }} />
-                    {connected ? 'Connected' : 'Reconnecting…'}
+                    {connected ? 'Connected' : 'Reconnectingâ€¦'}
                   </span>
                 </div>
                 <div className="flex items-center justify-center gap-2 mt-6">
@@ -1422,7 +1437,7 @@ export default function StudentView() {
             </div>
           )}
 
-          {/* AUTONOMOUS: Student annotation toolbar — small floating
+          {/* AUTONOMOUS: Student annotation toolbar â€” small floating
               vertical strip on the left of the HTML area. Only shows
               when an HTML lesson is on-surface (not whiteboard, not
               temp-content) since whiteboard mode has its own rail and
@@ -1495,7 +1510,7 @@ export default function StudentView() {
                   <path d="m7 21-4-4 11-11 4 4L7 21z" /><path d="M14 6l4-4 4 4-4 4" /><path d="M3 21h18" />
                 </svg>
               </button>
-              {/* Colour swatches — only when pen is active, to keep the
+              {/* Colour swatches â€” only when pen is active, to keep the
                   toolbar compact for the common "off" state. */}
               {studentDrawMode && (
                 <>
@@ -1599,7 +1614,7 @@ export default function StudentView() {
         />
       </div>
 
-      {/* ══════ NOTIFICATION TOAST ══════ */}
+      {/* â•â•â•â•â•â• NOTIFICATION TOAST â•â•â•â•â•â• */}
       {notification && (
         <div className="fixed top-14 left-1/2 -translate-x-1/2 z-50 animate-slide-down">
           <div className="px-5 py-2.5 rounded-xl text-sm font-medium"
@@ -1609,7 +1624,7 @@ export default function StudentView() {
         </div>
       )}
 
-      {/* ══════ QUIZ MODAL ══════ */}
+      {/* â•â•â•â•â•â• QUIZ MODAL â•â•â•â•â•â• */}
       {quizModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4"
           style={{ background: 'rgba(0,0,0,0.3)', backdropFilter: 'blur(4px)' }}>
@@ -1617,7 +1632,7 @@ export default function StudentView() {
             style={{ background: 'var(--bg-card)', borderRadius: 'var(--radius-xl)', border: '1px solid var(--border-subtle)', boxShadow: 'var(--shadow-xl)' }}>
             <div className="p-6">
               <div className="text-center mb-5">
-                <div className="text-4xl mb-3 animate-reaction-pop">🎯</div>
+                <div className="text-4xl mb-3 animate-reaction-pop">ðŸŽ¯</div>
                 <h3 className="font-display text-lg font-bold" style={{ color: 'var(--text-primary)' }}>Pop Quiz!</h3>
               </div>
               <div className="p-4 rounded-xl mb-4" style={{ background: 'var(--bg-surface)', border: '1px solid var(--border-subtle)' }}>
@@ -1628,7 +1643,7 @@ export default function StudentView() {
               {!quizSubmitted ? (
                 quizModal.options ? (
                   <>
-                    {/* Multiple choice — one tap answers. */}
+                    {/* Multiple choice â€” one tap answers. */}
                     <div className="flex flex-col gap-2 mb-4">
                       {quizModal.options.map((opt, i) => (
                         <button key={i} onClick={() => submitQuizChoice(opt)}
@@ -1664,7 +1679,7 @@ export default function StudentView() {
                 )
               ) : (
                 <div className="text-center py-4">
-                  <div className="text-4xl mb-2 animate-bounce-in">✅</div>
+                  <div className="text-4xl mb-2 animate-bounce-in">âœ…</div>
                   <p className="text-sm font-medium" style={{ color: 'var(--accent-emerald)' }}>Answer submitted!</p>
                   <button onClick={() => setQuizModal(null)} className="btn-secondary mt-4">Close</button>
                 </div>
@@ -1674,7 +1689,7 @@ export default function StudentView() {
         </div>
       )}
 
-      {/* ══════ STEP GATE MODAL ══════ */}
+      {/* â•â•â•â•â•â• STEP GATE MODAL â•â•â•â•â•â• */}
       {gateModal && (
         <StepGate
           socket={socket} roomId={roomId!}
@@ -1685,7 +1700,7 @@ export default function StudentView() {
         />
       )}
 
-      {/* ══════ ATTENTION CHECK MODAL ══════ */}
+      {/* â•â•â•â•â•â• ATTENTION CHECK MODAL â•â•â•â•â•â• */}
       {attentionCheckModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4"
           style={{ background: 'rgba(0,0,0,0.4)', backdropFilter: 'blur(6px)' }}>
@@ -1716,7 +1731,7 @@ export default function StudentView() {
         </div>
       )}
 
-      {/* ══════ LEVEL-UP BANNER ══════ */}
+      {/* â•â•â•â•â•â• LEVEL-UP BANNER â•â•â•â•â•â• */}
       {levelUpBanner && (
         <div className="fixed inset-0 z-[60] pointer-events-none flex items-center justify-center">
           <div
@@ -1728,7 +1743,7 @@ export default function StudentView() {
               animation: 'levelUpPop 3.5s cubic-bezier(.34,1.56,.64,1) forwards',
             }}
           >
-            <div style={{ fontSize: 52, lineHeight: 1 }}>⭐</div>
+            <div style={{ fontSize: 52, lineHeight: 1 }}>â­</div>
             <div style={{ fontSize: 12, fontWeight: 800, letterSpacing: 2, opacity: 0.9, marginTop: 8 }}>
               LEVEL UP!
             </div>
@@ -1739,7 +1754,7 @@ export default function StudentView() {
         </div>
       )}
 
-      {/* ══════ LEADERBOARD ══════ */}
+      {/* â•â•â•â•â•â• LEADERBOARD â•â•â•â•â•â• */}
       <Leaderboard
         entries={leaderboard}
         open={showLeaderboard}

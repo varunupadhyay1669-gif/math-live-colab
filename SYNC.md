@@ -47,18 +47,38 @@ teacher renders the serialized DOM WITHOUT re-running scripts (a frozen, true
 snapshot). `resync_student` rebuilds ONE drifted student from canonical state
 without disturbing the rest of the class.
 
-### 1.35 Event journal (late-join convergence)
+### 1.35 Event journal (late-join + reconnect convergence) — THE mechanism
 The server records the DISCRETE interaction stream (clicks/inputs/keys —
-never cursor/scroll/zoom/ping) since the last content **baseline** (upload /
-run / restore / force / stored non-canvas DOM snapshot). On a student's
-fresh join, `interaction_replay { events }` is unicast after content
-delivery; the client feeds each event through the queued iframe transport,
-so the freshly-built sim re-lives the class's interactions in order and
-converges — including canvas/WebGL and JS-stateful sims that DOM snapshots
-cannot capture. Capped at 400 events; on overflow replay is disabled until
-the next baseline (a partial replay would diverge worse than none). Clients
-skip the replay on socket-blip reconnects (the live sim already lived those
-events — guard: tab had content at connect time).
+never cursor/scroll/zoom/ping) since the last content **baseline**. A
+baseline is a REAL content change only: upload / run / switch / restore /
+force / hard reset. **Passive DOM snapshots are NOT baselines and do NOT
+clear the journal** — a snapshot only captures DOM, and a JS-stateful
+lesson re-initialises its scripts on load and paints its first screen over
+the snapshot HTML (the "joined mid-quiz, landed on the welcome screen"
+bug). Snapshots are a fallback, never the primary recovery path.
+
+**effectiveHtml policy:** when a replayable journal exists (non-empty, not
+overflowed), `effectiveHtml = lastRunHtml ?? sourceHtml ?? liveSnapshotHtml`
+(PRISTINE boot — replay reconstructs state). Otherwise
+`liveSnapshotHtml ?? lastRunHtml ?? sourceHtml` (snapshot fallback).
+
+**Delivery:** `emitSessionState` attaches `interaction_replay { events }`
+to EVERY hydrating member — teacher included (a reloaded teacher re-lives
+their own lesson back to the current state). Redundant replays are free
+because clients filter.
+
+**Client filter (per sim instance):** `lastInboundSeqRef` = highest
+`serverSeq` applied to the CURRENT sim instance. It is zeroed ONLY when the
+sim HTML genuinely changes (inside the `setSimHtml` /
+`setSimPreviewHtml` setters — synchronously, never in a post-render
+effect), and deliberately NOT on socket (re)connect. Replay applies only
+events with `serverSeq > lastInboundSeqRef`. Consequences:
+- fresh tab / incognito / reload → full replay into the pristine boot;
+- kicked-then-reconnected tab with a live sim → replays exactly the gap;
+- socket blip → replays nothing.
+Capped at 400 events; on overflow replay is disabled until the next
+baseline (a partial replay would diverge worse than none) and effectiveHtml
+falls back to the snapshot.
 
 ### 1.4 Lesson Time Machine
 `bookmark_create` captures canonical state (HTML + whiteboard + annotations +

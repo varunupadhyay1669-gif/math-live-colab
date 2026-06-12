@@ -876,7 +876,19 @@ async function startServer() {
 
   function buildSessionState(roomId: string, room: RoomData, type: SessionStatePayload['type'], reason: SessionStatePayload['reason'], requestId?: string): SessionStatePayload {
     const sourceHtml = getSourceHtml(room);
-    const effectiveHtml = room.liveSnapshotHtml || room.lastRunHtml || sourceHtml;
+    // ── effectiveHtml policy (first principles) ──
+    // When a replayable event journal exists, clients boot the PRISTINE
+    // lesson and re-live the journal — that reconstructs JS-internal sim
+    // state exactly. A DOM snapshot can't: the lesson's scripts restart from
+    // zero on load and repaint their initial screen right over the
+    // snapshot's HTML (the "joined mid-quiz but landed on the welcome
+    // screen" bug). Snapshots remain the fallback when no journal is
+    // available (overflowed or empty) — still right for DOM/form-state
+    // content.
+    const replayable = room.eventLog.length > 0 && !room.eventLogOverflow;
+    const effectiveHtml = replayable
+      ? (room.lastRunHtml || sourceHtml || room.liveSnapshotHtml)
+      : (room.liveSnapshotHtml || room.lastRunHtml || sourceHtml);
     return {
       type,
       reason,
@@ -945,6 +957,16 @@ async function startServer() {
     const payload = buildSessionState(roomId, room, 'session_state', reason, requestId);
     const isTeacher = room.users.get(socketId)?.role === 'teacher';
     io.to(socketId).emit('session_state', isTeacher ? payload : payloadForStudent(payload));
+    // Hand the event journal to EVERY hydrating member (teacher included — a
+    // reloaded teacher must re-live their own lesson back to the current
+    // state). Clients filter by serverSeq against what their current sim
+    // instance already applied, so re-sending the same journal is always
+    // safe: fresh sims replay everything, live sims replay only the gap,
+    // up-to-date sims replay nothing.
+    if (room.eventLog.length > 0 && !room.eventLogOverflow) {
+      io.to(socketId).emit('interaction_replay', { events: room.eventLog, count: room.eventLog.length });
+      logSync('interaction_replay', { roomId, revision: room.revision, socketId, reason: `events=${room.eventLog.length}` });
+    }
     logSync('session_state', { roomId, revision: payload.revision, requestId, socketId, reason });
   }
 
@@ -1246,16 +1268,9 @@ async function startServer() {
         socket.emit('leaderboard_update', buildLeaderboard(room));
       }
 
-      // ── Event-journal replay for late joiners ──
-      // The student just received the BASELINE html (snapshot or pristine
-      // source). Hand them the discrete interaction stream recorded since
-      // that baseline; their client feeds it into the freshly-built iframe
-      // in order, so their sim instance (including canvas/JS-stateful sims
-      // a DOM snapshot can't capture) converges to the class's state.
-      if (role === 'student' && room.eventLog.length > 0 && !room.eventLogOverflow) {
-        socket.emit('interaction_replay', { events: room.eventLog, count: room.eventLog.length });
-        logSync('interaction_replay', { roomId, revision: room.revision, socketId: socket.id, reason: `events=${room.eventLog.length}` });
-      }
+      // (Event-journal replay is attached by emitSessionState above — every
+      // hydrating member gets it, and clients seq-filter what they've
+      // already applied.)
 
       // Broadcast updated user list
       io.to(roomId).emit('user_list', getRoomUserList(room));
@@ -1508,9 +1523,10 @@ Build a widget that teaches: ${safePrompt}`;
       // NOT rewrite lastRunHtml or the persisted file source — only the live
       // snapshot. Canvas sims never store a snapshot at all (see dom_snapshot).
       room.liveSnapshotHtml = hasCanvas ? null : html;
-      if (!hasCanvas) resetEventJournal(room); // stored snapshot = new baseline
+      // Journal survives passive snapshots — see the dom_snapshot handler.
       const revision = bumpRevision(room);
-      const deliverHtml = hasCanvas ? (room.lastRunHtml || getSourceHtml(room) || html) : html;
+      const replayableNow = room.eventLog.length > 0 && !room.eventLogOverflow;
+      const deliverHtml = (hasCanvas || replayableNow) ? (room.lastRunHtml || getSourceHtml(room) || html) : html;
       // Send to any students waiting for the teacher's live DOM
       // (these students joined after the teacher and need the current content).
       // We snapshot the pending set FIRST (delivery loop is async), then
@@ -1558,18 +1574,27 @@ Build a widget that teaches: ${safePrompt}`;
         // actually ran; `file.html` is the saved source. Only force-sync (an
         // explicit teacher request to re-baseline everyone) rewrites those.
         room.liveSnapshotHtml = html;
-        // The stored snapshot IS the new late-join baseline: events up to
-        // now are baked into it, so the journal restarts here.
-        resetEventJournal(room);
+        // NOTE: passive snapshots do NOT clear the journal. A snapshot only
+        // captures DOM — a JS-stateful lesson re-initialises its scripts on
+        // load and paints its first screen over the snapshot HTML, so the
+        // journal (pristine boot + full replay) is the primary late-join
+        // mechanism and must survive snapshots. Only real content baselines
+        // (upload / run / switch / restore / force / reset) clear it.
         if (isForceSync) {
+          // Force IS a new baseline (everyone rebuilds from this snapshot):
+          // pre-force events are baked into it, so the journal restarts.
           room.lastRunHtml = html;
           const file = room.files.find(f => f.id === room.activeFileId);
           if (file) file.html = html;
+          resetEventJournal(room);
         }
       }
       const revision = bumpRevision(room);
-      // What a client should boot from right now (clean source for canvas sims).
-      const deliverHtml = hasCanvas ? (room.lastRunHtml || getSourceHtml(room) || html) : html;
+      // What a client should boot from right now: pristine when a journal will
+      // replay them forward (and always for canvas sims); the raw snapshot
+      // only as the no-journal fallback.
+      const replayableNow = room.eventLog.length > 0 && !room.eventLogOverflow;
+      const deliverHtml = (hasCanvas || replayableNow) ? (room.lastRunHtml || getSourceHtml(room) || html) : html;
 
       if (isForceSync) {
         // Genuine force-sync: every client re-renders (full iframe rebuild, so
