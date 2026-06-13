@@ -13,7 +13,9 @@
     "preview": "vite preview",
     "clean": "rm -rf dist",
     "lint": "tsc --noEmit",
-    "verify:sync": "node verify-sync.mjs"
+    "verify:sync": "node verify-sync.mjs",
+    "stress": "node stress.mjs",
+    "stress2": "node stress2.mjs"
   },
   "dependencies": {
     "@google/genai": "^1.29.0",

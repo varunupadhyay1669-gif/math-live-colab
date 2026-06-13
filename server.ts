@@ -2345,6 +2345,15 @@ Build a widget that teaches: ${safePrompt}`;
       event.serverTs = Date.now();
 
       if (user?.role === 'teacher') {
+        // SINGLE-WRITER: when a student holds control, the teacher is a MIRROR
+        // of that student — their sim-driving events must NOT enter the stream
+        // (two drivers each roll their own Math.random() and diverge). Only
+        // ephemeral pointing (cursor / look-here ping) still relays. The
+        // teacher client also blocks these locally; this enforces it on the
+        // server too so a timing gap or a rogue client can't double-drive.
+        if (room.controlHolderName && event.type !== 'SYNC_CURSOR' && event.type !== 'SYNC_PING') {
+          return;
+        }
         if (event.type === 'SYNC_SCROLL') {
           room.lastTeacherScroll = event;
         }
