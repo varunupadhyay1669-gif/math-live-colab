@@ -238,11 +238,13 @@ async function startServer() {
         continue;
       }
 
-      // Student-left expiry: 2 hours after last student disconnected
+      // Student-left expiry: 2 hours after last student disconnected. Only
+      // delete if the room is TRULY empty — a connected teacher (e.g. a long
+      // prep session, or a teacher who arrived before any student) counts as
+      // activity and must not have their room (and its durable copy) swept out
+      // from under them.
       if (room.studentLeftAt && (now - room.studentLeftAt > studentLeftExpiryMs)) {
-        // Only expire if no students are currently connected
-        const hasStudents = Array.from(room.users.values()).some(u => u.role === 'student');
-        if (!hasStudents) {
+        if (room.users.size === 0) {
           rooms.delete(roomId);
           void roomStore.remove(roomId).catch(() => {});
           deletedCount++;
@@ -359,7 +361,14 @@ async function startServer() {
     'SYNC_MOUSEDOWN', 'SYNC_MOUSEUP', 'SYNC_POINTERDOWN',
     'SYNC_DRAGSTART', 'SYNC_DRAGEND', 'SYNC_DROP',
   ]);
-  const EVENT_LOG_MAX = 400;
+  // Cap chosen high: each journaled event is tiny (a click/key/input delta),
+  // so 2000 is only a few hundred KB worst case, but it covers essentially any
+  // realistic lesson without the journal overflowing. Overflow disables replay
+  // (a partial replay would diverge worse than none) — and for a canvas/3D sim
+  // there's no snapshot fallback, so a late joiner after overflow would reset
+  // to frame 0. Keeping the cap generous makes that path practically
+  // unreachable; Force Sync remains the manual re-baseline if it ever is.
+  const EVENT_LOG_MAX = 2000;
   function journalEvent(room: RoomData, event: any) {
     if (!event || !REPLAYABLE_EVENT_TYPES.has(event.type)) return;
     if (room.eventLogOverflow) return;
@@ -731,7 +740,7 @@ async function startServer() {
     room.bookmarks = Array.isArray(raw.bookmarks)
       ? raw.bookmarks.filter((b: any) => b && typeof b.id === 'string').slice(0, 8)
       : [];
-    room.eventLog = Array.isArray(raw.eventLog) ? raw.eventLog.slice(0, 400) : [];
+    room.eventLog = Array.isArray(raw.eventLog) ? raw.eventLog.slice(0, EVENT_LOG_MAX) : [];
     room.eventLogOverflow = !!raw.eventLogOverflow;
     room.randomSeed = typeof raw.randomSeed === 'number' ? raw.randomSeed : 0;
     return room;
@@ -1200,25 +1209,25 @@ async function startServer() {
       socket.join(roomId);
       room.users.set(socket.id, { name: safeName, role, joinedAt: Date.now(), whiteboardSync: true });
 
-      // If a student just joined, clear the studentLeftAt timer
-      if (role === 'student') {
-        room.studentLeftAt = null;
-      }
+      // Any join (teacher OR student) means the room is active again — clear the
+      // last-student-left expiry countdown so the sweep won't target a room
+      // that now has someone in it.
+      room.studentLeftAt = null;
 
       if (role === 'teacher') {
         const previousTeacherSocketId = room.teacherSocketId;
 
-        // AUTONOMOUS: Cancel any pending teacher-disconnect timer if
-        // this is the same teacher rejoining (after a tab switch).
-        // The grace timer scheduled in the disconnecting handler would
-        // have fired teacher_disconnected to all students otherwise.
-        const wasPendingDisconnect =
-          !!room.pendingTeacherDisconnect &&
-          room.pendingTeacherDisconnect.expectedName === safeName;
-        if (wasPendingDisconnect && room.pendingTeacherDisconnect) {
+        // Cancel any pending teacher-disconnect grace timer on ANY successful
+        // teacher (re)seat — not only an exact-name match. The seat is being
+        // taken right here (below), so the timer's job is done; leaving it
+        // armed leaks the handle and risks a late "teacher_disconnected" if the
+        // returning teacher's display name differs (e.g. a co-teacher, or a
+        // name edit). Keying the cancel strictly by name was a mismatch with
+        // the unconditional re-seat that follows.
+        if (room.pendingTeacherDisconnect) {
           clearTimeout(room.pendingTeacherDisconnect.timer);
           room.pendingTeacherDisconnect = undefined;
-          console.log(`✅ Teacher ${safeName} returned within grace period — seat restored, no disconnect announced`);
+          console.log(`✅ Teacher ${safeName} (re)took the seat within grace — no disconnect announced`);
         }
 
         // AUTONOMOUS: Tell the previous teacher socket (if it's still
@@ -1237,7 +1246,10 @@ async function startServer() {
         // gone may have seen "Waiting for teacher" placeholder; this is
         // their unblock. Idempotent on the client (setCurrentHtml is
         // value-equality-checked, won't rebuild iframe needlessly).
-        if (room.lastRunHtml && room.activeFileId) {
+        // Don't re-push the lesson HTML while on the whiteboard — students are
+        // (correctly) showing the whiteboard surface; a run_preview here would
+        // rebuild their hidden lesson iframe needlessly and risk a race.
+        if (room.lastRunHtml && room.activeFileId && !room.whiteboardMode) {
           io.to(roomId).emit('run_preview', {
             fileId: room.activeFileId,
             html: room.lastRunHtml,
@@ -2784,11 +2796,15 @@ Build a widget that teaches: ${safePrompt}`;
               socketId: oldSocketId,
               expectedName: expectedTeacherName,
               timer: setTimeout(() => {
-                // Grace expired — teacher really did leave. Clear the
-                // seat and notify students NOW.
+                // Grace expired. Only declare the teacher gone if there is NO
+                // live teacher socket at all — re-validate against room.users,
+                // not just the cached oldSocketId, so a teacher who returned
+                // under a different display name (still a real teacher) is
+                // never falsely announced as disconnected.
                 const r = rooms.get(roomId);
                 if (!r) return;
-                if (r.teacherSocketId === oldSocketId) {
+                const liveTeacher = Array.from(r.users.values()).some(u => u.role === 'teacher');
+                if (!liveTeacher) {
                   r.teacherSocketId = null;
                   io.to(roomId).emit('teacher_disconnected');
                   console.log(`👋 Teacher ${expectedTeacherName} declared gone after ${TEACHER_DISCONNECT_GRACE_MS}ms grace`);
