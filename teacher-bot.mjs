@@ -27,6 +27,8 @@ function doCmd(c) {
   else if (c === 'answer') emit('interaction', { roomId: ROOM, event: { type: 'SYNC_CLICK', path: '#ans-0' } });
   else if (c === 'roll') emit('interaction', { roomId: ROOM, event: { type: 'SYNC_CLICK', path: '#roll' } });
   else if (c === 'next') { emit('interaction', { roomId: ROOM, event: { type: 'SYNC_CLICK', path: '#ans-0' } }); setTimeout(() => emit('interaction', { roomId: ROOM, event: { type: 'SYNC_CLICK', path: '#roll' } }), 150); }
+  else if (c === 'interactive') emit('toggle_student_interaction', { roomId: ROOM, allowed: true });
+  else if (c === 'viewonly') emit('toggle_student_interaction', { roomId: ROOM, allowed: false });
   else if (c === 'leave') { if (s) s.disconnect(); log('LEFT (grace armed)'); }
   else if (c === 'rejoin') connect();
   else if (c === 'quit') { if (s) s.disconnect(); process.exit(0); }

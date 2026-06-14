@@ -199,6 +199,18 @@ export default function StudentView() {
   const canDrive = hasControl;
   const canDriveRef = useRef(false);
   useEffect(() => { canDriveRef.current = canDrive; }, [canDrive]);
+  // Whether the student may LOCALLY interact with the sim inside their own
+  // iframe — SCROLL it, click its buttons, type into it. Unlocked by EITHER the
+  // room-wide interaction toggle OR a personal control grant. This is distinct
+  // from canDrive (driving the SHARED sim): a non-control student's events stay
+  // local — the parent never forwards them to the server (see the canDrive gate
+  // in the message relay) and the server drops them anyway — so each student
+  // explores their own copy without desyncing the class. A view-only student
+  // gets a hard-locked, mirror-only iframe (no scroll, no clicks). This is the
+  // flag that releases scrolling in interactive mode.
+  const canInteract = interactionAllowed || hasControl;
+  const canInteractRef = useRef(false);
+  useEffect(() => { canInteractRef.current = canInteract; }, [canInteract]);
   // Whether the student may SKETCH over the lesson. When the teacher is just
   // presenting (view-only), the student is a pure viewer — no button presses
   // AND no drawing. Sketching is unlocked only when the teacher enables
@@ -965,9 +977,11 @@ export default function StudentView() {
       iframeRef.current?.contentWindow?.postMessage(msg, '*');
     }
     // ALWAYS re-push SET_INTERACTION_MODE on every iframe load. A student is a
-    // mirror (blocked) unless they hold control; re-pushing canDrive makes the
-    // iframe's input filter authoritative regardless of fresh/hot state.
-    iframeRef.current?.contentWindow?.postMessage({ type: 'SET_INTERACTION_MODE', allowed: canDriveRef.current }, '*');
+    // mirror (locked: no scroll, no clicks) UNLESS the room is in interactive
+    // mode or they hold control; re-pushing canInteract makes the iframe's
+    // input filter authoritative regardless of fresh/hot state. (Driving the
+    // SHARED sim is still control-only — gated separately in the message relay.)
+    iframeRef.current?.contentWindow?.postMessage({ type: 'SET_INTERACTION_MODE', allowed: canInteractRef.current }, '*');
     // Re-send current state
     iframeRef.current?.contentWindow?.postMessage({ type: 'SET_SCROLL_SYNC', enabled: scrollSyncEnabled }, '*');
     if (currentStep < 999) {
@@ -1064,10 +1078,13 @@ export default function StudentView() {
 
 
   // â”€â”€ Push interaction mode to iframe â”€â”€
-  // Unlock local input when the room allows it OR this student holds control.
+  // Unlock LOCAL input (scroll / clicks / typing inside the iframe) when the
+  // room is interactive OR this student holds control. Driving the shared sim
+  // is gated separately (canDrive) in the message relay, so an interactive
+  // non-control student interacts with their own copy only.
   useEffect(() => {
-    postToIframe({ type: 'SET_INTERACTION_MODE', allowed: canDrive });
-  }, [canDrive, iframeUrl, postToIframe]);
+    postToIframe({ type: 'SET_INTERACTION_MODE', allowed: canInteract });
+  }, [canInteract, iframeUrl, postToIframe]);
 
   // â”€â”€ Challenge Timer Countdown â”€â”€
   useEffect(() => {
@@ -1213,7 +1230,7 @@ export default function StudentView() {
               color: 'var(--accent-indigo)',
               fontSize: '11px', fontWeight: 700, letterSpacing: '0.03em', padding: '3px 10px',
             }}>
-              {controlHolderName ? `ðŸŽ¯ ${controlHolderName} DRIVING` : 'FOLLOWING TEACHER'}
+              {controlHolderName ? `ðŸŽ¯ ${controlHolderName} DRIVING` : (interactionAllowed ? 'INTERACTIVE' : 'FOLLOWING TEACHER')}
             </span>
           )}
 
@@ -1383,10 +1400,11 @@ export default function StudentView() {
                 allow={LESSON_IFRAME_ALLOW}
                 allowFullScreen
               />
-              {/* View-only overlay â€” blocks pointer events on content unless the
-                  student may drive (room interactive OR holds the control grant).
+              {/* View-only overlay â€” blocks pointer events (incl. wheel/touch
+                  scroll) on the sim. Shown ONLY in true view-only: not when the
+                  room is interactive and not when this student holds control.
                   Alt+click still passes through so anyone can ping "look here". */}
-              {!canDrive && (
+              {!canInteract && (
                 <div
                   className="absolute inset-0"
                   style={{ pointerEvents: 'auto', zIndex: 1, cursor: 'crosshair' }}

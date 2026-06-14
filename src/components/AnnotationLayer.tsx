@@ -816,7 +816,12 @@ export default function AnnotationLayer({
             ? (shapeActive ? 'crosshair' : eraserActive ? ERASER_CURSOR : drawMode ? 'crosshair' : laserMode ? 'none' : 'default')
             : 'default',
           pointerEvents: interactive && (drawMode || laserMode || eraserActive || shapeActive) ? 'auto' : 'none',
-          touchAction: 'none',
+          // Only swallow touch gestures while a drawing tool is actually active.
+          // When the canvas isn't capturing (pointerEvents:none), keep
+          // touchAction 'auto' so finger-scroll passes through to the iframe —
+          // otherwise an unconditional 'none' silently blocks scrolling on
+          // touch devices even in interactive mode.
+          touchAction: interactive && (drawMode || laserMode || eraserActive || shapeActive) ? 'none' : 'auto',
           // AUTONOMOUS: [iPad fix] - Disable Safari's text-selection /
           // callout / touch-highlight on touch — they interfere with
           // freehand drawing on iPad.
