@@ -2340,7 +2340,15 @@ Build a widget that teaches: ${safePrompt}`;
 
     // ─── INTERACTION SYNC ───
     socket.on('interaction', ({ roomId, event }: { roomId: string; event: any }) => {
-      const evtType = event?.type;
+      // HARDENING: a null / non-object event must be dropped BEFORE `event.userId
+      // = ...` below. Otherwise that assignment throws, and because this is an
+      // async socket handler the exception is uncaught and crashes the whole
+      // Node process — taking down EVERY room on the server. Any client (even a
+      // view-only student) could do this with one malformed packet. Found by
+      // stress6 P6 (malformed-payload). Also validate roomId/type defensively.
+      if (!event || typeof event !== 'object' || typeof event.type !== 'string') return;
+      if (typeof roomId !== 'string') return;
+      const evtType = event.type;
       const lossTolerant = evtType === 'SYNC_CURSOR' || evtType === 'SYNC_SCROLL'
         || evtType === 'SYNC_DRAG' || evtType === 'SYNC_MOUSEMOVE';
       if (!checkRateLimit(socket.id, lossTolerant)) return; // Rate limited
