@@ -199,18 +199,20 @@ export default function StudentView() {
   const canDrive = hasControl;
   const canDriveRef = useRef(false);
   useEffect(() => { canDriveRef.current = canDrive; }, [canDrive]);
-  // Whether the student may LOCALLY interact with the sim inside their own
-  // iframe — SCROLL it, click its buttons, type into it. Unlocked by EITHER the
-  // room-wide interaction toggle OR a personal control grant. This is distinct
-  // from canDrive (driving the SHARED sim): a non-control student's events stay
-  // local — the parent never forwards them to the server (see the canDrive gate
-  // in the message relay) and the server drops them anyway — so each student
-  // explores their own copy without desyncing the class. A view-only student
-  // gets a hard-locked, mirror-only iframe (no scroll, no clicks). This is the
-  // flag that releases scrolling in interactive mode.
-  const canInteract = interactionAllowed || hasControl;
-  const canInteractRef = useRef(false);
-  useEffect(() => { canInteractRef.current = canInteract; }, [canInteract]);
+  // Tracks the last touch-Y so the view-only overlay can translate a finger
+  // drag into iframe scrolling (forward scroll while still blocking clicks).
+  const overlayTouchYRef = useRef(0);
+  // SCROLLING vs DRIVING are intentionally separate concerns:
+  //  • A student may ALWAYS scroll their own viewport (it's their screen). The
+  //    blocking overlay forwards wheel/touch to the iframe and the injected sync
+  //    script no longer snaps scroll back, so scrolling never desyncs anyone.
+  //  • CLICKS / typing into the sim are mirror-only: a student FOLLOWS the
+  //    teacher's interactions (stays on the same question) and may drive the
+  //    shared sim ONLY while holding the control grant (canDrive). This is what
+  //    prevents the "she clicked ahead and is on a different question" drift —
+  //    interactive mode must NOT let a student click the lesson out of sync.
+  // The room-wide interactive toggle governs SKETCHING (canAnnotate), not sim
+  // clicks: it lets students annotate + scroll, never click the lesson freely.
   // Whether the student may SKETCH over the lesson. When the teacher is just
   // presenting (view-only), the student is a pure viewer — no button presses
   // AND no drawing. Sketching is unlocked only when the teacher enables
@@ -976,12 +978,12 @@ export default function StudentView() {
     for (const msg of pending) {
       iframeRef.current?.contentWindow?.postMessage(msg, '*');
     }
-    // ALWAYS re-push SET_INTERACTION_MODE on every iframe load. A student is a
-    // mirror (locked: no scroll, no clicks) UNLESS the room is in interactive
-    // mode or they hold control; re-pushing canInteract makes the iframe's
-    // input filter authoritative regardless of fresh/hot state. (Driving the
-    // SHARED sim is still control-only — gated separately in the message relay.)
-    iframeRef.current?.contentWindow?.postMessage({ type: 'SET_INTERACTION_MODE', allowed: canInteractRef.current }, '*');
+    // ALWAYS re-push SET_INTERACTION_MODE on every iframe load. allowed=canDrive
+    // means CLICKS are mirror-only unless this student holds control — so a
+    // student never clicks the lesson out of sync. Scrolling is handled
+    // separately (overlay forwards it; the sync script no longer locks scroll),
+    // so this staying false does NOT prevent the student from scrolling.
+    iframeRef.current?.contentWindow?.postMessage({ type: 'SET_INTERACTION_MODE', allowed: canDriveRef.current }, '*');
     // Re-send current state
     iframeRef.current?.contentWindow?.postMessage({ type: 'SET_SCROLL_SYNC', enabled: scrollSyncEnabled }, '*');
     if (currentStep < 999) {
@@ -1078,13 +1080,13 @@ export default function StudentView() {
 
 
   // â”€â”€ Push interaction mode to iframe â”€â”€
-  // Unlock LOCAL input (scroll / clicks / typing inside the iframe) when the
-  // room is interactive OR this student holds control. Driving the shared sim
-  // is gated separately (canDrive) in the message relay, so an interactive
-  // non-control student interacts with their own copy only.
+  // allowed=canDrive: a student's CLICKS into the lesson are mirror-only (they
+  // follow the teacher, staying on the same question) unless they hold the
+  // control grant. Scrolling is intentionally NOT gated by this — it's handled
+  // by the overlay + sync script so every student can always scroll their view.
   useEffect(() => {
-    postToIframe({ type: 'SET_INTERACTION_MODE', allowed: canInteract });
-  }, [canInteract, iframeUrl, postToIframe]);
+    postToIframe({ type: 'SET_INTERACTION_MODE', allowed: canDrive });
+  }, [canDrive, iframeUrl, postToIframe]);
 
   // â”€â”€ Challenge Timer Countdown â”€â”€
   useEffect(() => {
@@ -1400,21 +1402,33 @@ export default function StudentView() {
                 allow={LESSON_IFRAME_ALLOW}
                 allowFullScreen
               />
-              {/* View-only overlay â€” blocks pointer events (incl. wheel/touch
-                  scroll) on the sim. Shown ONLY in true view-only: not when the
-                  room is interactive and not when this student holds control.
-                  Alt+click still passes through so anyone can ping "look here". */}
-              {!canInteract && (
+              {/* Mirror overlay — shown to every student who isn't the driver
+                  (view-only AND interactive non-control). It BLOCKS clicks/taps
+                  into the lesson (so a student can't click ahead onto a
+                  different question) but FORWARDS wheel/touch to the iframe so
+                  the student can still freely scroll their own view. Alt+click
+                  still pings "look here". */}
+              {!canDrive && (
                 <div
                   className="absolute inset-0"
-                  style={{ pointerEvents: 'auto', zIndex: 1, cursor: 'crosshair' }}
-                  onWheel={(e) => e.preventDefault()}
-                  onTouchMove={(e) => e.preventDefault()}
+                  style={{ pointerEvents: 'auto', zIndex: 1, cursor: 'crosshair', touchAction: 'none' }}
+                  onWheel={(e) => {
+                    // Forward the scroll to the lesson iframe instead of blocking it.
+                    const win = iframeRef.current?.contentWindow;
+                    if (win) win.scrollBy(e.deltaX, e.deltaY);
+                  }}
+                  onTouchStart={(e) => { overlayTouchYRef.current = e.touches[0]?.clientY ?? 0; }}
+                  onTouchMove={(e) => {
+                    const y = e.touches[0]?.clientY ?? 0;
+                    const win = iframeRef.current?.contentWindow;
+                    if (win) win.scrollBy(0, overlayTouchYRef.current - y);
+                    overlayTouchYRef.current = y;
+                  }}
                   onMouseDown={(e) => { if (!e.altKey) e.preventDefault(); }}
                   onClick={(e) => {
-                    // The overlay swallows clicks to the sim, but a view-only
-                    // student can still Alt+click to ping "look here" â€” show it
-                    // locally and relay it to the room.
+                    // The overlay swallows clicks to the sim, but a student can
+                    // still Alt+click to ping "look here" — show it locally and
+                    // relay it to the room.
                     if (!e.altKey || !socket) return;
                     const rect = e.currentTarget.getBoundingClientRect();
                     const nx = (e.clientX - rect.left) / rect.width;

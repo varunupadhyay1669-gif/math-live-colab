@@ -48,16 +48,15 @@ export const injectedSyncScript = `
       return true;
     }
 
-    // Strict scroll blocking for view-only mode
+    // SCROLL IS NEVER LOCKED. A student must always be able to scroll their own
+    // viewport (the parent's mirror overlay forwards wheel/touch into here).
+    // Previously this snapped the student back to the teacher's scroll position
+    // in view-only mode, which made students unable to scroll at all. We keep
+    // the function (it has several call sites) but it is now a no-op. Following
+    // the teacher's scroll is still possible via REMOTE_SCROLL (scroll-sync),
+    // which is a separate, opt-in channel.
     function enforceScrollLock() {
-      if (!interactionBlocked || isRemote()) return;
-      var currX = window.scrollX || 0;
-      var currY = window.scrollY || 0;
-      if (currX !== lockedWindowX || currY !== lockedWindowY) {
-        enterRemote();
-        window.scrollTo(lockedWindowX, lockedWindowY);
-        setTimeout(function() { exitRemote(); }, 0);
-      }
+      return;
     }
 
     // Show a visual indicator when following clicks from another user
