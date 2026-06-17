@@ -53,7 +53,7 @@ export default function StudentScreenPanel({
           <button onClick={onResync} className="ml-btn ml-btn-sm ml-btn-secondary" title="Rebuild this student from the current class state">
             ⟳ Resync
           </button>
-          <button onClick={onClose} className="ml-icon-btn ml-icon-btn-sm" title="Close">✕</button>
+          <button onClick={onClose} className="ml-icon-btn ml-icon-btn-sm" title="Close" aria-label="Close">✕</button>
         </div>
         {/* Screen */}
         <div className="flex-1" style={{ background: '#0b0d12', position: 'relative' }}>
