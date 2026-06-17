@@ -1,0 +1,3 @@
+## 2024-06-18 - Immediate Context for Disabled Buttons
+**Learning:** Found several buttons that were disabled without providing the user a reason. Users can be easily frustrated if an action is unavailable but there is no tooltip explaining why. When disabled states occur due to a condition (e.g. minimum zoom reached, missing form input), adding a tooltip directly tied to that conditional state helps the user understand what action to take (or what to stop doing) to proceed.
+**Action:** Always include a `title` or `data-tip` attribute explaining *why* the button is disabled to provide immediate context for users, dynamically updating the value using conditionals or ternaries.
