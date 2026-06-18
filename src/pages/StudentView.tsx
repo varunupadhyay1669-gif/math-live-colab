@@ -1242,14 +1242,14 @@ export default function StudentView() {
           <button onClick={() => {
             if (document.fullscreenElement) document.exitFullscreen();
             else document.documentElement.requestFullscreen().catch(() => {});
-          }} className="btn-icon" data-tip="Fullscreen">
+          }} aria-label="Fullscreen" className="btn-icon" data-tip="Fullscreen">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/>
             </svg>
           </button>
 
           <button onClick={() => { const m = sounds.toggleMute(); setSoundMuted(m); }}
-            className="btn-icon" data-tip={soundMuted ? 'Unmute' : 'Mute'}>
+            aria-label={soundMuted ? 'Unmute' : 'Mute'} className="btn-icon" data-tip={soundMuted ? 'Unmute' : 'Mute'}>
             {soundMuted ? (
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/>
@@ -1262,7 +1262,7 @@ export default function StudentView() {
           </button>
 
           {/* Chat Toggle */}
-          <button onClick={toggleChat} className={`btn-icon relative ${chatOpen ? 'active' : ''}`} data-tip="Chat">
+          <button onClick={toggleChat} aria-label="Chat" className={`btn-icon relative ${chatOpen ? 'active' : ''}`} data-tip="Chat">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/>
             </svg>

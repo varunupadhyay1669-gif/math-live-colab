@@ -119,25 +119,25 @@ export default function TeacherControls({
         {!whiteboardMode && (
           <>
             <button onClick={() => { onSetDrawMode(false); onSetLaserMode(false); onSetEraserMode('off'); onSetShapeTool('off'); }}
-              className={`tb-btn ${isCursor && eraserMode === 'off' && shapeTool === 'off' ? 'active' : ''}`} data-tip="Cursor">
+              aria-label="Cursor" className={`tb-btn ${isCursor && eraserMode === 'off' && shapeTool === 'off' ? 'active' : ''}`} data-tip="Cursor">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M3 3l7.07 16.97 2.51-7.39 7.39-2.51z"/>
               </svg>
             </button>
             <button onClick={() => { onSetDrawMode(true); onSetPenType('transient'); onSetLaserMode(false); onSetEraserMode('off'); onSetShapeTool('off'); }}
-              className={`tb-btn ${isDraw && eraserMode === 'off' && shapeTool === 'off' ? 'active' : ''}`} data-tip="Draw (fades)">
+              aria-label="Draw (fades)" className={`tb-btn ${isDraw && eraserMode === 'off' && shapeTool === 'off' ? 'active' : ''}`} data-tip="Draw (fades)">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M17 3a2.828 2.828 0 114 4L7.5 20.5 2 22l1.5-5.5z"/>
               </svg>
             </button>
             <button onClick={() => { onSetDrawMode(true); onSetPenType('permanent'); onSetLaserMode(false); onSetEraserMode('off'); onSetShapeTool('off'); }}
-              className={`tb-btn ${isInk && eraserMode === 'off' && shapeTool === 'off' ? 'active' : ''}`} data-tip="Ink (permanent)">
+              aria-label="Ink (permanent)" className={`tb-btn ${isInk && eraserMode === 'off' && shapeTool === 'off' ? 'active' : ''}`} data-tip="Ink (permanent)">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M12 19l7-7 3 3-7 7-3-3z"/><path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z"/>
               </svg>
             </button>
             <button onClick={() => { onSetLaserMode(true); onSetDrawMode(false); onSetEraserMode('off'); onSetShapeTool('off'); }}
-              className={`tb-btn ${laserMode ? 'active-rose' : ''}`} data-tip="Laser pointer">
+              aria-label="Laser pointer" className={`tb-btn ${laserMode ? 'active-rose' : ''}`} data-tip="Laser pointer">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <circle cx="12" cy="12" r="3"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/>
               </svg>
@@ -154,7 +154,7 @@ export default function TeacherControls({
                 onSetLaserMode(false);
                 onSetShapeTool('off');
               }}
-              className={`tb-btn ${eraserMode !== 'off' ? 'active' : ''}`}
+              aria-label="Toggle Eraser" className={`tb-btn ${eraserMode !== 'off' ? 'active' : ''}`}
               data-tip={eraserMode !== 'off' ? 'Eraser on — click to turn off' : 'Eraser'}
               aria-pressed={eraserMode !== 'off'}
             >
@@ -212,7 +212,7 @@ export default function TeacherControls({
                   onSetLaserMode(false);
                   onSetEraserMode('off');
                 }}
-                className={`tb-btn ${shapeTool === s.id ? 'active' : ''}`}
+                aria-label={s.tip} className={`tb-btn ${shapeTool === s.id ? 'active' : ''}`}
                 data-tip={s.tip}
                 aria-pressed={shapeTool === s.id}
               >
@@ -238,13 +238,13 @@ export default function TeacherControls({
           <span style={{ fontSize: '11.5px' }}>{scrollSyncEnabled ? 'Linked' : 'Free'}</span>
         </button>
 
-        <button onClick={onForceSync} className="tb-btn" data-tip="Force sync all students">
+        <button onClick={onForceSync} aria-label="Force sync all students" className="tb-btn" data-tip="Force sync all students">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
             <polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/>
           </svg>
         </button>
 
-        <button onClick={onResetView} className="tb-btn" data-tip="Scroll everyone to top">
+        <button onClick={onResetView} aria-label="Scroll everyone to top" className="tb-btn" data-tip="Scroll everyone to top">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
             <line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/>
           </svg>
@@ -253,7 +253,7 @@ export default function TeacherControls({
         <div className="toolbar-divider" />
 
         {/* ── Zoom Controls (synced to all students) ── */}
-        <button onClick={onZoomOut} className="tb-btn" data-tip="Zoom out (synced)" disabled={zoomLevel <= 0.5}>
+        <button onClick={onZoomOut} aria-label="Zoom out (synced)" className="tb-btn" data-tip="Zoom out (synced)" disabled={zoomLevel <= 0.5}>
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
             <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="8" y1="11" x2="14" y2="11"/>
           </svg>
@@ -264,7 +264,7 @@ export default function TeacherControls({
             {Math.round(zoomLevel * 100)}%
           </span>
         </button>
-        <button onClick={onZoomIn} className="tb-btn" data-tip="Zoom in (synced)" disabled={zoomLevel >= 3}>
+        <button onClick={onZoomIn} aria-label="Zoom in (synced)" className="tb-btn" data-tip="Zoom in (synced)" disabled={zoomLevel >= 3}>
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
             <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/>
           </svg>
@@ -288,7 +288,7 @@ export default function TeacherControls({
           <span style={{ fontSize: '11.5px' }}>{studentInteractionAllowed ? 'Interactive' : 'View Only'}</span>
         </button>
 
-        <button onClick={onAttentionCheck} className="tb-btn" data-tip="Roll call — check who's here">
+        <button onClick={onAttentionCheck} aria-label="Roll call — check who's here" className="tb-btn" data-tip="Roll call — check who's here">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
             <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 010 14.14M15.54 8.46a5 5 0 010 7.07"/>
           </svg>
@@ -303,7 +303,7 @@ export default function TeacherControls({
               if (!showTimerMenu) setTimerMenuPos(anchorMenu(timerBtnRef.current, 170));
               setShowTimerMenu(!showTimerMenu);
             }}
-            className={`tb-btn ${challengeTimer ? 'active' : ''}`}
+            aria-label="Challenge timer" className={`tb-btn ${challengeTimer ? 'active' : ''}`}
             data-tip={challengeTimer ? `${challengeTimer.remaining}s remaining` : 'Challenge timer'}>
             {challengeTimer ? (
               <span style={{ fontSize: '12px', fontWeight: 700, fontVariantNumeric: 'tabular-nums', color: 'inherit' }}>
@@ -338,7 +338,7 @@ export default function TeacherControls({
           )}
         </div>
 
-        <button onClick={onOpenQuiz} className="tb-btn" data-tip="Pop quiz">
+        <button onClick={onOpenQuiz} aria-label="Pop quiz" className="tb-btn" data-tip="Pop quiz">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
             <circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 015.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/>
           </svg>
@@ -385,7 +385,7 @@ export default function TeacherControls({
         {/* ── Follow Student Clicks ── */}
         <button
           onClick={onToggleFollowStudentClicks}
-          className={`tb-btn ${followStudentClicks ? 'active-emerald' : ''}`}
+          aria-label="Toggle follow student clicks" className={`tb-btn ${followStudentClicks ? 'active-emerald' : ''}`}
           data-tip={followStudentClicks ? 'Stop following student clicks' : 'Follow student clicks'}
         >
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
@@ -404,7 +404,7 @@ export default function TeacherControls({
               if (!showReactionMenu) setReactionMenuPos(anchorMenu(reactionBtnRef.current, 320));
               setShowReactionMenu(!showReactionMenu);
             }}
-            className="tb-btn" data-tip="Send reaction">
+            aria-label="Send reaction" className="tb-btn" data-tip="Send reaction">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
               <circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/>
             </svg>
@@ -428,7 +428,7 @@ export default function TeacherControls({
           )}
         </div>
 
-        <button onClick={onTriggerCelebration} className="tb-btn" data-tip="Celebrate!">
+        <button onClick={onTriggerCelebration} aria-label="Celebrate!" className="tb-btn" data-tip="Celebrate!">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
             <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>
           </svg>
@@ -449,7 +449,7 @@ export default function TeacherControls({
         </button>
 
         {/* ── Hard Reset ── */}
-        <button onClick={onHardReset} className="tb-btn" data-tip="Hard reset — clear everything"
+        <button onClick={onHardReset} aria-label="Hard reset — clear everything" className="tb-btn" data-tip="Hard reset — clear everything"
           style={{ color: 'var(--accent-rose, #F43F5E)' }}>
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
             <path d="M3 12a9 9 0 0115.5-6.3L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 01-15.5 6.3L3 16"/><path d="M3 21v-5h5"/>
@@ -495,7 +495,7 @@ export default function TeacherControls({
           <div style={{ display: 'flex', gap: '2px' }}>
             {([{ v: 2, l: 'S' }, { v: 4, l: 'M' }, { v: 7, l: 'L' }] as const).map(({ v, l }) => (
               <button key={v} onClick={() => onSetPenWidth(v)}
-                className={`tb-btn ${penWidth === v ? 'active' : ''}`}
+                aria-label={`Pen width ${l}`} className={`tb-btn ${penWidth === v ? 'active' : ''}`}
                 style={{ width: '28px', height: '28px', fontSize: '11px', fontWeight: 700 }}>
                 {l}
               </button>
