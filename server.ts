@@ -1071,6 +1071,24 @@ async function startServer() {
   io.on('connection', (socket) => {
     console.log('User connected:', socket.id);
 
+    // HARDENING (server-wide): almost every handler below destructures its first
+    // argument — `socket.on('x', ({ roomId, ... }) => ...)`. Destructuring a
+    // `null`/`undefined` payload throws AT THE PARAMETER, before any in-handler
+    // guard can run, and because these are async socket handlers that throw is
+    // uncaught — it crashes the whole Node process and every room with it. A
+    // hostile or buggy client emitting `socket.emit('join_room', null)` should
+    // never be able to do that. This middleware runs before every event on this
+    // socket and coerces a nullish first payload to `{}`, so destructuring is
+    // always safe and each handler's own validation handles the empty object.
+    socket.use((packet, next) => {
+      try {
+        if (Array.isArray(packet) && packet.length >= 2 && (packet[1] === null || packet[1] === undefined)) {
+          packet[1] = {};
+        }
+      } catch (ignore) {}
+      next();
+    });
+
     // AUTONOMOUS: [ORDER-3 FRICTION] - ping/pong for the client-side
     // latency indicator. Client emits `ping` with a timestamp; we echo it
     // back as `pong` and the client measures RTT. Stateless, cheap (only
@@ -2628,7 +2646,10 @@ Build a widget that teaches: ${safePrompt}`;
       const isCorrect = gate.correctIndex === answerIndex;
 
       // ── Gamification: update XP & streaks ──
-      const name = (studentName || 'Student').trim().slice(0, 40);
+      // Coerce studentName to a string FIRST: a client can send a non-string
+      // (e.g. a number), and calling .trim() on it throws — which, in an async
+      // socket handler, crashes the whole process. Found by the crash-vector audit.
+      const name = (typeof studentName === 'string' ? studentName : 'Student').trim().slice(0, 40) || 'Student';
       if (!room.scores[name]) {
         room.scores[name] = { xp: 0, streak: 0, bestStreak: 0, correct: 0, total: 0 };
       }
