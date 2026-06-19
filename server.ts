@@ -185,7 +185,10 @@ interface SessionStatePayload {
 
 async function startServer() {
   const app = express();
-  const PORT = parseInt(process.env.PORT || '3000', 10);
+  // Default to 4000 locally so MathsLive never collides with the MathEinstein
+  // Next.js app (which owns :3000). Hosting platforms always inject their own
+  // PORT, so this default only affects local `npm run dev` / `npm start`.
+  const PORT = parseInt(process.env.PORT || '4000', 10);
 
   const httpServer = createServer(app);
   // CORS: open by default (same-origin serving means the browser never
@@ -2918,6 +2921,11 @@ Build a widget that teaches: ${safePrompt}`;
       ok: true,
       uptime: process.uptime(),
       rooms: rooms.size,
+      // Which build is actually live. Render injects RENDER_GIT_COMMIT; this
+      // lets you curl /healthz and confirm your latest push really deployed
+      // (instead of guessing whether a fix is live). Falls back to 'dev' locally.
+      commit: (process.env.RENDER_GIT_COMMIT || process.env.GIT_COMMIT || 'dev').slice(0, 7),
+      durableRooms: roomStore.kind === 'redis',
       ts: Date.now(),
     });
   });

@@ -37,7 +37,7 @@ Prerequisites: Node.js ≥ 20.
 
 ```bash
 npm install
-npm run dev        # Vite + Socket.IO on http://localhost:3000 (PORT to override)
+npm run dev        # Vite + Socket.IO on http://localhost:4000 (PORT to override)
 ```
 
 There is **no separate frontend server** — `server.ts` boots Vite in
