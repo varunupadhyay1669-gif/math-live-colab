@@ -12,7 +12,7 @@ import { savedBoards, templates } from "../lib/prefs";
 import { LESSON_IFRAME_SANDBOX, LESSON_IFRAME_ALLOW } from "../lib/iframeAttrs";
 import SaveBoardBanner from "../components/SaveBoardBanner";
 
-// â”€â”€ Components â”€â”€
+// ── Components ──
 import TeacherControls from "../components/TeacherControls";
 import ChatPanel from "../components/ChatPanel";
 import FeedbackToasts from "../components/FeedbackToasts";
@@ -32,7 +32,7 @@ import Leaderboard from "../components/Leaderboard";
 import Whiteboard from "../components/Whiteboard";
 import { useAuth } from "../lib/auth";
 
-// â”€â”€ Types â”€â”€
+// ── Types ──
 interface FileEntry {
   id: string;
   name: string;
@@ -83,35 +83,35 @@ export default function Room() {
   // The signed-in teacher's Supabase token, mirrored into a ref so the socket
   // 'connect' handler (set up once) always reads the latest value. Sent on
   // join_room so the server can enforce class ownership (Stage 3). Undefined
-  // when auth is disabled â€” server then skips enforcement.
+  // when auth is disabled — server then skips enforcement.
   const authTokenRef = useRef<string | null>(null);
   useEffect(() => { authTokenRef.current = auth.session?.access_token ?? null; }, [auth.session]);
   const [searchParams] = useSearchParams();
   // Never teach under a raw email: Dashboard links historically passed the
-  // account email as ?name= â€” students then saw it on cursors, chat and the
+  // account email as ?name= — students then saw it on cursors, chat and the
   // participants list. cleanDisplayName turns it into a humane name and
   // leaves normal names untouched.
   const teacherName = cleanDisplayName(searchParams.get('name')) || 'Teacher';
-  // AUTONOMOUS: Lesson templates â€” when arriving with ?template=ID,
+  // AUTONOMOUS: Lesson templates — when arriving with ?template=ID,
   // we hydrate the fresh room with the saved snapshot from localStorage
   // (see prefs.ts templates store). Applied at most once per session
   // via templateAppliedRef.
   const templateId = searchParams.get('template');
   const templateAppliedRef = useRef(false);
 
-  // â”€â”€ View Mode â”€â”€
+  // ── View Mode ──
   type ViewMode = 'split' | 'code' | 'preview';
   const [viewMode, setViewMode] = useState<ViewMode>(
     typeof window !== 'undefined' && window.innerWidth < 768 ? 'preview' : 'split'
   );
 
-  // â”€â”€ Core State â”€â”€
+  // ── Core State ──
   const [socket, setSocket] = useState<Socket | null>(null);
   const [connected, setConnected] = useState(false);
   // AUTONOMOUS: When the teacher opens the same room in two browser
   // tabs, only the most recently joined window owns the teacher seat
   // server-side (PR #42 takeover gate). The OLD window keeps running
-  // â€” its student-cursor cards still update, the UI looks healthy â€”
+  // — its student-cursor cards still update, the UI looks healthy —
   // but every teacher-only emit silently fails the requireTeacher
   // check. The tutor would think "sync is broken" without realising
   // they're on the wrong tab. This banner makes the demotion explicit
@@ -127,8 +127,8 @@ export default function Room() {
   const sessionParam = searchParams.get('session');
   const sessionAppliedRef = useRef(false);
   // AUTONOMOUS: Miro-style claim status.
-  // claimed=false â†’ 24h auto-expiry; banner shows "X left to save".
-  // claimed=true  â†’ 30d expiry; banner hidden.
+  // claimed=false → 24h auto-expiry; banner shows "X left to save".
+  // claimed=true  → 30d expiry; banner hidden.
   // expiresAt is server-authoritative; we just countdown locally.
   const [claimed, setClaimed] = useState(false);
   const [claimedBy, setClaimedBy] = useState<string | null>(null);
@@ -148,7 +148,7 @@ export default function Room() {
   const [activeFileId, setActiveFileId] = useState<string | null>(null);
   const [htmlCode, setHtmlCode] = useState("");
   const [previewHtml, setPreviewHtml] = useState("");
-  // Server-issued deterministic RNG seed for the current lesson — injected
+  // Server-issued deterministic RNG seed for the current lesson - injected
   // into the sim so the teacher and every student draw the same Math.random()
   // sequence (keeps non-deterministic sims, e.g. random quizzes, in lockstep).
   const [randomSeed, setRandomSeed] = useState(0);
@@ -160,13 +160,13 @@ export default function Room() {
   const [users, setUsers] = useState<UserInfo[]>([]);
   const [cursors, setCursors] = useState<Record<string, Cursor>>({});
 
-  // â”€â”€ Feature State â”€â”€
+  // ── Feature State ──
   const [isPaused, setIsPaused] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [showQuizModal, setShowQuizModal] = useState(false);
   const [quizQuestion, setQuizQuestion] = useState("");
-  // Optional multiple-choice answers. â‰¥2 non-blank â†’ students get tap-to-answer
+  // Optional multiple-choice answers. ≥2 non-blank → students get tap-to-answer
   // buttons; otherwise the quiz stays free-text exactly as before.
   const [quizOptions, setQuizOptions] = useState<string[]>(["", "", "", ""]);
   const [quizAnswers, setQuizAnswers] = useState<Array<{ answer: string; studentName: string }>>([]);
@@ -193,7 +193,7 @@ export default function Room() {
   const [explainName, setExplainName] = useState("");
   const [pasteFileName, setPasteFileName] = useState("");
 
-  // â”€â”€ Drawing & Annotation â”€â”€
+  // ── Drawing & Annotation ──
   const [drawMode, setDrawMode] = useState(false);
   const [laserMode, setLaserMode] = useState(false);
   // Annotation eraser tool (overlay-on-iframe). 'off' by default; 'stroke'
@@ -206,25 +206,25 @@ export default function Room() {
   const [penColor, setPenColor] = useState('#6366F1');
   const [penWidth, setPenWidth] = useState(3);
 
-  // â”€â”€ Challenge Timer â”€â”€
+  // ── Challenge Timer ──
   const [challengeTimer, setChallengeTimer] = useState<{ seconds: number; remaining: number } | null>(null);
   const challengeTimerRef = useRef<ReturnType<typeof setInterval>>();
 
-  // â”€â”€ Student Feedback â”€â”€
+  // ── Student Feedback ──
   const [studentFeedback, setStudentFeedback] = useState<Array<{ id: number; emoji: string; label: string; studentName: string }>>([]);
   const feedbackIdRef = useRef(0);
 
-  // â”€â”€ Celebration â”€â”€
+  // ── Celebration ──
   const [showCelebration, setShowCelebration] = useState(false);
   const [celebrationType, setCelebrationType] = useState<'confetti' | 'fireworks' | 'stars'>('confetti');
 
-  // â”€â”€ Sync Status â”€â”€
+  // ── Sync Status ──
   const [lastSyncTime, setLastSyncTime] = useState<number | null>(null);
 
-  // â”€â”€ Scroll Sync â”€â”€
+  // ── Scroll Sync ──
   const [scrollSyncEnabled, setScrollSyncEnabled] = useState(true);
 
-  // â”€â”€ Temporary Explanation Content â”€â”€
+  // ── Temporary Explanation Content ──
   const [tempContent, setTempContent] = useState<{ html: string; name: string } | null>(null);
   const [showTempContent, setShowTempContent] = useState(false);
   const tempFileInputRef = useRef<HTMLInputElement>(null);
@@ -249,14 +249,14 @@ export default function Room() {
     };
   }, [tempContentUrl]);
 
-  // â”€â”€ Zoom Sync â”€â”€
+  // ── Zoom Sync ──
   const [zoomLevel, setZoomLevel] = useState(1);
 
-  // â”€â”€ Gamification â”€â”€
+  // ── Gamification ──
   const [leaderboard, setLeaderboard] = useState<Array<{ studentName: string; xp: number; streak: number }>>([]);
   const [showLeaderboard, setShowLeaderboard] = useState(false);
 
-  // â”€â”€ Whiteboard â”€â”€
+  // ── Whiteboard ──
   const [whiteboardMode, setWhiteboardMode] = useState(false);
   const [whiteboardScrollX, setWhiteboardScrollX] = useState(0);
   const [whiteboardScrollY, setWhiteboardScrollY] = useState(0);
@@ -268,11 +268,11 @@ export default function Room() {
   const [annotations, setAnnotations] = useState<Array<{ senderId: string; stroke: any }> | undefined>(undefined);
   const whiteboardRef = useRef<import('../components/Whiteboard').WhiteboardRef>(null);
 
-  // â”€â”€ Student Interaction Mode â”€â”€
+  // ── Student Interaction Mode ──
   const [studentInteractionAllowed, setStudentInteractionAllowed] = useState(false);
 
-  // â”€â”€ Whiteboard Mutual Sync (Miro/Canva "shared book" model) â”€â”€
-  // Default ON â€” both sides see each other's pan/zoom in real time. Toggle
+  // ── Whiteboard Mutual Sync (Miro/Canva "shared book" model) ──
+  // Default ON — both sides see each other's pan/zoom in real time. Toggle
   // off to get an independent canvas for either side. `peerSyncEnabled`
   // tracks whether the OTHER side currently has sync on (purely for the
   // "Independent" badge; the local side is the one that drives this side's
@@ -280,14 +280,14 @@ export default function Room() {
   const [whiteboardSyncEnabled, setWhiteboardSyncEnabled] = useState(true);
   const [peerSyncEnabled, setPeerSyncEnabled] = useState(true);
 
-  // â”€â”€ Attention Check â”€â”€
+  // ── Attention Check ──
   const [attentionAcks, setAttentionAcks] = useState<Array<{ studentName: string; timestamp: number }>>([]);
   const [attentionCheckActive, setAttentionCheckActive] = useState(false);
 
-  // â”€â”€ Follow Clicks â”€â”€
+  // ── Follow Clicks ──
   const [followStudentClicks, setFollowStudentClicks] = useState(false);
   const [studentClickIndicators, setStudentClickIndicators] = useState<Array<{ id: number; x: number; y: number; name: string; color: string }>>([]);
-  // Ref-mirror for the socket "interaction" listener â€” that listener is
+  // Ref-mirror for the socket "interaction" listener — that listener is
   // installed inside a useEffect with a small dep list, so the closure
   // captures followStudentClicks at mount-time. Without this ref, toggling
   // the button after mount silently does nothing because the listener still
@@ -295,11 +295,11 @@ export default function Room() {
   const followStudentClicksRef = useRef(false);
   useEffect(() => { followStudentClicksRef.current = followStudentClicks; }, [followStudentClicks]);
 
-  // â”€â”€ Iframe readiness â”€â”€
+  // ── Iframe readiness ──
   const iframeReadyRef = useRef(false);
   const pendingMessagesRef = useRef<any[]>([]);
 
-  // â”€â”€ Dual View (split: teacher | student mirror) â”€â”€
+  // ── Dual View (split: teacher | student mirror) ──
   const [dualView, setDualView] = useState(false);
   const dualViewRef = useRef(false);
   useEffect(() => { dualViewRef.current = dualView; }, [dualView]);
@@ -307,32 +307,32 @@ export default function Room() {
   const mirrorReadyRef = useRef(false);
   const pendingMirrorMessagesRef = useRef<any[]>([]);
 
-  // â”€â”€ Step-Lock â”€â”€
+  // ── Step-Lock ──
   const [stepLockEnabled, setStepLockEnabled] = useState(false);
   const [currentStep, setCurrentStep] = useState(1);
   const [maxStep, setMaxStep] = useState(0);
   const [gates, setGates] = useState<Record<number, GateData>>({});
   const [showGateModal, setShowGateModal] = useState(false);
 
-  // â”€â”€ Control handoff ("the chalk") â”€â”€
+  // ── Control handoff ("the chalk") ──
   const [controlHolderName, setControlHolderName] = useState<string | null>(null);
-  // â”€â”€ Student Peek (view a student's real screen) â”€â”€
+  // ── Student Peek (view a student's real screen) ──
   const [peekStudent, setPeekStudent] = useState<{ id: string; name: string } | null>(null);
   const [peekHtml, setPeekHtml] = useState<string | null>(null);
   const [peekUpdatedAt, setPeekUpdatedAt] = useState(0);
   const peekStudentRef = useRef<{ id: string; name: string } | null>(null);
   useEffect(() => { peekStudentRef.current = peekStudent; }, [peekStudent]);
-  // â”€â”€ Lesson Time Machine â”€â”€
+  // ── Lesson Time Machine ──
   const [bookmarks, setBookmarks] = useState<Array<{ id: string; name: string; ts: number }>>([]);
   const [showTimeMachine, setShowTimeMachine] = useState(false);
 
-  // â”€â”€ Attention Detection â”€â”€
+  // ── Attention Detection ──
   const [attention, setAttention] = useState<Record<string, StudentAttention>>({});
 
-  // â”€â”€ Simulation Library â”€â”€
+  // ── Simulation Library ──
   const [showLibrary, setShowLibrary] = useState(false);
 
-  // â”€â”€ Recording â”€â”€
+  // ── Recording ──
   const [isRecording, setIsRecording] = useState(false);
   // Ref-mirror, same reasoning as followStudentClicksRef above. Without this
   // the socket "interaction" listener captured isRecording=false at mount and
@@ -340,18 +340,18 @@ export default function Room() {
   const isRecordingRef = useRef(false);
   useEffect(() => { isRecordingRef.current = isRecording; }, [isRecording]);
 
-  // â”€â”€ Sound â”€â”€
+  // ── Sound ──
   // AUTONOMOUS: [ORDER-2 ESSENTIAL] - hydrate from persisted mute pref so the
   // toggle survives reloads instead of resetting on every page load.
   const [soundMuted, setSoundMuted] = useState(() => sounds.isMuted());
 
-  // â”€â”€ User Panel â”€â”€
+  // ── User Panel ──
   const [showUserPanel, setShowUserPanel] = useState(false);
 
   // AUTONOMOUS: [ORDER-2 ESSENTIAL] - beforeunload guard.
   // The server persists every 5 minutes, so an accidental tab close can lose
   // up to 5 min of work between saves. We install a "Leave site?" prompt
-  // when there's something in the room worth saving â€” uploaded HTML or any
+  // when there's something in the room worth saving — uploaded HTML or any
   // whiteboard activity. Browsers show a generic dialog (the message is
   // ignored by Chrome/Firefox/Safari), but the prompt itself is enough to
   // catch the "Cmd+W with five other tabs open" mistake.
@@ -372,7 +372,7 @@ export default function Room() {
     return () => window.removeEventListener('beforeunload', handler);
   }, [files.length, iframeUrl, whiteboardMode, whiteboardState]);
 
-  // â”€â”€ Room Password â”€â”€
+  // ── Room Password ──
   const [roomPassword, setRoomPassword] = useState<string>('');
   const [showShareMenu, setShowShareMenu] = useState(false);
   const [shareMenuPos, setShareMenuPos] = useState<{ top: number; right: number; width: number }>({
@@ -381,26 +381,26 @@ export default function Room() {
     width: 420,
   });
 
-  // â”€â”€ Flag to skip our own run_preview echo â”€â”€
+  // ── Flag to skip our own run_preview echo ──
   const skipOwnPreviewRef = useRef(false);
   const syncEpochRef = useRef(0);
   const lastInboundSeqRef = useRef(0);
   const snapshotTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const snapshotRequestRef = useRef<string | null>(null);
   const lastRevisionRef = useRef(0);
-  // Last DOM we broadcast â€” lets the idle heartbeat skip identical re-sends.
+  // Last DOM we broadcast — lets the idle heartbeat skip identical re-sends.
   const lastSentSnapshotRef = useRef<string>('');
 
   // THE single entry point for changing the lesson sim's HTML. Dedupe lives
-  // here (identical html â†’ no rebuild, sim instance survives) and a genuine
-  // change zeroes the applied-seq tracker SYNCHRONOUSLY â€” it belongs to the
+  // here (identical html → no rebuild, sim instance survives) and a genuine
+  // change zeroes the applied-seq tracker SYNCHRONOUSLY — it belongs to the
   // sim instance, so the next journal replay re-lives the lesson into the
   // fresh sim from seq 0. (See the matching helper in StudentView.)
   const setSimPreviewHtml = useCallback((html: string | null | undefined) => {
     if (typeof html !== 'string' || html.length === 0) return;
     setPreviewHtml((prev: string) => {
       if (prev === html) return prev;
-      lastInboundSeqRef.current = 0; // idempotent â€” safe under StrictMode double-invoke
+      lastInboundSeqRef.current = 0; // idempotent — safe under StrictMode double-invoke
       return html;
     });
   }, []);
@@ -435,7 +435,7 @@ export default function Room() {
     // Whiteboard mode is server-persisted; restore on reconnect so the
     // teacher lands on the same surface they were on before disconnect.
     if (typeof state.whiteboardMode === 'boolean') setWhiteboardMode(state.whiteboardMode);
-    // AUTONOMOUS: Claim status â€” drives the "X hours left to save" banner.
+    // AUTONOMOUS: Claim status — drives the "X hours left to save" banner.
     if (typeof state.claimed === 'boolean') setClaimed(state.claimed);
     if (state.claimedBy !== undefined) setClaimedBy(state.claimedBy);
     if (typeof state.expiresAt === 'number') setExpiresAt(state.expiresAt);
@@ -447,7 +447,7 @@ export default function Room() {
     setLastSyncTime(Date.now());
   }, []);
 
-  // â”€â”€ Refs â”€â”€
+  // ── Refs ──
   const iframeRef = useRef<HTMLIFrameElement>(null);
 
   // Re-anchor a remote SYNC_CURSOR to the element the sender was hovering,
@@ -475,7 +475,7 @@ export default function Room() {
           }
         }
       }
-    } catch { /* detached iframe â€” fall through */ }
+    } catch { /* detached iframe — fall through */ }
     return { x: event?.x ?? 0, y: event?.y ?? 0 };
   }, []);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -483,7 +483,7 @@ export default function Room() {
   const timerRef = useRef<ReturnType<typeof setInterval>>();
   const reactionIdRef = useRef(0);
 
-  // â”€â”€ Session Timer â”€â”€
+  // ── Session Timer ──
   useEffect(() => {
     timerRef.current = setInterval(() => setSessionTimer(t => t + 1), 1000);
     return () => clearInterval(timerRef.current);
@@ -528,7 +528,7 @@ export default function Room() {
     };
   }, [showShareMenu, updateShareMenuPosition]);
 
-  // â”€â”€ Socket Connection â”€â”€
+  // ── Socket Connection ──
   useEffect(() => {
     if (!roomId) { navigate("/"); return; }
     const newSocket = io();
@@ -546,7 +546,7 @@ export default function Room() {
       // journal replay fill exactly the missed gap after a reconnect without
       // double-applying. It resets only when the iframe genuinely rebuilds.
       // (The room-recreated-at-seq-0 edge resolves itself: fresh rooms have
-      // fresh content â†’ the iframe rebuilds â†’ the tracker resets with it.)
+      // fresh content → the iframe rebuilds → the tracker resets with it.)
       // Re-claim the teacher seat on (re)connect. If a different tab is
       // already in the room we'll be allowed (same name) and that other
       // tab will receive a `teacher_replaced` notification.
@@ -555,11 +555,11 @@ export default function Room() {
 
       // AUTONOMOUS: On a reconnect (NOT the initial connect), re-seed the
       // server with our cached HTML state. Render's free tier filesystem
-      // is ephemeral â€” between teacher upload and student join, a
+      // is ephemeral — between teacher upload and student join, a
       // redeploy can wipe the .rooms/ JSON and the server has no record
       // of the lesson HTML, while THIS browser still has it loaded.
       // Re-emitting run_preview after reconnect makes the teacher's
-      // local state the source of truth for the server. Idempotent â€”
+      // local state the source of truth for the server. Idempotent —
       // bumps revision and broadcasts; students with the same content
       // already see no change (setPreviewHtml is value-equality
       // checked).
@@ -574,7 +574,7 @@ export default function Room() {
     });
     newSocket.on("disconnect", () => setConnected(false));
 
-    // AUTONOMOUS: deposed by another tab â€” show the banner and stop
+    // AUTONOMOUS: deposed by another tab — show the banner and stop
     // pretending we still own the teacher seat. We DON'T navigate away
     // or close the tab automatically; the user might want to read what
     // they had open. Just block writes (UI-side) and tell them clearly.
@@ -583,7 +583,7 @@ export default function Room() {
       setJoinErrorMsg(message || 'Unable to join this room.');
     });
 
-    // AUTONOMOUS: Room claim broadcast â€” fires when ANYONE in the room
+    // AUTONOMOUS: Room claim broadcast — fires when ANYONE in the room
     // clicks "Save to my boards". Banner hides for everyone (the room is
     // now safe for 30 days), expiry advances accordingly.
     newSocket.on("room_claimed", (data: { claimed: boolean; claimedBy: string | null; expiresAt: number }) => {
@@ -626,13 +626,13 @@ export default function Room() {
       sounds.tick();
     });
     // Server flips whiteboardMode off on upload so the new HTML actually
-    // reaches the student â€” mirror it locally so the teacher's own surface
+    // reaches the student — mirror it locally so the teacher's own surface
     // also follows the file, instead of staying stuck on the whiteboard.
     newSocket.on("whiteboard_mode_changed", ({ active }: { active: boolean }) => {
       setWhiteboardMode(active);
     });
     newSocket.on("upload_error", ({ message }: { message: string }) => {
-      showNotif(`âš ï¸ Upload failed: ${message}`);
+      showNotif(`⚠️ Upload failed: ${message}`);
     });
     newSocket.on("generate_lesson_done", ({ name }: { name: string }) => {
       if (aiTimeoutRef.current) clearTimeout(aiTimeoutRef.current);
@@ -640,7 +640,7 @@ export default function Room() {
       setShowAiModal(false);
       setAiPrompt("");
       setAiError(null);
-      showNotif(`âœ¨ Generated & loaded: ${name}`);
+      showNotif(`✨ Generated & loaded: ${name}`);
     });
     newSocket.on("generate_lesson_error", ({ message }: { message: string }) => {
       if (aiTimeoutRef.current) clearTimeout(aiTimeoutRef.current);
@@ -677,13 +677,13 @@ export default function Room() {
     });
     newSocket.on("hand_raised", ({ studentName }: { studentName: string }) => {
       setHandRaised({ studentName });
-      showNotif(`âœ‹ ${studentName} raised their hand!`);
+      showNotif(`✋ ${studentName} raised their hand!`);
       sounds.raiseHand();
       setTimeout(() => setHandRaised(null), 8000);
     });
     newSocket.on("quiz_answer_received", ({ answer, studentName }: { answer: string; studentName: string }) => {
       setQuizAnswers(prev => [...prev, { answer, studentName }]);
-      showNotif(`ðŸ“ ${studentName} answered!`);
+      showNotif(`📝 ${studentName} answered!`);
       sounds.success();
     });
     newSocket.on("reaction", ({ emoji }: { emoji: string }) => {
@@ -692,15 +692,15 @@ export default function Room() {
       setTimeout(() => setReactions(prev => prev.filter(r => r.id !== id)), 2500);
     });
 
-    // â”€â”€ Temporary Explanation Content â”€â”€
+    // ── Temporary Explanation Content ──
     newSocket.on("temp_content", ({ html, name }: { html: string; name: string }) => {
       setTempContent({ html, name });
       setShowTempContent(true);
-      showNotif(`ðŸ“š Showing explanation: ${name}`);
+      showNotif(`📚 Showing explanation: ${name}`);
     });
     newSocket.on("clear_temp_content", () => {
       setShowTempContent(false);
-      showNotif('â†©ï¸ Back to main content');
+      showNotif('↩️ Back to main content');
     });
 
     newSocket.on("interaction", (event: any) => {
@@ -711,11 +711,11 @@ export default function Room() {
       // Do NOT filter by syncEpoch here. syncEpoch is a per-client local counter
       // (not coordinated by the server), so comparing a student's epoch to the
       // teacher's would silently drop every student event whenever the two
-      // counters drift â€” e.g. after a teacher-only state change. serverSeq above
+      // counters drift — e.g. after a teacher-only state change. serverSeq above
       // already prevents stale/replayed events.
       if (event.type === "SYNC_CURSOR") {
         // Element-anchored: place the student's cursor on the same CONTENT in
-        // OUR layout (see resolveCursorPosition) â€” raw viewport percentages
+        // OUR layout (see resolveCursorPosition) — raw viewport percentages
         // drift across differing window sizes / centered content.
         const pos = resolveCursorPosition(event);
         setCursors(prev => ({
@@ -779,14 +779,14 @@ export default function Room() {
       if (isRecordingRef.current) sessionRecorder.record('interaction', event);
     });
 
-    // â”€â”€ Student absolute-state snapshot â”€â”€
+    // ── Student absolute-state snapshot ──
     // INTENTIONALLY NOT applied to the teacher's iframe anymore.
     //
     // We run a single-authoritative-sim model: the teacher's iframe is the live,
     // interactive simulation; the student is a mirror whose own handlers are
     // stripped, so its clicks just relay up to us and drive THIS sim (replayed
     // as REMOTE_CLICK), and we broadcast the result back via live_dom. In that
-    // model the student's DOM is only ever an echo of ours â€” so soft-swapping it
+    // model the student's DOM is only ever an echo of ours — so soft-swapping it
     // back onto the teacher was redundant AND destructive: an innerHTML swap
     // drops every addEventListener the lesson wired up on load, after which the
     // teacher's buttons (and the relayed student clicks) hit dead handlers. That
@@ -795,10 +795,10 @@ export default function Room() {
     // the same authoritative sim. (syncScript also hard-guards this: a presenter
     // iframe ignores REMOTE_DOM.)
     newSocket.on("student_state", (_data: { html: string; studentId?: string; studentName?: string }) => {
-      /* no-op â€” see comment above */
+      /* no-op — see comment above */
     });
 
-    // â”€â”€ Student Feedback â”€â”€
+    // ── Student Feedback ──
     newSocket.on("student_feedback", ({ emoji, label, studentName }: { emoji: string; label: string; studentName: string }) => {
       const id = feedbackIdRef.current++;
       setStudentFeedback(prev => [...prev, { id, emoji, label, studentName }]);
@@ -807,7 +807,7 @@ export default function Room() {
       setTimeout(() => setStudentFeedback(prev => prev.filter(f => f.id !== id)), 5000);
     });
 
-    // â”€â”€ Timer â”€â”€
+    // ── Timer ──
     newSocket.on("timer_started", ({ seconds }: { seconds: number }) => {
       setChallengeTimer({ seconds, remaining: seconds });
     });
@@ -816,7 +816,7 @@ export default function Room() {
       if (challengeTimerRef.current) clearInterval(challengeTimerRef.current);
     });
 
-    // â”€â”€ Celebration â”€â”€
+    // ── Celebration ──
     newSocket.on("celebration", ({ type }: { type?: string }) => {
       setCelebrationType((type as any) || 'confetti');
       setShowCelebration(true);
@@ -824,7 +824,7 @@ export default function Room() {
       setTimeout(() => setShowCelebration(false), 4000);
     });
 
-    // â”€â”€ Sync â”€â”€
+    // ── Sync ──
     newSocket.on("request_html_sync", ({ requestId }: { requestId?: string } = {}) => {
       // Primary path: ask the iframe for its current DOM via syncScript.
       postToIframe({ type: 'REQUEST_HTML', requestId: requestId || `teacher-${Date.now()}` });
@@ -834,12 +834,12 @@ export default function Room() {
       // teacher is on whiteboard mode so no iframe is visible). A
       // student joining right now is stuck on "Waiting for teacher" until
       // the chain unwinds. So we ALSO re-emit run_preview from the
-      // teacher's local cache â€” server stores it as canonical, then
+      // teacher's local cache — server stores it as canonical, then
       // delivers run_preview to every pending student. Idempotent: if
       // the iframe DOES respond later, the dom_snapshot will overwrite
       // with the same content.
       // Edge: only fires when there's actually HTML to send. Teacher on
-      // a blank whiteboard with no HTML uploaded â†’ no fallback needed.
+      // a blank whiteboard with no HTML uploaded → no fallback needed.
       if (previewHtmlRef.current && activeFileIdRef.current) {
         newSocket.emit("run_preview", {
           roomId,
@@ -866,7 +866,7 @@ export default function Room() {
       setLastSyncTime(Date.now());
     });
 
-    // â”€â”€ Attention â”€â”€
+    // ── Attention ──
     newSocket.on("student_attention", ({ studentId, studentName, isAttentive }: { studentId: string; studentName: string; isAttentive: boolean }) => {
       setAttention(prev => ({
         ...prev,
@@ -874,17 +874,17 @@ export default function Room() {
       }));
     });
 
-    // â”€â”€ Scroll Sync â”€â”€
+    // ── Scroll Sync ──
     newSocket.on("scroll_sync_changed", ({ enabled }: { enabled: boolean }) => {
       setScrollSyncEnabled(enabled);
     });
 
-    // â”€â”€ Student Interaction Mode â”€â”€
+    // ── Student Interaction Mode ──
     newSocket.on("student_interaction_changed", ({ allowed }: { allowed: boolean }) => {
       setStudentInteractionAllowed(allowed);
     });
 
-    // â”€â”€ Whiteboard Mutual Sync â”€â”€
+    // ── Whiteboard Mutual Sync ──
     newSocket.on("whiteboard_sync_changed", ({ userId, enabled }: { userId: string; userName: string; enabled: boolean }) => {
       // Self-echo: keep local in lock-step with the canonical server value
       // in case anyone reasons about it across reconnects.
@@ -897,16 +897,16 @@ export default function Room() {
       }
     });
 
-    // â”€â”€ Attention Check Acks â”€â”€
+    // ── Attention Check Acks ──
     newSocket.on("attention_ack", ({ studentName, timestamp }: { studentName: string; timestamp: number }) => {
       setAttentionAcks(prev => [...prev, { studentName, timestamp }]);
       showNotif(`${studentName} is here`);
     });
 
-    // â”€â”€ Step-Lock events â”€â”€
-    // â”€â”€ Event-journal replay (teacher reload convergence) â”€â”€
+    // ── Step-Lock events ──
+    // ── Event-journal replay (teacher reload convergence) ──
     // A reloaded teacher boots the PRISTINE lesson (effectiveHtml policy) and
-    // re-lives the journal â€” their authoritative sim returns to exactly the
+    // re-lives the journal — their authoritative sim returns to exactly the
     // state the class is at. Seq-filtered against what this sim instance
     // already applied, so a mere socket blip replays nothing.
     newSocket.on("interaction_replay", ({ events }: { events: any[] }) => {
@@ -919,45 +919,45 @@ export default function Room() {
         postToIframe({ ...ev, type: ev.type.replace('SYNC_', 'REMOTE_') });
         applied++;
       }
-      if (applied > 0) showNotif(`âš¡ Restored your lesson â€” replayed ${applied} steps`);
+      if (applied > 0) showNotif(`⚡ Restored your lesson — replayed ${applied} steps`);
     });
 
-    // â”€â”€ Control handoff â”€â”€
+    // ── Control handoff ──
     newSocket.on("control_changed", ({ holderName }: { holderName: string | null }) => {
       setControlHolderName(holderName);
-      showNotif(holderName ? `âœ‹ ${holderName} now has control` : 'ðŸ‘ï¸ You took back control');
+      showNotif(holderName ? `✋ ${holderName} now has control` : '👁️ You took back control');
     });
 
-    // â”€â”€ Student peek: a student answered our snapshot request â”€â”€
+    // ── Student peek: a student answered our snapshot request ──
     newSocket.on("student_snapshot", ({ html, studentId, studentName }: { html: string; studentId: string; studentName: string }) => {
       const peeking = peekStudentRef.current;
       if (peeking && peeking.id === studentId) {
         setPeekHtml(html);
         setPeekUpdatedAt(Date.now());
       } else if (peeking && peeking.name === studentName) {
-        // Student reconnected with a new socket id mid-peek â€” re-anchor.
+        // Student reconnected with a new socket id mid-peek — re-anchor.
         setPeekStudent({ id: studentId, name: studentName });
         setPeekHtml(html);
         setPeekUpdatedAt(Date.now());
       }
     });
 
-    // â”€â”€ Time Machine: bookmark list changed â”€â”€
+    // ── Time Machine: bookmark list changed ──
     newSocket.on("bookmarks_changed", ({ bookmarks: bm }: { bookmarks: Array<{ id: string; name: string; ts: number }> }) => {
       setBookmarks(bm || []);
     });
 
     newSocket.on("gate_answered", ({ studentName, step, correct }: { studentName: string; step: number; correct: boolean }) => {
-      showNotif(`${correct ? 'âœ…' : 'âŒ'} ${studentName} ${correct ? 'passed' : 'failed'} gate on Step ${step}`);
+      showNotif(`${correct ? '✅' : '❌'} ${studentName} ${correct ? 'passed' : 'failed'} gate on Step ${step}`);
       if (correct) sounds.success();
     });
 
-    // â”€â”€ Gamification â”€â”€
+    // ── Gamification ──
     newSocket.on("leaderboard_update", (lb: Array<{ studentName: string; xp: number; streak: number }>) => {
       setLeaderboard(lb);
     });
 
-    // â”€â”€ Room Hard Reset (files are PRESERVED â€” only progress/session state is cleared) â”€â”€
+    // ── Room Hard Reset (files are PRESERVED — only progress/session state is cleared) ──
     newSocket.on("room_reset", (payload?: { activeFileId?: string | null; files?: FileEntry[]; lastRunHtml?: string | null; revision?: number }) => {
       // Track the bumped revision so subsequent session_state isn't dropped
       // by the freshness guard against this client's pre-reset value.
@@ -981,7 +981,7 @@ export default function Room() {
       setStudentFeedback([]);
       setAttention({});
       setAttentionAcks([]);
-      // Keep uploaded files â€” sync from server's authoritative state if provided
+      // Keep uploaded files — sync from server's authoritative state if provided
       if (payload?.files) setFiles(payload.files);
       if (payload?.activeFileId !== undefined) setActiveFileId(payload.activeFileId);
       // Reload the active file into preview so it starts fresh from the top
@@ -992,23 +992,23 @@ export default function Room() {
           setSimPreviewHtml(active.html);
         }
       }
-      showNotif("ðŸ”„ Session reset â€” starting from the beginning");
+      showNotif("🔄 Session reset — starting from the beginning");
     });
 
     return () => { newSocket.disconnect(); };
   }, [roomId, navigate, teacherName]);
 
-  // â”€â”€ Apply lesson template (one-shot, on fresh-room mount) â”€â”€
+  // ── Apply lesson template (one-shot, on fresh-room mount) ──
   // AUTONOMOUS: When the teacher opens a new room with ?template=ID,
   // hydrate the fresh canvas with the saved snapshot. We wait for the
   // initial room_state to land (whiteboardState !== null OR a beat after
-  // connect) so the server has acknowledged our teacher seat â€” emitting
+  // connect) so the server has acknowledged our teacher seat — emitting
   // whiteboard_add_shape etc. before that would be rejected by the
   // requireTeacher gate on the server.
   //
   // Idempotent guards:
-  //   1) templateAppliedRef â€” apply at most once per page load
-  //   2) "is the whiteboard already populated?" â€” if shapes/texts/etc
+  //   1) templateAppliedRef — apply at most once per page load
+  //   2) "is the whiteboard already populated?" — if shapes/texts/etc
   //      already exist (eg the user refreshed the URL with ?template=
   //      still present), do NOT re-apply. Just strip the param.
   //   3) URL param is cleared after applying so any future refresh of
@@ -1035,7 +1035,7 @@ export default function Room() {
 
     const tpl = templates.get(templateId);
     if (!tpl) {
-      // Template not found in this browser's localStorage â€” perhaps the
+      // Template not found in this browser's localStorage — perhaps the
       // user followed a link from another device. Nothing to apply.
       stripTemplateParam();
       return;
@@ -1043,7 +1043,7 @@ export default function Room() {
 
     // If the room already has any whiteboard content, don't pile the
     // template on top. The user either refreshed or someone else
-    // already populated the room â€” treat as no-op.
+    // already populated the room — treat as no-op.
     const wb: any = whiteboardState || {};
     const hasContent =
       (wb.objects?.length ?? 0) > 0 ||
@@ -1058,7 +1058,7 @@ export default function Room() {
 
     // Apply the template by replaying each item as an add-event. The
     // server validates and persists each one, then broadcasts to all
-    // members of the room â€” including ourselves. So our local
+    // members of the room — including ourselves. So our local
     // whiteboardState catches up via the normal Whiteboard component
     // listeners, no double-render needed.
     const snap: any = tpl.whiteboard || {};
@@ -1073,7 +1073,7 @@ export default function Room() {
       // server broadcasts whiteboard_mode_changed back to us; if we're
       // already on whiteboard this is a no-op.
       socket.emit('whiteboard_mode_toggle', { roomId, active: true });
-      showNotif(`ðŸ“ Loaded template: ${tpl.name}`);
+      showNotif(`📐 Loaded template: ${tpl.name}`);
     } catch (err) {
       console.warn('[template] failed to apply', err);
     } finally {
@@ -1081,7 +1081,7 @@ export default function Room() {
     }
   }, [socket, connected, roomId, templateId, whiteboardState, lastSyncTime]);
 
-  // â”€â”€ Reopen a saved session (?session=ID) â€” Stage 4 â”€â”€
+  // ── Reopen a saved session (?session=ID) — Stage 4 ──
   // Once our teacher seat is registered, fetch the saved session and re-seed
   // this room: the HTML lesson via upload_file (so it syncs to students), and
   // the whiteboard via the same add-event replay the template hydrator uses.
@@ -1102,7 +1102,7 @@ export default function Room() {
       try {
         const { getSession } = await import('../lib/sessions');
         const s = await getSession(sessionParam);
-        if (!s) { showNotif('âš ï¸ Saved session not found'); stripParam(); return; }
+        if (!s) { showNotif('⚠️ Saved session not found'); stripParam(); return; }
         // Re-seed the HTML lesson as a fresh file so it renders + syncs.
         if (s.html_used) {
           const fileId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -1110,7 +1110,7 @@ export default function Room() {
           setSimPreviewHtml(s.html_used);
         }
         // Re-seed the whiteboard only if the room's board is currently empty
-        // (same guard as the template hydrator â€” never pile on top).
+        // (same guard as the template hydrator — never pile on top).
         const wb: any = whiteboardState || {};
         const hasContent = (wb.objects?.length ?? 0) > 0 || (wb.strokes?.length ?? 0) > 0 || (wb.shapes?.length ?? 0) > 0 || (wb.texts?.length ?? 0) > 0 || (wb.instruments?.length ?? 0) > 0;
         const snap: any = s.whiteboard_snapshot || {};
@@ -1123,9 +1123,9 @@ export default function Room() {
           for (const obj of (snap.objects || [])) socket.emit('whiteboard_add_image', { roomId, object: obj });
           for (const stroke of (snap.strokes || [])) socket.emit('whiteboard_draw', { roomId, stroke });
         }
-        showNotif(`ðŸ“‚ Reopened: ${s.topic || 'saved session'}`);
+        showNotif(`📂 Reopened: ${s.topic || 'saved session'}`);
       } catch {
-        showNotif('âš ï¸ Could not reopen session');
+        showNotif('⚠️ Could not reopen session');
       } finally {
         stripParam();
       }
@@ -1133,7 +1133,7 @@ export default function Room() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [socket, connected, roomId, sessionParam, lastSyncTime, auth.enabled]);
 
-  // â”€â”€ Helper: safely post message to mirror iframe (queues if not ready) â”€â”€
+  // ── Helper: safely post message to mirror iframe (queues if not ready) ──
   const postToMirror = useCallback((msg: any) => {
     if (mirrorReadyRef.current && mirrorIframeRef.current?.contentWindow) {
       mirrorIframeRef.current.contentWindow.postMessage(msg, '*');
@@ -1144,7 +1144,7 @@ export default function Room() {
     }
   }, []);
 
-  // â”€â”€ Helper: safely post message to iframe (queues if not ready) â”€â”€
+  // ── Helper: safely post message to iframe (queues if not ready) ──
   const postToIframe = useCallback((msg: any) => {
     if (iframeReadyRef.current && iframeRef.current?.contentWindow) {
       iframeRef.current.contentWindow.postMessage(msg, '*');
@@ -1156,18 +1156,18 @@ export default function Room() {
     }
   }, []);
 
-  // â”€â”€ Heartbeat snapshot (late-join freshness) â”€â”€
+  // ── Heartbeat snapshot (late-join freshness) ──
   // Re-snapshot every 2.5s so the server's liveSnapshotHtml stays close to the
-  // teacher's current screen â€” that's what a LATE-JOINING student boots from.
+  // teacher's current screen — that's what a LATE-JOINING student boots from.
   // It is no longer pushed to already-connected students (the live `live_dom`
-  // body-swap mirror is retired â€” it destroyed sim listeners and broke
+  // body-swap mirror is retired — it destroyed sim listeners and broke
   // canvas/3D sims); connected students stay in step via interaction replay.
   // Identical-DOM change-detection above means an idle teacher costs nothing.
   useEffect(() => {
     // Skip while on the whiteboard OR showing temporary explanation content:
     // in those states iframeRef points at a DIFFERENT iframe (whiteboard has
     // none; explanation has the temp iframe), and snapshotting it would publish
-    // the explainer DOM as the lesson's liveSnapshotHtml â€” corrupting what late
+    // the explainer DOM as the lesson's liveSnapshotHtml — corrupting what late
     // joiners boot from.
     if (whiteboardMode || showTempContent) return;
     const id = setInterval(() => {
@@ -1179,7 +1179,7 @@ export default function Room() {
     return () => clearInterval(id);
   }, [studentInteractionAllowed, whiteboardMode, showTempContent, postToIframe]);
 
-  // â”€â”€ Iframe onLoad: flush pending messages â”€â”€
+  // ── Iframe onLoad: flush pending messages ──
   const handleIframeLoad = useCallback(() => {
     iframeReadyRef.current = true;
     // Flush any pending messages
@@ -1204,7 +1204,7 @@ export default function Room() {
     }
   }, [scrollSyncEnabled, stepLockEnabled, currentStep, zoomLevel, controlHolderName]);
 
-  // â”€â”€ Mirror iframe onLoad: behave like a passive student view â”€â”€
+  // ── Mirror iframe onLoad: behave like a passive student view ──
   const handleMirrorLoad = useCallback(() => {
     mirrorReadyRef.current = true;
     const pending = pendingMirrorMessagesRef.current;
@@ -1228,21 +1228,21 @@ export default function Room() {
     }, 250);
   }, [stepLockEnabled, currentStep, zoomLevel]);
 
-  // â”€â”€ Dual View: keep mirror aligned with teacher scroll â”€â”€
+  // ── Dual View: keep mirror aligned with teacher scroll ──
   useEffect(() => {
     if (!dualView) return;
     // Initial pulse shortly after toggle (server too, so any other students align)
     const initial = setTimeout(() => {
       iframeRef.current?.contentWindow?.postMessage({ type: 'EMIT_CURRENT_SCROLL' }, '*');
     }, 200);
-    // Periodic convergence pulse â€” mirror only, no server traffic
+    // Periodic convergence pulse — mirror only, no server traffic
     const interval = setInterval(() => {
       iframeRef.current?.contentWindow?.postMessage({ type: 'EMIT_CURRENT_SCROLL', mirrorOnly: true }, '*');
     }, 1500);
     return () => { clearTimeout(initial); clearInterval(interval); };
   }, [dualView]);
 
-  // â”€â”€ Relay iframe messages â”€â”€
+  // ── Relay iframe messages ──
   useEffect(() => {
     const requestSnapshot = () => {
       if (snapshotTimerRef.current) clearTimeout(snapshotTimerRef.current);
@@ -1259,13 +1259,13 @@ export default function Room() {
       const type = e.data?.type;
       if (!type) return;
 
-      // Internal sync events â€” not interactions
+      // Internal sync events — not interactions
       if (type === 'SYNC_PROVIDE_HTML') {
         if (snapshotRequestRef.current && e.data.requestId === snapshotRequestRef.current) {
           const requestId = snapshotRequestRef.current;
           snapshotRequestRef.current = null;
           // Heartbeat snapshots only need to go out when the DOM actually
-          // changed â€” skip identical re-sends so an idle teacher costs nothing.
+          // changed — skip identical re-sends so an idle teacher costs nothing.
           if (requestId.startsWith('snap-hb-') && e.data.html === lastSentSnapshotRef.current) {
             return;
           }
@@ -1320,7 +1320,7 @@ export default function Room() {
   }, [socket, roomId, scrollSyncEnabled, dualView, postToMirror]);
 
   // SINGLE-WRITER: the teacher drives the sim by default, but when the teacher
-  // hands the chalk to a student, the teacher becomes a MIRROR — its sim is
+  // hands the chalk to a student, the teacher becomes a MIRROR - its sim is
   // driven by the student's replayed events, so the teacher's local clicks
   // must be locked out (otherwise two drivers diverge). presenterMode +
   // interaction-allowed both follow "am I the sole writer right now" = no
@@ -1342,19 +1342,19 @@ export default function Room() {
 
 
   // Mirror iframe readiness must reset when the mirror is created/destroyed
-  // (dualView toggle) or when its content URL changes â€” but this is a local
+  // (dualView toggle) or when its content URL changes — but this is a local
   // ready-tracking concern, not a content-version reset.
   useEffect(() => {
     mirrorReadyRef.current = false;
     pendingMirrorMessagesRef.current = [];
   }, [iframeUrl, showTempContent, whiteboardMode, dualView]);
 
-  // NOTE: Periodic auto-sync removed â€” it was causing full iframe reloads on student
+  // NOTE: Periodic auto-sync removed — it was causing full iframe reloads on student
   // side every 10s, making the page blink and scroll jump to top.
   // Interactions are already synced in real-time via SYNC_* events.
   // Full HTML sync only happens on: file switch, file upload, manual Force Sync.
 
-  // â”€â”€ Build iframe URL â”€â”€
+  // ── Build iframe URL ──
   useEffect(() => {
     if (!previewHtml) { setIframeUrl(""); return; }
     // Mark iframe as not ready while we rebuild it
@@ -1375,13 +1375,13 @@ export default function Room() {
     // NOT keyed on stepLockEnabled: the injected scripts are always present
     // (the lock is driven on the live iframe via SET_STEP / DISABLE_STEP_LOCK
     // postMessages in toggleStepLock). Rebuilding the blob on every toggle
-    // reloaded the whole simulation â€” losing runtime state and broadcasting the
-    // reset to students â€” for a routine toolbar button. Keyed on randomSeed so
+    // reloaded the whole simulation — losing runtime state and broadcasting the
+    // reset to students — for a routine toolbar button. Keyed on randomSeed so
     // a new lesson baseline rebuilds the sim with the matching seed.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [previewHtml, randomSeed]);
 
-  // â”€â”€ Sync code when active file changes â”€â”€
+  // ── Sync code when active file changes ──
   useEffect(() => {
     if (activeFileId) {
       const file = files.find(f => f.id === activeFileId);
@@ -1389,7 +1389,7 @@ export default function Room() {
     }
   }, [activeFileId]);
 
-  // â”€â”€ Challenge Timer Countdown â”€â”€
+  // ── Challenge Timer Countdown ──
   useEffect(() => {
     if (!challengeTimer) return;
     if (challengeTimerRef.current) clearInterval(challengeTimerRef.current);
@@ -1406,14 +1406,14 @@ export default function Room() {
     return () => { if (challengeTimerRef.current) clearInterval(challengeTimerRef.current); };
   }, [challengeTimer?.seconds]);
 
-  // â”€â”€ Step-Lock: send step to iframe when changed â”€â”€
+  // ── Step-Lock: send step to iframe when changed ──
   useEffect(() => {
     if (stepLockEnabled) {
       postToIframe({ type: 'SET_STEP', step: currentStep });
     }
   }, [currentStep, stepLockEnabled, postToIframe]);
 
-  // â”€â”€ Push scroll sync state to iframe â”€â”€
+  // ── Push scroll sync state to iframe ──
   useEffect(() => {
     // presenterMode follows sole-writer (see the SET_INTERACTION_MODE effect):
     // a teacher who handed off control is a mirror, not the presenter.
@@ -1421,7 +1421,7 @@ export default function Room() {
     postToIframe({ type: 'SET_SCROLL_SYNC', enabled: scrollSyncEnabled });
   }, [scrollSyncEnabled, iframeUrl, teacherIsSoleWriter, postToIframe]);
 
-  // â”€â”€ Zoom: push to iframe when level changes â”€â”€
+  // ── Zoom: push to iframe when level changes ──
   useEffect(() => {
     postToIframe({ type: 'SET_ZOOM', zoom: zoomLevel });
   }, [zoomLevel, postToIframe]);
@@ -1443,12 +1443,12 @@ export default function Room() {
 
   const handleHardReset = () => {
     if (!socket) return;
-    const ok = window.confirm("ðŸ”„ Reset Session\n\nThis will start the lesson over from the beginning:\nâ€¢ Chat history cleared\nâ€¢ Steps reset to 1\nâ€¢ All gates & quiz answers cleared\nâ€¢ XP & leaderboard cleared\nâ€¢ Everyone scrolled back to top\n\nâœ… Uploaded files are kept safe.\n\nContinue?");
+    const ok = window.confirm("🔄 Reset Session\n\nThis will start the lesson over from the beginning:\n• Chat history cleared\n• Steps reset to 1\n• All gates & quiz answers cleared\n• XP & leaderboard cleared\n• Everyone scrolled back to top\n\n✅ Uploaded files are kept safe.\n\nContinue?");
     if (!ok) return;
     socket.emit("hard_reset", { roomId });
   };
 
-  // â”€â”€ Attention timestamp updater â”€â”€
+  // ── Attention timestamp updater ──
   useEffect(() => {
     const interval = setInterval(() => {
       setAttention(prev => ({ ...prev })); // Force re-render for time-based status
@@ -1456,11 +1456,11 @@ export default function Room() {
     return () => clearInterval(interval);
   }, []);
 
-  // â”€â”€ Helpers â”€â”€
+  // ── Helpers ──
   const notifTimeoutRef = useRef<ReturnType<typeof setTimeout>>();
   // Safety net for AI generation: if the done/error reply is lost (socket
   // reconnected mid-generation), this timer recovers the modal instead of
-  // leaving it stuck on "Generatingâ€¦" with both close buttons disabled.
+  // leaving it stuck on "Generating…" with both close buttons disabled.
   const aiTimeoutRef = useRef<ReturnType<typeof setTimeout>>();
   const showNotif = (msg: string) => {
     if (notifTimeoutRef.current) clearTimeout(notifTimeoutRef.current);
@@ -1472,13 +1472,13 @@ export default function Room() {
     const uploadedFiles = e.target.files;
     if (!uploadedFiles || !socket) return;
     Array.from(uploadedFiles).forEach((file: File) => {
-      if (file.size > 2 * 1024 * 1024) { showNotif(`âš ï¸ ${file.name} is too large (max 2MB)`); return; }
-      if (file.size === 0) { showNotif(`âš ï¸ ${file.name} is empty`); return; }
+      if (file.size > 2 * 1024 * 1024) { showNotif(`⚠️ ${file.name} is too large (max 2MB)`); return; }
+      if (file.size === 0) { showNotif(`⚠️ ${file.name} is empty`); return; }
       const reader = new FileReader();
       reader.onload = (ev) => {
         const content = ev.target?.result as string;
         if (!content || content.trim().length === 0) {
-          showNotif(`âš ï¸ ${file.name} has no content`);
+          showNotif(`⚠️ ${file.name} has no content`);
           return;
         }
         const entry: FileEntry = {
@@ -1490,14 +1490,14 @@ export default function Room() {
         socket.emit("upload_file", { roomId, file: entry });
         setHtmlCode(content);
         setSimPreviewHtml(content);
-        showNotif(`âœ… Uploaded: ${entry.name}`);
+        showNotif(`✅ Uploaded: ${entry.name}`);
       };
-      reader.onerror = () => showNotif(`âš ï¸ Failed to read ${file.name}`);
-      reader.onabort = () => showNotif(`âš ï¸ Upload of ${file.name} was cancelled`);
+      reader.onerror = () => showNotif(`⚠️ Failed to read ${file.name}`);
+      reader.onabort = () => showNotif(`⚠️ Upload of ${file.name} was cancelled`);
       try {
         reader.readAsText(file);
       } catch (err) {
-        showNotif(`âš ï¸ Cannot read ${file.name}: ${err}`);
+        showNotif(`⚠️ Cannot read ${file.name}: ${err}`);
       }
     });
     e.target.value = '';
@@ -1508,15 +1508,15 @@ export default function Room() {
     setIsDragging(false);
     if (!socket) return;
     const droppedFiles = (Array.from(e.dataTransfer.files) as File[]).filter(f => /\.html?$/i.test(f.name));
-    if (droppedFiles.length === 0) { showNotif("âš ï¸ Only .html files please"); return; }
+    if (droppedFiles.length === 0) { showNotif("⚠️ Only .html files please"); return; }
     droppedFiles.forEach((file: File) => {
-      if (file.size > 2 * 1024 * 1024) { showNotif(`âš ï¸ ${file.name} is too large (max 2MB)`); return; }
-      if (file.size === 0) { showNotif(`âš ï¸ ${file.name} is empty`); return; }
+      if (file.size > 2 * 1024 * 1024) { showNotif(`⚠️ ${file.name} is too large (max 2MB)`); return; }
+      if (file.size === 0) { showNotif(`⚠️ ${file.name} is empty`); return; }
       const reader = new FileReader();
       reader.onload = (ev) => {
         const content = ev.target?.result as string;
         if (!content || content.trim().length === 0) {
-          showNotif(`âš ï¸ ${file.name} has no content`);
+          showNotif(`⚠️ ${file.name} has no content`);
           return;
         }
         const entry: FileEntry = {
@@ -1528,14 +1528,14 @@ export default function Room() {
         socket.emit("upload_file", { roomId, file: entry });
         setHtmlCode(content);
         setSimPreviewHtml(content);
-        showNotif(`âœ… Uploaded: ${entry.name}`);
+        showNotif(`✅ Uploaded: ${entry.name}`);
       };
-      reader.onerror = () => showNotif(`âš ï¸ Failed to read ${file.name}`);
-      reader.onabort = () => showNotif(`âš ï¸ Upload of ${file.name} was cancelled`);
+      reader.onerror = () => showNotif(`⚠️ Failed to read ${file.name}`);
+      reader.onabort = () => showNotif(`⚠️ Upload of ${file.name} was cancelled`);
       try {
         reader.readAsText(file);
       } catch (err) {
-        showNotif(`âš ï¸ Cannot read ${file.name}: ${err}`);
+        showNotif(`⚠️ Cannot read ${file.name}: ${err}`);
       }
     });
   };
@@ -1567,10 +1567,10 @@ export default function Room() {
     setShowPasteModal(false);
     setPasteCode("");
     setPasteFileName("");
-    showNotif(`âœ… Added: ${name}`);
+    showNotif(`✅ Added: ${name}`);
   };
 
-  // â”€â”€ Save current board to this student's history (Stage 4) â”€â”€
+  // ── Save current board to this student's history (Stage 4) ──
   const saveToHistory = useCallback(async () => {
     if (!auth.enabled || !auth.user || !roomId || savingHistory) return;
     setSavingHistory(true);
@@ -1578,14 +1578,14 @@ export default function Room() {
       const { findClassIdByRoomCode, saveSession } = await import('../lib/sessions');
       const classId = await findClassIdByRoomCode(roomId);
       if (!classId) {
-        showNotif('âš ï¸ Create a class for this room in your dashboard first to save history.');
+        showNotif('⚠️ Create a class for this room in your dashboard first to save history.');
         return;
       }
       const topic = files.find(f => f.id === activeFileId)?.name || (whiteboardMode ? 'Whiteboard session' : 'Session');
       await saveSession({ classId, topic, html: previewHtmlRef.current || null, whiteboard: whiteboardState });
-      showNotif("ðŸ’¾ Saved to this student's history");
+      showNotif("💾 Saved to this student's history");
     } catch {
-      showNotif('âš ï¸ Could not save to history');
+      showNotif('⚠️ Could not save to history');
     } finally {
       setSavingHistory(false);
     }
@@ -1598,7 +1598,7 @@ export default function Room() {
     skipOwnPreviewRef.current = true;
     socket.emit("run_preview", { roomId, fileId: activeFileId, html: htmlCode });
     setSimPreviewHtml(htmlCode);
-    showNotif("â–¶ Preview updated & synced");
+    showNotif("▶ Preview updated & synced");
   };
 
   const switchFile = (fileId: string) => {
@@ -1645,7 +1645,7 @@ export default function Room() {
 
   const handleForceSync = () => {
     if (!socket) return;
-    // Force Sync re-baselines the lesson from the teacher's live iframe DOM â€”
+    // Force Sync re-baselines the lesson from the teacher's live iframe DOM —
     // the server rewrites lastRunHtml AND the saved file.html from the snapshot.
     // During explanation or whiteboard mode, iframeRef points at the temp /
     // (no) iframe, so a force here would overwrite the real lesson source with
@@ -1661,13 +1661,13 @@ export default function Room() {
     setLastSyncTime(Date.now());
   };
 
-  // â”€â”€ Control handoff â”€â”€
+  // ── Control handoff ──
   const grantControl = (holderName: string | null) => {
     if (!socket) return;
     socket.emit("grant_control", { roomId, holderName });
   };
 
-  // â”€â”€ Student peek â”€â”€
+  // ── Student peek ──
   const peekAtStudent = (studentId: string, studentName: string) => {
     if (!socket) return;
     setPeekStudent({ id: studentId, name: studentName });
@@ -1681,19 +1681,19 @@ export default function Room() {
   const resyncPeekStudent = () => {
     if (!socket || !peekStudentRef.current) return;
     socket.emit("resync_student", { roomId, studentId: peekStudentRef.current.id });
-    showNotif(`âŸ³ Resyncing ${peekStudentRef.current.name}â€¦`);
+    showNotif(`⟳ Resyncing ${peekStudentRef.current.name}…`);
   };
 
-  // â”€â”€ Time Machine â”€â”€
+  // ── Time Machine ──
   const createBookmark = () => {
     if (!socket) return;
     socket.emit("bookmark_create", { roomId });
-    showNotif('ðŸ”– Moment saved â€” you can rewind here later');
+    showNotif('🔖 Moment saved — you can rewind here later');
   };
   const restoreBookmark = (bookmarkId: string) => {
     if (!socket) return;
     socket.emit("bookmark_restore", { roomId, bookmarkId });
-    showNotif('âª Rewound the class to a saved moment');
+    showNotif('⏪ Rewound the class to a saved moment');
   };
   const deleteBookmark = (bookmarkId: string) => {
     if (!socket) return;
@@ -1706,7 +1706,7 @@ export default function Room() {
     setScrollSyncEnabled(newEnabled);
     socket.emit("toggle_scroll_sync", { roomId, enabled: newEnabled });
     postToIframe({ type: 'SET_SCROLL_SYNC', enabled: newEnabled });
-    showNotif(newEnabled ? 'ðŸ”— Scroll sync ON' : 'ðŸ”“ Free scroll â€” everyone scrolls independently');
+    showNotif(newEnabled ? '🔗 Scroll sync ON' : '🔓 Free scroll — everyone scrolls independently');
   };
 
   const toggleWhiteboardMode = () => {
@@ -1737,7 +1737,7 @@ export default function Room() {
     const next = !whiteboardSyncEnabled;
     setWhiteboardSyncEnabled(next);
     socket.emit('set_whiteboard_sync', { roomId, enabled: next });
-    showNotif(next ? 'ðŸ“– Shared view: pan and zoom mirror both sides' : 'ðŸ”“ Independent view: your canvas moves only for you');
+    showNotif(next ? '📖 Shared view: pan and zoom mirror both sides' : '🔓 Independent view: your canvas moves only for you');
   };
 
   const toggleStudentInteraction = () => {
@@ -1745,14 +1745,14 @@ export default function Room() {
     const newAllowed = !studentInteractionAllowed;
     setStudentInteractionAllowed(newAllowed);
     socket.emit("toggle_student_interaction", { roomId, allowed: newAllowed });
-    showNotif(newAllowed ? 'ðŸ–ï¸ Students can now interact with the simulation' : 'ðŸ‘ï¸ Students are now view-only');
+    showNotif(newAllowed ? '🖐️ Students can now interact with the simulation' : '👁️ Students are now view-only');
   };
 
   const resetView = () => {
     if (!socket) return;
     socket.emit("reset_view", { roomId });
     postToIframe({ type: 'RESET_VIEW' });
-    showNotif('â¬†ï¸ Reset view â€” scrolled everyone to top');
+    showNotif('⬆️ Reset view — scrolled everyone to top');
   };
 
   const sendAttentionCheck = () => {
@@ -1760,7 +1760,7 @@ export default function Room() {
     setAttentionAcks([]);
     setAttentionCheckActive(true);
     socket.emit("attention_check", { roomId });
-    showNotif('ðŸ“¢ Attention check sent â€” waiting for responses');
+    showNotif('📢 Attention check sent — waiting for responses');
     // Auto-dismiss after 30s
     setTimeout(() => setAttentionCheckActive(false), 30000);
   };
@@ -1798,16 +1798,16 @@ export default function Room() {
     socket.emit("send_quiz", {
       roomId,
       question: quizQuestion.trim(),
-      // â‰¥2 choices â†’ multiple-choice on student screens; else free-text.
+      // ≥2 choices → multiple-choice on student screens; else free-text.
       ...(options.length >= 2 ? { options } : {}),
     });
     setQuizAnswers([]);
     setShowQuizModal(false);
     setQuizOptions(["", "", "", ""]);
-    showNotif("ðŸŽ¯ Quiz sent!");
+    showNotif("🎯 Quiz sent!");
   };
 
-  // â”€â”€ Temporary Explanation Content â”€â”€
+  // ── Temporary Explanation Content ──
   // AUTONOMOUS: Single commit path for both file-uploaded and pasted
   // explanation content. Used by handleUploadExplanation (file) and the
   // Explain modal's "Show" button (paste). Keeps behaviour identical
@@ -1821,13 +1821,13 @@ export default function Room() {
     setTempContent({ html: trimmed, name: safeName });
     socket.emit('show_temp_content', { roomId, html: trimmed, name: safeName });
     setShowTempContent(true);
-    showNotif(`ðŸ“š Showing explanation: ${safeName}`);
+    showNotif(`📚 Showing explanation: ${safeName}`);
   };
 
   const handleUploadExplanation = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    if (file.size > 2 * 1024 * 1024) { showNotif(`âš ï¸ File too large (max 2MB)`); return; }
+    if (file.size > 2 * 1024 * 1024) { showNotif(`⚠️ File too large (max 2MB)`); return; }
     const reader = new FileReader();
     reader.onload = (event) => {
       const content = String(event.target?.result || '');
@@ -1842,7 +1842,7 @@ export default function Room() {
     if (!socket) return;
     socket.emit('clear_temp_content', { roomId });
     setShowTempContent(false);
-    showNotif('â†©ï¸ Back to main content');
+    showNotif('↩️ Back to main content');
   };
 
   const handleSetStep = (step: number) => {
@@ -1855,7 +1855,7 @@ export default function Room() {
     setStepLockEnabled(newEnabled);
     if (!newEnabled) {
       postToIframe({ type: 'DISABLE_STEP_LOCK' });
-      // Tell the SERVER too â€” room.currentStep is canonical (late joiners and
+      // Tell the SERVER too — room.currentStep is canonical (late joiners and
       // reconnects hydrate from it). Without this emit, toggling the lock was
       // local-only and a reconnect snapped everyone back to the stale step.
       // 999 is the established "no lock / show all" sentinel (stepLockScript
@@ -1882,7 +1882,7 @@ export default function Room() {
     setHtmlCode(html);
     setSimPreviewHtml(html);
     setShowLibrary(false);
-    showNotif(`ðŸ“š Loaded: ${name}`);
+    showNotif(`📚 Loaded: ${name}`);
   };
 
   const toggleRecording = () => {
@@ -1890,17 +1890,17 @@ export default function Room() {
       sessionRecorder.stop();
       sessionRecorder.download();
       setIsRecording(false);
-      showNotif("â¹ Recording saved");
+      showNotif("⏹ Recording saved");
     } else {
       sessionRecorder.start();
       setIsRecording(true);
-      showNotif("ðŸ”´ Recording started");
+      showNotif("🔴 Recording started");
     }
   };
 
   const studentCount = users.filter(u => u.role === 'student').length;
   // The left panel is the HTML code-editor pane. It's only useful when the
-  // teacher is actually working with HTML files â€” not on a blank empty room
+  // teacher is actually working with HTML files — not on a blank empty room
   // (the upload buttons live in the right-hand mode picker now), and not in
   // whiteboard mode (the whiteboard is canvas-only, no files to edit).
   // Suppressing it in those two cases lets the right side fill the full width.
@@ -1917,19 +1917,19 @@ export default function Room() {
       onDragLeave={(e) => { if (e.currentTarget === e.target) setIsDragging(false); }}
       onDrop={handleDrop}>
 
-      {/* â•â•â• DROP OVERLAY â•â•â• */}
+      {/* ═══ DROP OVERLAY ═══ */}
       {isDragging && (
         <div className="fixed inset-0 z-50 flex items-center justify-center"
           style={{ background: 'rgba(249,250,251,0.95)', backdropFilter: 'blur(8px)' }}>
           <div className="text-center animate-bounce-in">
-            <div className="text-7xl mb-4">ðŸ“‚</div>
+            <div className="text-7xl mb-4">📂</div>
             <div className="text-2xl font-bold" style={{ color: 'var(--accent-indigo)' }}>Drop HTML files here</div>
             <div className="text-sm mt-2" style={{ color: 'var(--text-muted)' }}>They'll be added to your file library</div>
           </div>
         </div>
       )}
 
-      {/* â•â•â• HEADER â•â•â• */}
+      {/* ═══ HEADER ═══ */}
       <header className="app-header">
         <div className="header-section">
           <button onClick={() => navigate('/')} className="flex items-center hover:opacity-80 transition-opacity"
@@ -1993,7 +1993,7 @@ export default function Room() {
                   style={{ width: '280px', background: 'var(--bg-card)', border: '1px solid var(--border-subtle)', boxShadow: 'var(--shadow-xl)', maxHeight: '420px', overflowY: 'auto' }}>
                   {users.length === 0 ? (
                     <div className="text-center py-8 px-4">
-                      <div className="text-3xl mb-2 opacity-30">ðŸ‘¥</div>
+                      <div className="text-3xl mb-2 opacity-30">👥</div>
                       <p className="text-xs" style={{ color: 'var(--text-muted)' }}>No participants yet</p>
                     </div>
                   ) : (
@@ -2007,21 +2007,21 @@ export default function Room() {
             )}
           </div>
 
-          {/* Control banner â€” who's driving right now */}
+          {/* Control banner — who's driving right now */}
           {controlHolderName && (
             <button onClick={() => grantControl(null)}
               className="ml-btn ml-btn-sm"
               title="Take back control"
               style={{ background: 'rgba(244,63,94,0.12)', color: '#E11D48', fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: 5 }}>
-              âœ‹ {controlHolderName} driving Â· take back
+              ✋ {controlHolderName} driving · take back
             </button>
           )}
 
-          {/* Time Machine â€” bookmark + rewind the whole class */}
+          {/* Time Machine — bookmark + rewind the whole class */}
           <div style={{ position: 'relative' }}>
             <button onClick={() => setShowTimeMachine(v => !v)}
               className={`tb-btn ${showTimeMachine ? 'active' : ''}`}
-              data-tip="Time Machine â€” save & rewind moments"
+              data-tip="Time Machine — save & rewind moments"
               aria-haspopup="menu" aria-expanded={showTimeMachine}>
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                 <path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l3 2"/>
@@ -2033,7 +2033,7 @@ export default function Room() {
                 <div className="ml-surface-elevated" style={{ position: 'absolute', top: '100%', right: 0, marginTop: 6, width: 260, zIndex: 50, borderRadius: 12, padding: 8, boxShadow: 'var(--shadow-xl)' }}>
                   <button onClick={() => { createBookmark(); }}
                     className="ml-btn ml-btn-sm ml-btn-primary ml-btn-block" style={{ marginBottom: 6 }}>
-                    ðŸ”– Save this moment
+                    🔖 Save this moment
                   </button>
                   {bookmarks.length === 0 ? (
                     <div className="ml-caption" style={{ padding: '8px 6px', color: 'var(--text-muted)', textAlign: 'center' }}>
@@ -2046,13 +2046,13 @@ export default function Room() {
                           <button onClick={() => { restoreBookmark(bm.id); setShowTimeMachine(false); }}
                             className="flex-1 text-left" title="Rewind the class to here"
                             style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '6px', borderRadius: 6 }}>
-                            <div className="text-[12px] font-semibold" style={{ color: 'var(--text-primary)' }}>âª {bm.name}</div>
+                            <div className="text-[12px] font-semibold" style={{ color: 'var(--text-primary)' }}>⏪ {bm.name}</div>
                             <div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>{new Date(bm.ts).toLocaleTimeString()}</div>
                           </button>
                           <button onClick={() => deleteBookmark(bm.id)}
                             className="opacity-0 group-hover:opacity-100 transition-opacity text-[11px]"
                             style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer' }}
-                            title="Delete moment">âœ•</button>
+                            title="Delete moment">✕</button>
                         </div>
                       ))}
                     </div>
@@ -2218,7 +2218,7 @@ export default function Room() {
       {joinErrorMsg && (
         <div className="animate-slide-down px-4 py-2.5 flex items-center justify-center gap-3 text-sm font-semibold"
           style={{ background: '#FEF2F2', color: '#991B1B', borderBottom: '1px solid #FCA5A5' }}>
-          <span>âš ï¸ {joinErrorMsg}</span>
+          <span>⚠️ {joinErrorMsg}</span>
           <button
             onClick={() => navigate('/')}
             style={{ padding: '4px 12px', borderRadius: 8, border: '1px solid #DC2626', background: '#fff', color: '#991B1B', fontWeight: 600, cursor: 'pointer' }}
@@ -2230,7 +2230,7 @@ export default function Room() {
       {teacherReplaced && (
         <div className="animate-slide-down px-4 py-2.5 flex items-center justify-center gap-3 text-sm font-semibold"
           style={{ background: '#FEF2F2', color: '#991B1B', borderBottom: '1px solid #FCA5A5' }}>
-          <span>âš ï¸ Another tab of yours took over the teacher seat â€” your changes here are no longer syncing.</span>
+          <span>⚠️ Another tab of yours took over the teacher seat — your changes here are no longer syncing.</span>
           <button
             onClick={() => window.location.reload()}
             style={{
@@ -2249,7 +2249,7 @@ export default function Room() {
       )}
 
       {/* AUTONOMOUS: Miro-style "Save to my boards" banner.
-          Shown when the room is anonymous (claimed=false) â€” counts down
+          Shown when the room is anonymous (claimed=false) — counts down
           to expiry and offers a single-click save. Once saved (claimed)
           the banner hides for everyone. */}
       {!claimed && expiresAt && (
@@ -2281,30 +2281,30 @@ export default function Room() {
             disabled={savingHistory}
             style={{ padding: '3px 12px', borderRadius: 8, border: '1px solid #6366F1', background: '#fff', color: '#3730A3', fontWeight: 700, cursor: savingHistory ? 'default' : 'pointer' }}
           >
-            {savingHistory ? 'Savingâ€¦' : 'ðŸ’¾ Save to history'}
+            {savingHistory ? 'Saving…' : '💾 Save to history'}
           </button>
         </div>
       )}
       {claimed && claimedBy && (
         <div className="px-4 py-1.5 flex items-center justify-center gap-2 text-xs font-semibold"
           style={{ background: '#ECFDF5', color: '#065F46', borderBottom: '1px solid rgba(16,185,129,0.18)' }}>
-          <span>âœ“ Saved by {claimedBy}</span>
-          <span style={{ opacity: 0.7 }}>Â· This board will keep working for the next 30 days</span>
+          <span>✓ Saved by {claimedBy}</span>
+          <span style={{ opacity: 0.7 }}>· This board will keep working for the next 30 days</span>
         </div>
       )}
 
-      {/* â•â•â• HAND RAISED BANNER â•â•â• */}
+      {/* ═══ HAND RAISED BANNER ═══ */}
       {handRaised && (
         <div className="animate-slide-down px-4 py-2 text-center text-sm font-semibold"
           style={{ background: 'var(--accent-amber-light)', color: '#B45309', borderBottom: '1px solid rgba(245,158,11,0.2)' }}>
-          âœ‹ {handRaised.studentName} raised their hand!
+          ✋ {handRaised.studentName} raised their hand!
         </div>
       )}
 
-      {/* â•â•â• MAIN CONTENT â•â•â• */}
+      {/* ═══ MAIN CONTENT ═══ */}
       <div className="flex-1 flex overflow-hidden">
 
-        {/* â”€â”€â”€â”€ LEFT: Files + Code Editor â”€â”€â”€â”€ */}
+        {/* ──── LEFT: Files + Code Editor ──── */}
         {showLeftPanel && (
           <div className="flex flex-col overflow-hidden" style={{
             width: viewMode === 'code' ? '100%' : '40%', minWidth: viewMode === 'split' ? '320px' : undefined,
@@ -2315,13 +2315,13 @@ export default function Room() {
             {/* Upload Bar */}
             <div className="flex items-center gap-3 px-4 py-3 shrink-0" style={{ borderBottom: '1px solid var(--border-subtle)' }}>
               <button onClick={() => fileInputRef.current?.click()} className="btn-accent text-[12px]">
-                ðŸ“¤ Upload HTML
+                📤 Upload HTML
               </button>
               <button onClick={() => setShowPasteModal(true)} className="btn text-[12px]">
-                ðŸ“‹ Paste Code
+                📋 Paste Code
               </button>
               <button onClick={() => { setAiError(null); setShowAiModal(true); }} className="btn-accent text-[12px]" title="Describe a concept; AI builds an interactive lesson">
-                âœ¨ AI Lesson
+                ✨ AI Lesson
               </button>
             </div>
 
@@ -2342,7 +2342,7 @@ export default function Room() {
                     <span className="max-w-[120px] truncate">{f.name}</span>
                     <span onClick={(e) => { e.stopPropagation(); deleteFile(f.id); }}
                       className="opacity-0 group-hover:opacity-100 ml-1 cursor-pointer text-base leading-none transition-opacity"
-                      style={{ color: 'var(--text-muted)' }}>Ã—</span>
+                      style={{ color: 'var(--text-muted)' }}>×</span>
                   </button>
                 ))}
               </div>
@@ -2351,7 +2351,7 @@ export default function Room() {
             {/* Code Area */}
             <div className="flex-1 flex flex-col overflow-hidden relative min-h-0">
               {files.length === 0 ? (
-                /* Empty left panel â€” the right-hand mode picker is now the
+                /* Empty left panel — the right-hand mode picker is now the
                    single source of upload actions (Choose file + Paste
                    snippet, both rendered inside the "Start with HTML" card).
                    We deliberately render nothing here so the user has one
@@ -2366,9 +2366,9 @@ export default function Room() {
                       {activeFile?.name || 'Editor'}
                     </span>
                     <div className="flex items-center gap-3">
-                      <span className="text-[11px] font-mono hidden sm:inline" style={{ color: 'var(--text-muted)' }}>âŒ˜+Enter</span>
+                      <span className="text-[11px] font-mono hidden sm:inline" style={{ color: 'var(--text-muted)' }}>⌘+Enter</span>
                       <button onClick={runPreview} className="btn-primary text-[12px]" style={{ padding: '6px 14px' }}>
-                        â–¶ Run & Sync
+                        ▶ Run & Sync
                       </button>
                     </div>
                   </div>
@@ -2401,7 +2401,7 @@ export default function Room() {
           </div>
         )}
 
-        {/* â”€â”€â”€â”€ CENTER: Preview â”€â”€â”€â”€ */}
+        {/* ──── CENTER: Preview ──── */}
         {showPreview && (
           <div className="flex-1 flex flex-col relative overflow-hidden" style={{ background: 'var(--bg-primary)' }}>
 
@@ -2447,7 +2447,7 @@ export default function Room() {
               onSetShapeTool={setShapeTool}
             />
 
-            {/* Hidden file input for explanation upload â€” triggered by the
+            {/* Hidden file input for explanation upload — triggered by the
                 Explanation pill in TeacherControls (next to Whiteboard). */}
             <input
               ref={tempFileInputRef}
@@ -2457,7 +2457,7 @@ export default function Room() {
               className="hidden"
             />
 
-            {/* Hidden HTML upload input â€” must live outside the left panel so
+            {/* Hidden HTML upload input — must live outside the left panel so
                 the mode picker's "Browse files" button still works when the
                 room is empty (the left panel is suppressed in that state). */}
             <input
@@ -2492,7 +2492,7 @@ export default function Room() {
                   or layer another HTML explanation on top of an example,
                   without hunting through the toolbar.
                   Hidden when the surface is already whiteboard or temp
-                  content â€” those modes have their own affordances. */}
+                  content — those modes have their own affordances. */}
               {iframeUrl && !showTempContent && !whiteboardMode && (
                 <div className="absolute top-2 left-2 z-20 flex items-center gap-2">
                   <button
@@ -2503,7 +2503,7 @@ export default function Room() {
                       color: '#4F46E5',
                       border: '1px solid rgba(79,70,229,0.25)',
                     }}
-                    title="Open the shared whiteboard temporarily â€” your HTML is paused but kept loaded"
+                    title="Open the shared whiteboard temporarily — your HTML is paused but kept loaded"
                   >
                     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                       <rect x="3" y="4" width="18" height="13" rx="1.6" />
@@ -2545,7 +2545,7 @@ export default function Room() {
                       color: '#fff',
                       border: '1px solid rgba(255,255,255,0.12)',
                     }}
-                    title={`Showing: ${tempContent.name} â€” click to return to the main HTML`}
+                    title={`Showing: ${tempContent.name} — click to return to the main HTML`}
                   >
                     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                       <path d="M19 12H5" /><path d="M12 19l-7-7 7-7" />
@@ -2585,7 +2585,7 @@ export default function Room() {
                     color: '#fff',
                     border: '1px solid rgba(255,255,255,0.12)',
                   }}
-                  title="Return to the HTML simulation â€” your whiteboard work is saved"
+                  title="Return to the HTML simulation — your whiteboard work is saved"
                 >
                   <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                     <path d="M19 12H5" /><path d="M12 19l-7-7 7-7" />
@@ -2594,7 +2594,7 @@ export default function Room() {
                 </button>
               )}
 
-              {/* Dual View toggle â€” appears once content is loaded */}
+              {/* Dual View toggle — appears once content is loaded */}
               {iframeUrl && !showTempContent && !whiteboardMode && (
                 <button
                   onClick={() => setDualView(v => !v)}
@@ -2606,26 +2606,26 @@ export default function Room() {
                   }}
                   title="Show a live mirror of what students see"
                 >
-                  {dualView ? 'âœ• Exit Dual View' : 'ðŸ‘¥ Dual View'}
+                  {dualView ? '✕ Exit Dual View' : '👥 Dual View'}
                 </button>
               )}
               {/* AUTONOMOUS: [ORDER-1 CRITICAL] - <Whiteboard> is mounted
                   ONCE and stays mounted for the entire room session, even
                   when the teacher toggles to HTML mode. Visibility is
-                  controlled via the `isActive` prop â€” the component returns
+                  controlled via the `isActive` prop — the component returns
                   null internally when isActive is false, so it disappears
                   visually, but its useState (objects, strokes, shapes,
                   texts, view, gridMode, instruments, undo stack) is
                   preserved by React across the null render.
                   Before this fix, mounting was inside a conditional ternary
-                  â€” toggling HTML mode UNMOUNTED the Whiteboard and dropped
+                  — toggling HTML mode UNMOUNTED the Whiteboard and dropped
                   every local state value. On remount the component
                   rehydrated from `whiteboardState`, which was the snapshot
                   captured at session-join (long stale). Result: every
                   stroke/shape/text drawn during the lesson vanished the
                   moment the teacher peeked at HTML and came back.
                   Server-side persistence (5-min snapshot, 48h cap) was
-                  always working â€” this was purely a client-side state
+                  always working — this was purely a client-side state
                   loss. */}
               <Whiteboard
                 ref={whiteboardRef}
@@ -2657,7 +2657,7 @@ export default function Room() {
                 >
                   <button
                     onClick={toggleWhiteboardSync}
-                    title={whiteboardSyncEnabled ? 'Pan/zoom mirrors both sides â€” click to go independent' : 'Independent view â€” click to share again'}
+                    title={whiteboardSyncEnabled ? 'Pan/zoom mirrors both sides — click to go independent' : 'Independent view — click to share again'}
                     style={{
                       display: 'flex', alignItems: 'center', gap: 8,
                       padding: '6px 12px',
@@ -2695,7 +2695,7 @@ export default function Room() {
               )}
 
               {showTempContent && tempContent && tempContentUrl ? (
-                // Temporary explanation content overlay â€” uses same ref so scroll sync works
+                // Temporary explanation content overlay — uses same ref so scroll sync works
                 <iframe
                   ref={iframeRef}
                   src={tempContentUrl}
@@ -2744,7 +2744,7 @@ export default function Room() {
                   )}
                 </div>
               ) : (
-                /* Empty room â€” let the teacher pick a starting surface.
+                /* Empty room — let the teacher pick a starting surface.
                    Whiteboard for a blank shared canvas; HTML to upload an
                    interactive simulation. The teacher can switch any time
                    from the toolbar pills (Whiteboard / Explanation). */
@@ -2764,7 +2764,7 @@ export default function Room() {
                           </svg>
                         </span>
                         <span className="ml-mode-card-title">Start with Whiteboard</span>
-                        <span className="ml-mode-card-body">A blank shared canvas. Pen, shapes, images, mutual sync â€” everything you'd expect.</span>
+                        <span className="ml-mode-card-body">A blank shared canvas. Pen, shapes, images, mutual sync — everything you'd expect.</span>
                         <span className="ml-mode-card-cta">
                           Open whiteboard
                           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -2809,7 +2809,7 @@ export default function Room() {
                                 uploadedAt: Date.now(),
                               };
                               socket.emit("upload_file", { roomId, file });
-                              showNotif('â–¶ Demo lesson loaded â€” try Step Lock, pings and control handoff');
+                              showNotif('▶ Demo lesson loaded — try Step Lock, pings and control handoff');
                             }}
                             className="ml-mode-card-action ml-mode-card-action-ghost"
                             title="No file handy? Load the built-in Equivalent Fractions Lab"
@@ -2823,7 +2823,7 @@ export default function Room() {
                       </div>
                     </div>
 
-                    {/* No "Tip" hint any more â€” both upload paths now live
+                    {/* No "Tip" hint any more — both upload paths now live
                         directly under the Start with HTML card above. */}
                   </div>
                 </div>
@@ -2847,7 +2847,7 @@ export default function Room() {
                   // with the 24px hit-radius minimum and drag interpolation
                   // in AnnotationLayer, the eraser now reliably catches a
                   // stroke under your cursor every time. Default felt too
-                  // tight before â€” users reported "sometimes works,
+                  // tight before — users reported "sometimes works,
                   // sometimes not."
                   eraserWidth={Math.max(penWidth * 4, 32)}
                   shapeTool={shapeTool}
@@ -2885,7 +2885,7 @@ export default function Room() {
           </div>
         )}
 
-        {/* â”€â”€â”€â”€ RIGHT: Sidebar â”€â”€â”€â”€ */}
+        {/* ──── RIGHT: Sidebar ──── */}
         <ChatPanel
           socket={socket} roomId={roomId!} userName={teacherName}
           messages={chatMessages} isOpen={chatOpen}
@@ -2894,7 +2894,7 @@ export default function Room() {
         />
       </div>
 
-      {/* â•â•â• NOTIFICATION â•â•â• */}
+      {/* ═══ NOTIFICATION ═══ */}
       {notification && (
         <div className="fixed top-16 left-1/2 -translate-x-1/2 z-50 animate-slide-down">
           <div className="px-5 py-2.5 rounded-xl text-sm font-medium"
@@ -2904,16 +2904,16 @@ export default function Room() {
         </div>
       )}
 
-      {/* â•â•â• AI LESSON MODAL â•â•â• */}
+      {/* ═══ AI LESSON MODAL ═══ */}
       {showAiModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4"
           style={{ background: 'rgba(0,0,0,0.3)', backdropFilter: 'blur(4px)' }}>
           <div className="w-full max-w-2xl animate-bounce-in"
             style={{ background: 'var(--bg-card)', borderRadius: 'var(--radius-xl)', border: '1px solid var(--border-subtle)', boxShadow: 'var(--shadow-xl)' }}>
             <div className="flex items-center justify-between p-5 pb-0">
-              <h3 className="font-display text-lg font-bold">âœ¨ Generate a lesson with AI</h3>
+              <h3 className="font-display text-lg font-bold">✨ Generate a lesson with AI</h3>
               <button onClick={() => { if (!aiGenerating) { setShowAiModal(false); setAiPrompt(''); setAiError(null); } }}
-                style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '20px' }}>âœ•</button>
+                style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '20px' }}>✕</button>
             </div>
             <div className="p-5 space-y-4">
               <textarea value={aiPrompt} onChange={(e) => setAiPrompt(e.target.value)}
@@ -2930,7 +2930,7 @@ export default function Room() {
                   className="btn-secondary" disabled={aiGenerating}>Cancel</button>
                 <button onClick={handleGenerateAi} disabled={!aiPrompt.trim() || aiGenerating}
                   className="btn-primary disabled:opacity-40">
-                  {aiGenerating ? 'Generatingâ€¦' : 'Generate & Run â–¶'}
+                  {aiGenerating ? 'Generating…' : 'Generate & Run ▶'}
                 </button>
               </div>
             </div>
@@ -2938,16 +2938,16 @@ export default function Room() {
         </div>
       )}
 
-      {/* â•â•â• PASTE CODE MODAL â•â•â• */}
+      {/* ═══ PASTE CODE MODAL ═══ */}
       {showPasteModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4"
           style={{ background: 'rgba(0,0,0,0.3)', backdropFilter: 'blur(4px)' }}>
           <div className="w-full max-w-2xl animate-bounce-in"
             style={{ background: 'var(--bg-card)', borderRadius: 'var(--radius-xl)', border: '1px solid var(--border-subtle)', boxShadow: 'var(--shadow-xl)' }}>
             <div className="flex items-center justify-between p-5 pb-0">
-              <h3 className="font-display text-lg font-bold">ðŸ“‹ Paste HTML Code</h3>
+              <h3 className="font-display text-lg font-bold">📋 Paste HTML Code</h3>
               <button onClick={() => { setShowPasteModal(false); setPasteCode(''); setPasteFileName(''); }}
-                style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '20px' }}>âœ•</button>
+                style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '20px' }}>✕</button>
             </div>
             <div className="p-5 space-y-4">
               <input value={pasteFileName} onChange={(e) => setPasteFileName(e.target.value)}
@@ -2962,7 +2962,7 @@ export default function Room() {
                   className="btn-secondary">Cancel</button>
                 <button onClick={handlePasteSubmit} disabled={!pasteCode.trim()}
                   className="btn-primary disabled:opacity-40">
-                  Add & Run â–¶
+                  Add & Run ▶
                 </button>
               </div>
             </div>
@@ -2970,13 +2970,13 @@ export default function Room() {
         </div>
       )}
 
-      {/* AUTONOMOUS: EXPLAIN OVER THIS modal â€” file OR paste path.
+      {/* AUTONOMOUS: EXPLAIN OVER THIS modal — file OR paste path.
           Previously the Explain button jumped straight to the OS file
           picker; the user reported they wanted to paste HTML code
           directly too. This modal offers both: a primary textarea for
           paste, with a secondary "Choose a file" button. The two paths
           flow through the same submitExplanation() helper so behaviour
-          is identical from there on. Name input is optional â€” falls
+          is identical from there on. Name input is optional — falls
           back to a timestamp label. */}
       {showExplainModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4"
@@ -2984,11 +2984,11 @@ export default function Room() {
           <div className="w-full max-w-2xl animate-bounce-in"
             style={{ background: 'var(--bg-card)', borderRadius: 'var(--radius-xl)', border: '1px solid var(--border-subtle)', boxShadow: 'var(--shadow-xl)' }}>
             <div className="flex items-center justify-between p-5 pb-0">
-              <h3 className="font-display text-lg font-bold">ðŸ“š Explain Over This</h3>
+              <h3 className="font-display text-lg font-bold">📚 Explain Over This</h3>
               <button
                 onClick={() => { setShowExplainModal(false); setExplainHtml(''); setExplainName(''); }}
                 style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '20px' }}
-              >âœ•</button>
+              >✕</button>
             </div>
             <div className="p-5 space-y-4">
               <p style={{ color: 'var(--text-muted)', fontSize: 13, margin: 0 }}>
@@ -3010,7 +3010,7 @@ export default function Room() {
               <div className="flex gap-3 justify-end items-center">
                 <button
                   onClick={() => {
-                    // "Or choose a file" â€” trigger the existing file
+                    // "Or choose a file" — trigger the existing file
                     // input. The picker's onChange handler routes to
                     // submitExplanation just like the textarea path.
                     setShowExplainModal(false);
@@ -3021,7 +3021,7 @@ export default function Room() {
                   className="btn-secondary"
                   title="Pick an .html file from your computer instead"
                 >
-                  Or choose a fileâ€¦
+                  Or choose a file…
                 </button>
                 <div style={{ flex: 1 }} />
                 <button
@@ -3038,7 +3038,7 @@ export default function Room() {
                   disabled={!explainHtml.trim()}
                   className="btn-primary disabled:opacity-40"
                 >
-                  Show explainer â–¶
+                  Show explainer ▶
                 </button>
               </div>
             </div>
@@ -3046,19 +3046,19 @@ export default function Room() {
         </div>
       )}
 
-      {/* â•â•â• QUIZ MODAL â•â•â• */}
+      {/* ═══ QUIZ MODAL ═══ */}
       {showQuizModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4"
           style={{ background: 'rgba(0,0,0,0.3)', backdropFilter: 'blur(4px)' }}>
           <div className="w-full max-w-md animate-bounce-in"
             style={{ background: 'var(--bg-card)', borderRadius: 'var(--radius-xl)', border: '1px solid var(--border-subtle)', boxShadow: 'var(--shadow-xl)' }}>
             <div className="p-5">
-              <h3 className="font-display text-lg font-bold mb-4">ðŸŽ¯ Pop Quiz</h3>
+              <h3 className="font-display text-lg font-bold mb-4">🎯 Pop Quiz</h3>
               <textarea value={quizQuestion} onChange={(e) => setQuizQuestion(e.target.value)}
                 placeholder="Type your question... e.g. What is 3/4 + 1/2?"
                 className="input-field mb-3" style={{ minHeight: '90px', resize: 'vertical' }} />
               <div className="text-[10px] font-bold mb-2" style={{ color: 'var(--text-muted)', letterSpacing: '0.05em' }}>
-                CHOICES (OPTIONAL â€” FILL 2+ FOR MULTIPLE CHOICE, LEAVE BLANK FOR FREE TEXT)
+                CHOICES (OPTIONAL — FILL 2+ FOR MULTIPLE CHOICE, LEAVE BLANK FOR FREE TEXT)
               </div>
               <div className="grid grid-cols-2 gap-2 mb-4">
                 {quizOptions.map((opt, i) => (
@@ -3087,7 +3087,7 @@ export default function Room() {
         </div>
       )}
 
-      {/* â•â•â• STEP GATE MODAL â•â•â• */}
+      {/* ═══ STEP GATE MODAL ═══ */}
       {showGateModal && (
         <StepGate
           socket={socket} roomId={roomId!}
@@ -3097,7 +3097,7 @@ export default function Room() {
         />
       )}
 
-      {/* â•â•â• SIMULATION LIBRARY â•â•â• */}
+      {/* ═══ SIMULATION LIBRARY ═══ */}
       <SimulationLibrary
         isOpen={showLibrary}
         onClose={() => setShowLibrary(false)}
@@ -3106,7 +3106,7 @@ export default function Room() {
         currentName={activeFile?.name}
       />
 
-      {/* â•â•â• LEADERBOARD â•â•â• */}
+      {/* ═══ LEADERBOARD ═══ */}
       <Leaderboard
         entries={leaderboard}
         open={showLeaderboard}
