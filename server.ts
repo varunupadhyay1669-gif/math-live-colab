@@ -2990,6 +2990,29 @@ Build a widget that teaches: ${safePrompt}`;
   httpServer.listen(PORT, '0.0.0.0', () => {
     console.log(`\n  🧮 MathsLive server running on http://localhost:${PORT}\n`);
   });
+
+  // ─── KEEP-WARM (the real fix for "works at first, then crashes mid-class") ───
+  // Render's free tier spins the instance DOWN after ~15 min with no inbound
+  // traffic. Because rooms live in memory, that sleep WIPES every live class;
+  // the next click then hits a 20–60s cold start and comes back to an empty
+  // room. During a lesson there are naturally quiet stretches (the teacher is
+  // explaining), so this is exactly what kept breaking sync.
+  //
+  // Fix: ping our OWN public URL every 10 min. The request leaves the box and
+  // re-enters through Render's router, so it counts as inbound traffic and the
+  // instance never idles out. RENDER_EXTERNAL_URL is injected by Render; allow
+  // SELF_URL as a manual override for other hosts. (One always-on free service
+  // ≈ 730 hrs/mo, within Render's 750-hr free allowance.)
+  // NOTE: this only prevents IDLE sleep. A redeploy/crash still resets in-memory
+  // rooms — set UPSTASH_REDIS_REST_URL + _TOKEN for rooms that survive restarts.
+  const SELF_URL = (process.env.RENDER_EXTERNAL_URL || process.env.SELF_URL || '').replace(/\/$/, '');
+  if (process.env.NODE_ENV === 'production' && SELF_URL && typeof fetch === 'function') {
+    const KEEP_WARM_MS = 10 * 60 * 1000;
+    setInterval(() => {
+      fetch(`${SELF_URL}/healthz`).catch(() => { /* best-effort; ignore */ });
+    }, KEEP_WARM_MS).unref?.();
+    console.log(`⏰ Keep-warm: self-ping ${SELF_URL}/healthz every 10 min (prevents free-tier idle sleep)`);
+  }
 }
 
 startServer();
