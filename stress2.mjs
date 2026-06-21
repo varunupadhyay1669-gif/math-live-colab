@@ -178,9 +178,30 @@ async function T10_studentCannotMutateCanonical() {
   assert(r2 === null, 'student switch_file is ignored (teacher-only)', JSON.stringify(r2)?.slice(0, 40));
 }
 
+// T11: a whiteboard MATH label (latex:true) persists server-side and hydrates
+// to a late-joining student with its latex flag + LaTeX source intact — so math
+// the teacher writes shows as real equations on the student's screen too.
+async function T11_mathLabelSync() {
+  console.log('T11: whiteboard math label (latex) syncs to a late joiner');
+  const room = rid('t11');
+  const t = await joinTeacher(room);
+  const mathText = { id: 'm1', x: 100, y: 100, text: 'x^2 + \\frac{1}{2}', fontSize: 24, color: '#000', latex: true };
+  t.emit('whiteboard_add_text', { roomId: room, text: mathText });
+  await delay(200);
+  const s = conn(); await on1(s, 'connect');
+  const ssP = on1(s, 'session_state', { timeout: 4000 }).catch(() => null);
+  s.emit('join_room', { roomId: room, userName: 'Stu', role: 'student' });
+  await on1(s, 'room_state').catch(() => {});
+  const ss = await ssP;
+  const got = (ss?.whiteboard?.texts || []).find(x => x.id === 'm1');
+  assert(!!got && got.latex === true, 'late joiner hydrates the math label WITH the latex flag', JSON.stringify(got));
+  assert(got?.text === 'x^2 + \\frac{1}{2}', 'LaTeX source preserved verbatim through the round-trip', JSON.stringify(got?.text));
+}
+
 async function run() {
   const tests = [T1_hardReset, T2_kick, T3_explanationLateJoin, T4_whiteboardUpdateCap, T5_claimRoom,
-    T6_attention, T7_chatHardening, T8_whiteboardViewValidation, T9_gateValidation, T10_studentCannotMutateCanonical];
+    T6_attention, T7_chatHardening, T8_whiteboardViewValidation, T9_gateValidation, T10_studentCannotMutateCanonical,
+    T11_mathLabelSync];
   for (const test of tests) { try { await test(); } catch (e) { bad(test.name + ' threw', e.message); } await delay(150); }
   console.log(`\nSTRESS2 RESULT: ${pass} passed, ${fail} failed`);
   for (const s of sockets) { try { s.close(); } catch {} }

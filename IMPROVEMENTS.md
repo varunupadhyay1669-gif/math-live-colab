@@ -39,8 +39,29 @@ element ping, reactions, chat, session recorder (record/autosave/download/`playb
 | 5 | Math symbol quick-insert palette | ziteboard | Quick √ π ² ½ ≤ ≥ … into whiteboard text. Small, on-goal. | S | L | 5 |
 | 6 | Persistent cross-session progress | research.com (progress tracking) | **Needs a DB → data-model change** → out of scope per constraints. | L | H | 6 |
 
-**Pick:** #1 — **Math equation input via KaTeX.** Highest impact-to-effort for a *math* tutor,
-reuses an existing dependency, no data-model change, free-tier safe, contained to the whiteboard.
+**Pick:** #1 — Math equation input via KaTeX.
 
-**Status:** It touches the core (live-class) whiteboard, so per the "pause for Medium/risky in a
-live app" rule — **awaiting go-ahead before building.** (Sources cited above.)
+**OUTCOME (after go-ahead): already implemented — verified, not rebuilt.**
+On inspection, `Whiteboard.tsx` already has the full feature (a prior autonomous build):
+`katex` import, `renderLatexToHtml()` (throwOnError:false + try/catch fallback), `MathLabel`
+DOM overlay (pointer-events:none, scales with zoom, measures bbox), a `latex` flag on
+`BoardText`, a math-mode toggle, a **symbol palette** (×÷π√x²x³≤≥≠≈∞∫Σ∠θ⅓ — this was list
+item #5, also already done), and a live preview. The server preserves the `latex` flag on
+`whiteboard_add_text`/`update_text` and stores it in `room.whiteboard.texts` (hydrated to late
+joiners via `session_state`).
+
+**Verification (run, not assumed):**
+- Browser (teacher): Text tool → editor → math toggle → typed `x^2 + \frac{1}{2} = \sqrt{a+b}`
+  → live preview rendered a real `.katex` element; on commit, a `.katex` MathLabel rendered on
+  the board (content `x²+½=√(a+b)`).
+- Socket: teacher `whiteboard_add_text {latex:true}` → student `session_state.whiteboard.texts`
+  contains it with `latex===true` and the LaTeX source verbatim. **PASS.**
+- Mobile: student view at 375px has **no horizontal overflow** (clean responsive layout).
+- **New regression test:** stress2 **T11** (math label syncs to late joiner, latex preserved).
+  Full suite now 153 checks.
+- No new code needed for the feature itself; the cycle's artifact is the missing test coverage.
+
+**Next candidates (still open):** #2 session re-watch PLAYER (recorder + `playback()` exist;
+a playback *renderer* is Large) · #3 mobile is already clean (no work needed) · #4 graphing
+(needs a new dep → pause). The app already meets/exceeds competitor feature parity, so future
+cycles must guard against bloat (per Constraints) — prefer depth/quality over new surface.
