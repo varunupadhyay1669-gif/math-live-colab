@@ -202,21 +202,23 @@ export default function StudentView() {
   // Tracks the last touch-Y so the view-only overlay can translate a finger
   // drag into iframe scrolling (forward scroll while still blocking clicks).
   const overlayTouchYRef = useRef(0);
-  // SCROLLING vs DRIVING are intentionally separate concerns:
-  //  - A student may ALWAYS scroll their own viewport (it's their screen). The
-  //    blocking overlay forwards wheel/touch to the iframe and the injected sync
-  //    script no longer snaps scroll back, so scrolling never desyncs anyone.
-  //  - CLICKS / typing into the sim are mirror-only: a student FOLLOWS the
-  //    teacher's interactions (stays on the same question) and may drive the
-  //    shared sim ONLY while holding the control grant (canDrive). This is what
-  //    prevents the "she clicked ahead and is on a different question" drift -
-  //    interactive mode must NOT let a student click the lesson out of sync.
-  // The room-wide interactive toggle governs SKETCHING (canAnnotate), not sim
-  // clicks: it lets students annotate + scroll, never click the lesson freely.
-  // Whether the student may SKETCH over the lesson. When the teacher is just
-  // presenting (view-only), the student is a pure viewer - no button presses
-  // AND no drawing. Sketching is unlocked only when the teacher enables
-  // interaction OR hands this student control.
+  // canInteract = may this student CLICK / TYPE into the lesson sim (press its
+  // buttons, answer the quiz)? True when the teacher has enabled interactive
+  // mode OR handed this student control. In a 1-to-1 lesson "interactive mode"
+  // literally means "your turn — use the buttons", so the student's pointer
+  // MUST reach the sim. A non-control student's events stay LOCAL: the relay
+  // below only forwards to the server when canDrive, and the server drops
+  // non-holder events — so they work their own copy without driving the class.
+  //  - View-only (canInteract=false): a transparent overlay blocks taps so the
+  //    student purely mirrors the teacher (can't click ahead). Scroll still
+  //    works — the overlay forwards wheel/touch into the iframe.
+  //  - Interactive (canInteract=true): NO blocking overlay — taps reach the sim.
+  //    The student chooses Pointer (default = click) / Pen / Eraser in the rail.
+  const canInteract = interactionAllowed || hasControl;
+  const canInteractRef = useRef(false);
+  useEffect(() => { canInteractRef.current = canInteract; }, [canInteract]);
+  // Whether the student may SKETCH over the lesson (Pen / Eraser). Unlocked
+  // whenever interaction is — kept as its own flag so the two can diverge later.
   const canAnnotate = interactionAllowed || hasControl;
 
   // ── Student Annotation Tools ──
@@ -978,12 +980,11 @@ export default function StudentView() {
     for (const msg of pending) {
       iframeRef.current?.contentWindow?.postMessage(msg, '*');
     }
-    // ALWAYS re-push SET_INTERACTION_MODE on every iframe load. allowed=canDrive
-    // means CLICKS are mirror-only unless this student holds control - so a
-    // student never clicks the lesson out of sync. Scrolling is handled
-    // separately (overlay forwards it; the sync script no longer locks scroll),
-    // so this staying false does NOT prevent the student from scrolling.
-    iframeRef.current?.contentWindow?.postMessage({ type: 'SET_INTERACTION_MODE', allowed: canDriveRef.current }, '*');
+    // ALWAYS re-push SET_INTERACTION_MODE on every iframe load. allowed=canInteract
+    // means the student's pointer reaches the sim whenever interactive mode is on
+    // (or they hold control) — so in a 1-to-1 lesson they can actually click the
+    // buttons. In view-only it stays false and the mirror overlay blocks taps.
+    iframeRef.current?.contentWindow?.postMessage({ type: 'SET_INTERACTION_MODE', allowed: canInteractRef.current }, '*');
     // Re-send current state
     iframeRef.current?.contentWindow?.postMessage({ type: 'SET_SCROLL_SYNC', enabled: scrollSyncEnabled }, '*');
     if (currentStep < 999) {
@@ -1080,13 +1081,13 @@ export default function StudentView() {
 
 
   // ── Push interaction mode to iframe ──
-  // allowed=canDrive: a student's CLICKS into the lesson are mirror-only (they
-  // follow the teacher, staying on the same question) unless they hold the
-  // control grant. Scrolling is intentionally NOT gated by this - it's handled
-  // by the overlay + sync script so every student can always scroll their view.
+  // allowed=canInteract: the student's pointer reaches the sim whenever the
+  // teacher has enabled interactive mode (or granted control), so they can click
+  // buttons / answer the quiz. In view-only it's false and the mirror overlay
+  // blocks taps. Scroll works regardless (overlay forwards it; no scroll lock).
   useEffect(() => {
-    postToIframe({ type: 'SET_INTERACTION_MODE', allowed: canDrive });
-  }, [canDrive, iframeUrl, postToIframe]);
+    postToIframe({ type: 'SET_INTERACTION_MODE', allowed: canInteract });
+  }, [canInteract, iframeUrl, postToIframe]);
 
   // ── Challenge Timer Countdown ──
   useEffect(() => {
@@ -1402,13 +1403,13 @@ export default function StudentView() {
                 allow={LESSON_IFRAME_ALLOW}
                 allowFullScreen
               />
-              {/* Mirror overlay - shown to every student who isn't the driver
-                  (view-only AND interactive non-control). It BLOCKS clicks/taps
-                  into the lesson (so a student can't click ahead onto a
-                  different question) but FORWARDS wheel/touch to the iframe so
-                  the student can still freely scroll their own view. Alt+click
-                  still pings "look here". */}
-              {!canDrive && (
+              {/* Mirror overlay - shown ONLY in view-only (not interactive, not
+                  control). It BLOCKS clicks/taps so a view-only student purely
+                  mirrors the teacher, but FORWARDS wheel/touch so they can still
+                  scroll their own view. Alt+click still pings "look here". In
+                  interactive mode this is absent, so the student's pointer
+                  reaches the sim and they can click buttons. */}
+              {!canInteract && (
                 <div
                   className="absolute inset-0"
                   style={{ pointerEvents: 'auto', zIndex: 1, cursor: 'crosshair', touchAction: 'none' }}
@@ -1509,6 +1510,27 @@ export default function StudentView() {
                 backdropFilter: 'blur(6px)',
               }}
             >
+              {/* Pointer / click (default) — taps go to the lesson so the
+                  student can press its buttons. Picking this turns drawing off. */}
+              <button
+                onClick={() => { setStudentDrawMode(false); setStudentEraser('off'); }}
+                aria-pressed={!studentDrawMode && studentEraser === 'off'}
+                title="Pointer - click the lesson"
+                style={{
+                  width: 36, height: 36,
+                  borderRadius: 8,
+                  border: 'none',
+                  background: (!studentDrawMode && studentEraser === 'off') ? 'var(--accent-indigo, #6366f1)' : 'transparent',
+                  color: (!studentDrawMode && studentEraser === 'off') ? '#fff' : 'var(--text-primary)',
+                  cursor: 'pointer',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  transition: 'background 0.15s ease',
+                }}
+              >
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M5 3l6 18 2.5-7.5L21 11 5 3z" />
+                </svg>
+              </button>
               {/* Pen */}
               <button
                 onClick={() => {
