@@ -15,10 +15,18 @@ services:
         value: production
       - key: NODE_VERSION
         value: "20"
+      # ── Durable rooms across ANY restart (redeploy / crash), not just idle ──
+      # Keep-warm stops idle sleep; THESE make a class survive a real restart.
+      # Create a free Upstash Redis DB at https://upstash.com (Redis → Create),
+      # then paste its "UPSTASH_REDIS_REST_URL" and "UPSTASH_REDIS_REST_TOKEN"
+      # into these fields in the Render dashboard (service → Environment).
+      # Left blank, the server safely falls back to in-memory rooms.
+      # sync:false = "I'll set the value in the dashboard; don't manage from git."
+      - key: UPSTASH_REDIS_REST_URL
+        sync: false
+      - key: UPSTASH_REDIS_REST_TOKEN
+        sync: false
     autoDeploy: true
-    # NOTE: To persist .rooms/ across restarts, upgrade to a paid plan and add:
-    #   disk:
-    #     name: rooms-data
-    #     mountPath: /opt/render/project/src/.rooms
-    #     sizeGB: 1
-    # Free plan rooms are in-memory only and reset on cold-start.
+    # Free plan rooms are otherwise in-memory only and reset on cold-start.
+    # (Paid-plan alternative to Redis: a persistent disk mounted at
+    #  /opt/render/project/src/.rooms — see Render docs.)
