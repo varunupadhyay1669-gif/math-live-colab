@@ -1039,9 +1039,12 @@ export default function StudentView() {
         });
         return;
       }
-      // Block all other interactions unless the room allows it OR this
-      // student personally holds the control grant ("the chalk").
-      if (!canDriveRef.current) return;
+      // Emit the student's interactions whenever they may interact (interactive
+      // mode OR they hold control). The SERVER decides routing: a control-holder
+      // drives the whole room; an interactive student's events are relayed to the
+      // TEACHER ONLY, so the teacher SEES what the student does (bidirectional
+      // sync) without driving other students. View-only students never reach here.
+      if (!canInteractRef.current) return;
       if (type === 'SYNC_SCROLL' && !scrollSyncEnabled) return;
       socket.emit("interaction", {
         roomId,

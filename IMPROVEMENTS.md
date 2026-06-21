@@ -65,3 +65,30 @@ joiners via `session_state`).
 a playback *renderer* is Large) · #3 mobile is already clean (no work needed) · #4 graphing
 (needs a new dep → pause). The app already meets/exceeds competitor feature parity, so future
 cycles must guard against bloat (per Constraints) — prefer depth/quality over new surface.
+
+---
+
+## Cycle 2 — BIDIRECTIONAL sync (student → teacher) [reported bug]
+
+**Bug (from user screenshots):** teacher→student sync worked, but when a student in
+**interactive mode** clicked/scrolled, the **teacher could not see it**. Wanted: bidirectional.
+
+**Root cause:** StudentView only emitted interactions when `canDrive` (control-holder), and the
+server only relayed a student's events room-wide for the control-holder. An interactive
+(non-control) student's events never left the client → teacher saw nothing.
+
+**Fix (determinism-safe, no DOM-swap — preserves handlers):**
+- StudentView: emit interactions when `canInteract` (interactive OR control), not just `canDrive`.
+- server.ts `interaction` handler: new branch — an interactive student's events relay to the
+  **TEACHER ONLY** (not room-wide, not journaled), so the teacher mirrors via `REMOTE_*` + shows a
+  student-click indicator. Single-writer among students preserved (no random-sim divergence).
+
+**Tests (multiple, as requested):** new **stress8** (6 checks) — BD1 click→teacher, BD2
+scroll→teacher, BD3 view-only stays one-way, BD4 no leak to other students, BD5 control-holder
+still room-wide, BD6 teacher→student still works. Proven to catch the bug: **pre-fix BD1/BD2 FAIL,
+post-fix all 6 PASS.** Updated verify-sync **Test R** to the new requirement (was "non-holder
+never reaches teacher"; now "reaches teacher only"). Full suite on a clean server: **159 green**
+(verify-sync 48, stress 19, stress2 18, stress3 11, stress4 26, stress5 13, stress6 16, stress7 2,
+stress8 6). Browser e2e was blocked by a flaky preview process; socket tests are authoritative and
+the teacher's render path (REMOTE_* + click indicator) is the same one already used for
+control-holder students.

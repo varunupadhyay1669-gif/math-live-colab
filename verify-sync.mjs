@@ -388,14 +388,16 @@ async function run() {
   const swStu = track(connect()); await waitFor(swStu, 'connect');
   swStu.emit('join_room', { roomId: ROOM7, userName: 'SwKid', role: 'student' });
   await waitFor(swStu, 'room_state').catch(() => {});
-  // Even with the global interaction toggle ON, a non-holder student's sim
-  // click must NOT be relayed (single-writer — would diverge a random sim).
+  // UPDATED REQUIREMENT (was: fully one-way). With the interaction toggle ON, an
+  // interactive (non-holder) student's clicks now relay to the TEACHER so the
+  // teacher SEES what the student does (bidirectional sync — the reported need).
+  // They are still NOT broadcast to OTHER students and NOT journaled, so
+  // single-writer among students / no random-sim divergence holds (stress8 BD4).
   t7.emit('toggle_student_interaction', { roomId: ROOM7, allowed: true });
   await delay(200);
-  const noDrive = expectNo(t7, 'interaction', 800);
+  const teacherSees = waitFor(t7, 'interaction', { match: p => p?.type === 'SYNC_CLICK' && p.path === '#x', timeout: 2000 });
   swStu.emit('interaction', { roomId: ROOM7, event: { type: 'SYNC_CLICK', path: '#x' } });
-  const nd = await noDrive;
-  assert(nd === null || nd?.type !== 'SYNC_CLICK', 'interactive (non-holder) student does NOT drive the sim', JSON.stringify(nd)?.slice(0, 60));
+  await teacherSees.then(() => ok('interactive (non-holder) student click reaches the TEACHER (bidirectional)')).catch(e => bad('interactive student -> teacher', e.message));
   // Grant control → now her clicks drive.
   await waitFor(swStu, 'control_changed', { match: p => p.holderName === 'SwKid', timeout: 3000 }).catch(() => {});
   t7.emit('grant_control', { roomId: ROOM7, holderName: 'SwKid' });

@@ -2448,6 +2448,16 @@ Build a widget that teaches: ${safePrompt}`;
           // mirror, so this single stream drives every screen identically.
           journalEvent(room, event);
           socket.to(roomId).emit('interaction', event);
+        } else if (room.studentInteractionAllowed) {
+          // INTERACTIVE MODE (no control grant): the student is working their
+          // OWN copy. Relay their interactions to the TEACHER ONLY so the
+          // teacher SEES what the student is doing — the teacher mirrors via
+          // REMOTE_* and shows a student-click indicator (bidirectional sync).
+          // NOT broadcast room-wide and NOT journaled: this student is not the
+          // canonical driver, so it must not drive other students or appear in
+          // the late-joiner replay (that would reintroduce multi-writer drift).
+          const teacherId = resolveTeacherSocketId();
+          if (teacherId) io.to(teacherId).emit('interaction', event);
         }
         // When not allowed: student events are silently dropped (view-only mode)
       }
