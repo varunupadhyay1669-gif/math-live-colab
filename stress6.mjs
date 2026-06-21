@@ -165,9 +165,30 @@ async function P7_nameSpoofControl() {
   ok('control is exclusively name-matched to the granted holder (Ann)');
 }
 
+// P8: gate_answer coerces answerIndex — a correct answer sent as the string "2"
+// must score CORRECT, not be silently marked wrong by a strict === mismatch.
+async function P8_gateAnswerCoercion() {
+  console.log('P8: gate_answer coerces a string answerIndex');
+  const room = rid('p8');
+  const t = await joinTeacher(room);
+  await upload(t, room);
+  t.emit('add_gate', { roomId: room, step: 1, question: 'Pick c', options: ['a', 'b', 'c'], correctIndex: 2 });
+  await delay(150);
+  const s = await joinStudent(room, 'Stu');
+  const r1 = on1(s.s, 'gate_result', { timeout: 2500 }).catch(() => null);
+  s.s.emit('gate_answer', { roomId: room, step: 1, answerIndex: '2', studentName: 'Stu' }); // STRING that matches
+  const res1 = await r1;
+  assert(res1 && res1.correct === true, 'string answerIndex "2" matching correctIndex 2 scores CORRECT', JSON.stringify(res1));
+  const s2 = await joinStudent(room, 'Stu2');
+  const r2 = on1(s2.s, 'gate_result', { timeout: 2500 }).catch(() => null);
+  s2.s.emit('gate_answer', { roomId: room, step: 1, answerIndex: '0', studentName: 'Stu2' }); // wrong string
+  const res2 = await r2;
+  assert(res2 && res2.correct === false, 'wrong string answerIndex "0" scores incorrect', JSON.stringify(res2));
+}
+
 async function run() {
   const tests = [P1_privilegeEscalation, P2_restoreKeepsControl, P4_interactiveControlInterleave,
-    P5_persistThroughEmpty, P6_malformedPayloads, P7_nameSpoofControl];
+    P5_persistThroughEmpty, P6_malformedPayloads, P7_nameSpoofControl, P8_gateAnswerCoercion];
   for (const test of tests) { try { await test(); } catch (e) { bad(test.name + ' threw', e.message); } await delay(200); }
   console.log(`\nSTRESS6 RESULT: ${pass} passed, ${fail} failed`);
   if (fails.length) { console.log('FAILURES:'); fails.forEach(f => console.log('  - ' + f)); }

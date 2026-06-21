@@ -2646,7 +2646,11 @@ Build a widget that teaches: ${safePrompt}`;
       if (!isMember(room, socket.id)) return;
       const gate = room.gates[step];
       if (!gate) { socket.emit('gate_result', { correct: false }); return; }
-      const isCorrect = gate.correctIndex === answerIndex;
+      // Coerce answerIndex before the strict compare: correctIndex is stored as a
+      // number (add_gate coerces it), but the wire value could arrive as a string
+      // ("1"), which `===` would wrongly mark incorrect — a correct quiz answer
+      // silently scored wrong. Number() normalizes it; garbage -> NaN -> wrong.
+      const isCorrect = gate.correctIndex === Number(answerIndex);
 
       // ── Gamification: update XP & streaks ──
       // Coerce studentName to a string FIRST: a client can send a non-string
