@@ -2929,7 +2929,8 @@ export default function Room() {
                 <button onClick={() => { if (!aiGenerating) { setShowAiModal(false); setAiPrompt(''); setAiError(null); } }}
                   className="btn-secondary" disabled={aiGenerating}>Cancel</button>
                 <button onClick={handleGenerateAi} disabled={!aiPrompt.trim() || aiGenerating}
-                  className="btn-primary disabled:opacity-40">
+                  className="btn-primary disabled:opacity-40"
+                  title={aiGenerating ? "Generating..." : (!aiPrompt.trim() ? "Please enter a prompt" : "")}>
                   {aiGenerating ? 'Generating…' : 'Generate & Run ▶'}
                 </button>
               </div>
@@ -2961,7 +2962,8 @@ export default function Room() {
                 <button onClick={() => { setShowPasteModal(false); setPasteCode(''); setPasteFileName(''); }}
                   className="btn-secondary">Cancel</button>
                 <button onClick={handlePasteSubmit} disabled={!pasteCode.trim()}
-                  className="btn-primary disabled:opacity-40">
+                  className="btn-primary disabled:opacity-40"
+                  title={!pasteCode.trim() ? "Please paste some HTML code" : ""}>
                   Add & Run ▶
                 </button>
               </div>
@@ -3037,6 +3039,7 @@ export default function Room() {
                   }}
                   disabled={!explainHtml.trim()}
                   className="btn-primary disabled:opacity-40"
+                  title={!explainHtml.trim() ? "Please paste HTML for explanation" : ""}
                 >
                   Show explainer ▶
                 </button>
@@ -3080,7 +3083,7 @@ export default function Room() {
               )}
               <div className="flex gap-3">
                 <button onClick={() => { setShowQuizModal(false); setQuizQuestion(''); }} className="btn-secondary flex-1">Cancel</button>
-                <button onClick={sendQuiz} disabled={!quizQuestion.trim()} className="btn-primary flex-1 disabled:opacity-40">Send Quiz</button>
+                <button onClick={sendQuiz} disabled={!quizQuestion.trim()} className="btn-primary flex-1 disabled:opacity-40" title={!quizQuestion.trim() ? "Please enter a question" : ""}>Send Quiz</button>
               </div>
             </div>
           </div>
