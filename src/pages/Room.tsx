@@ -482,6 +482,12 @@ export default function Room() {
   const inviteButtonRef = useRef<HTMLButtonElement>(null);
   const timerRef = useRef<ReturnType<typeof setInterval>>();
   const reactionIdRef = useRef(0);
+  // Auto-dismiss timers for the hand-raised banner and the attention-check
+  // state. Kept in refs so a re-trigger clears the prior timer first (otherwise
+  // an earlier timer fires and dismisses the NEWER banner early), and so they
+  // can be cleared on unmount.
+  const handRaiseTimerRef = useRef<ReturnType<typeof setTimeout>>();
+  const attentionTimerRef = useRef<ReturnType<typeof setTimeout>>();
 
   // ── Session Timer ──
   useEffect(() => {
@@ -679,7 +685,10 @@ export default function Room() {
       setHandRaised({ studentName });
       showNotif(`✋ ${studentName} raised their hand!`);
       sounds.raiseHand();
-      setTimeout(() => setHandRaised(null), 8000);
+      // Reset the dismiss timer so a second raise within 8s isn't cleared early
+      // by the first raise's timer.
+      if (handRaiseTimerRef.current) clearTimeout(handRaiseTimerRef.current);
+      handRaiseTimerRef.current = setTimeout(() => setHandRaised(null), 8000);
     });
     newSocket.on("quiz_answer_received", ({ answer, studentName }: { answer: string; studentName: string }) => {
       setQuizAnswers(prev => [...prev, { answer, studentName }]);
@@ -1462,6 +1471,13 @@ export default function Room() {
   // reconnected mid-generation), this timer recovers the modal instead of
   // leaving it stuck on "Generating…" with both close buttons disabled.
   const aiTimeoutRef = useRef<ReturnType<typeof setTimeout>>();
+  // Clear any pending auto-dismiss / generation timers on unmount so they don't
+  // fire on a torn-down component (all are also cleared/reset at their sources).
+  useEffect(() => () => {
+    if (handRaiseTimerRef.current) clearTimeout(handRaiseTimerRef.current);
+    if (attentionTimerRef.current) clearTimeout(attentionTimerRef.current);
+    if (aiTimeoutRef.current) clearTimeout(aiTimeoutRef.current);
+  }, []);
   const showNotif = (msg: string) => {
     if (notifTimeoutRef.current) clearTimeout(notifTimeoutRef.current);
     setNotification(msg);
@@ -1761,8 +1777,10 @@ export default function Room() {
     setAttentionCheckActive(true);
     socket.emit("attention_check", { roomId });
     showNotif('📢 Attention check sent — waiting for responses');
-    // Auto-dismiss after 30s
-    setTimeout(() => setAttentionCheckActive(false), 30000);
+    // Auto-dismiss after 30s. Reset any prior timer so a re-sent check gets a
+    // fresh 30s window instead of being dismissed early by the previous one.
+    if (attentionTimerRef.current) clearTimeout(attentionTimerRef.current);
+    attentionTimerRef.current = setTimeout(() => setAttentionCheckActive(false), 30000);
   };
 
   const togglePause = () => {
