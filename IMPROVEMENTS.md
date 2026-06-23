@@ -92,3 +92,17 @@ never reaches teacher"; now "reaches teacher only"). Full suite on a clean serve
 stress8 6). Browser e2e was blocked by a flaky preview process; socket tests are authoritative and
 the teacher's render path (REMOTE_* + click indicator) is the same one already used for
 control-holder students.
+
+---
+
+## Cycle 3 — PHASE 1 deepening: whiteboard object hydration coverage
+
+The Cycle-1 finding (features ship with no tests) prompted a bug-hunt in the least-tested area:
+whiteboard **shapes**, **instruments** (ruler/protractor/compass), and **grid mode** had zero
+sync coverage. New **stress9** (9 checks): shape add/update/remove hydration with all fields
+preserved, instrument add/remove geometry hydration, grid-mode hydration, and a privilege-escalation
+guard (a student cannot add a shape). **Result: 9/9, no bug found** — the area is robust
+(whole-object storage + full `session_state` hydration + `requireTeacher` gating). Outcome: a
+critical untested surface is now confirmed correct and regression-protected. Full suite **168 green**
+(verify-sync 48, stress 19, stress2 18, stress3 11, stress4 26, stress5 13, stress6 16, stress7 2,
+stress8 6, stress9 9). No product change — coverage only.
