@@ -339,6 +339,15 @@ export default function Room() {
   // never recorded anything even after the user clicked Record.
   const isRecordingRef = useRef(false);
   useEffect(() => { isRecordingRef.current = isRecording; }, [isRecording]);
+  // While recording, log each lesson change (HTML + seed) so the re-watch player
+  // can swap to the right sim at the right moment. The recorder otherwise only
+  // captures interactions/chat; this gives the replay something to render.
+  useEffect(() => {
+    if (isRecordingRef.current && previewHtml) {
+      sessionRecorder.record('lesson', { html: previewHtml, seed: randomSeed });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [previewHtml, randomSeed]);
 
   // ── Sound ──
   // AUTONOMOUS: [ORDER-2 ESSENTIAL] - hydrate from persisted mute pref so the
@@ -1911,6 +1920,11 @@ export default function Room() {
       showNotif("⏹ Recording saved");
     } else {
       sessionRecorder.start();
+      // Capture the lesson currently on screen so the re-watch player can render
+      // the right sim from t=0 (the recorder otherwise only logs interactions).
+      if (previewHtmlRef.current) {
+        sessionRecorder.record('lesson', { html: previewHtmlRef.current, seed: randomSeed, fileId: activeFileIdRef.current });
+      }
       setIsRecording(true);
       showNotif("🔴 Recording started");
     }

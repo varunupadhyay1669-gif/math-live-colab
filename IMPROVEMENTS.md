@@ -106,3 +106,44 @@ guard (a student cannot add a shape). **Result: 9/9, no bug found** — the area
 critical untested surface is now confirmed correct and regression-protected. Full suite **168 green**
 (verify-sync 48, stress 19, stress2 18, stress3 11, stress4 26, stress5 13, stress6 16, stress7 2,
 stress8 6, stress9 9). No product change — coverage only.
+
+---
+
+## Cycle 4 — session re-watch PLAYER (ranked gap #2, user-approved Large feature)
+
+**Pick:** Cycle-1 ranked gap **#2** — *session re-watch player*. The recorder + `playback()`
+infra already existed (record/autosave/download), but there was no **renderer** to replay a
+downloaded recording. Sources: thirdspacelearning / learner.com ("students re-watch lessons").
+This was the flagged **Large** item → built only after explicit go-ahead.
+
+**What shipped (offline, zero new deps, no data-model change):**
+- **`Room.tsx` recorder enhancement** — the recorder now captures `lesson` events (`{html, seed,
+  fileId}`) on record-start **and** whenever the lesson/seed changes. This makes a recording
+  *self-contained*: it carries the lesson HTML + the deterministic RNG seed, so it can be replayed
+  later with **no server and no original lesson file**.
+- **`ReplayView.tsx` (new)** — an isolated `/replay` player. Parses an uploaded recording JSON,
+  reconstructs each lesson in the **same sandboxed iframe** the live app uses (`seededSyncScript`
+  with the recorded seed → deterministic sim state), and replays `interaction` events as
+  `REMOTE_*` postMessages up to the playhead. Play/pause, **seek (forward + backward)**, speed
+  control (0.5–4×), and a chat sidebar synced to the playhead.
+- **`App.tsx`** — lazy `/replay` route (code-split; adds nothing to the live bundle).
+
+**Design choice — backward seek by reconstruction, not undo:** seeking backward rebuilds the
+lesson iframe from the latest `lesson` ≤ playhead and re-applies interactions from scratch
+(`loadedLessonTsRef`/`lastAppliedIdxRef` reset). No fragile event-inversion; deterministic because
+the seed is recorded. This reuses the existing sync primitives wholesale — no new surface to drift.
+
+**Verification (run, not assumed):**
+- **Browser e2e** (`/replay`, injected a hand-crafted recording = counter sim + 2 clicks + 1 chat):
+  - parse → lesson iframe + timeline render ✓
+  - **seek to t=2.0s → state deterministically reconstructed: counter = 2 (both clicks replayed),
+    chat message appears at the correct playhead, time reads `0:02 / 0:03`** ✓
+  - **play → playhead auto-advances** 0:00 → 0:01 at 1× ✓
+- **Gates:** tsc **0**, vite build **✓**. Full socket suite **168 green** (unchanged — the player is
+  an offline route + a record-only enhancement, so it touches **no** live-sync path; verified no
+  regression).
+
+**No bloat:** reuses recorder + `seededSyncScript` + iframe sandbox already in the tree; the only
+net-new is one lazy route component. Closes the last competitor-parity gap from Cycle 1 that didn't
+require a new dep or a data-model change (remaining open items — function graphing #4, cross-session
+progress #6 — both need a new dep / DB and stay paused per Constraints).
