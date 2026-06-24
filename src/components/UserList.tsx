@@ -93,7 +93,8 @@ export default function UserList({ users, attention, isTeacher, socket, roomId, 
                 <button onClick={() => handleKick(user.id)}
                   className="text-[11px]"
                   style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', lineHeight: 1 }}
-                  title="Remove student">
+                  title="Remove student"
+                  aria-label="Remove student">
                   ✕
                 </button>
               </div>
