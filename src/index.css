@@ -2824,3 +2824,312 @@ hr,
 @media (max-width: 560px) {
   .ml-dark-features { grid-template-columns: 1fr 1fr; }
 }
+
+/* ═══════════════════════════════════════════════════════════════
+   v5 — CRISP FLAT  (user-directed redesign, 2026-06)
+   Direction chosen by the user: flat, dense, modern light, ONE button
+   system. This layer NEUTRALISES the gradient / glass-blur / hover-lift
+   decoration accumulated across v2–v4.3 and tightens the chrome so less
+   screen is spent on UI. Appended last so it wins the cascade (the same
+   additive technique the earlier layers use). In-app surfaces here; the
+   dark landing page is converted to light in the "v5 HOME" block below.
+   ═══════════════════════════════════════════════════════════════ */
+
+/* ── Flat tokens (gradients collapse to solids, shadows become hairlines) ── */
+:root {
+  --bg-primary: #F6F7F9;
+  --bg-secondary: #FFFFFF;
+  --bg-card: #FFFFFF;
+  --bg-card-hover: #FAFBFC;
+  --bg-surface: #EEF0F3;
+  --bg-surface-hover: #E5E8EC;
+  --border-subtle: rgba(17, 20, 28, 0.07);
+  --border-default: rgba(17, 20, 28, 0.11);
+  --border-strong: rgba(17, 20, 28, 0.18);
+  --accent-indigo: #4F46E5;
+  --accent-indigo-hover: #4338CA;
+  --gradient-primary: #4F46E5;
+  --shadow-xs: none;
+  --shadow-sm: 0 1px 2px rgba(17, 20, 28, 0.05);
+  --shadow-card: 0 0 0 1px rgba(17, 20, 28, 0.06);
+  --shadow-card-hover: 0 2px 8px -2px rgba(17, 20, 28, 0.10), 0 0 0 1px rgba(17, 20, 28, 0.08);
+  --shadow-toolbar: none;
+}
+
+/* ── App background: flat (kills the animated mesh + radial tints) ── */
+html, body, #root { background: var(--bg-primary); }
+.ml-page-bg { background: var(--bg-primary); }
+.ml-page-bg::before, .ml-page-bg::after { content: none !important; display: none !important; }
+
+/* ── Header: denser + flat (no glass blur) ── */
+.app-header {
+  height: 48px;
+  padding: 0 14px;
+  background: #FFFFFF;
+  border-bottom: 1px solid var(--border-subtle);
+  box-shadow: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+.header-divider { height: 18px; background: var(--border-default); margin: 0 6px; }
+
+/* ── Teacher toolbar: denser + flat ── */
+.teacher-toolbar {
+  gap: 3px;
+  padding: 5px 8px;
+  background: #FFFFFF;
+  border-bottom: 1px solid var(--border-subtle);
+  box-shadow: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+.toolbar-divider { height: 18px; background: var(--border-default); margin: 0 5px; }
+
+/* ── Toolbar buttons: compact + flat ── */
+.tb-btn { width: 32px; height: 32px; border-radius: 8px; }
+.tb-btn-label { height: 32px; padding: 0 10px; border-radius: 8px; }
+.tb-btn:hover, .tb-btn-label:hover, .btn:hover, .btn-icon:hover {
+  background: var(--bg-surface);
+  border-color: transparent;
+  color: var(--text-primary);
+  box-shadow: none;
+}
+/* flat active tint — no gradient, no glow */
+.tb-btn.active, .tb-btn-label.active, .btn-icon.active, .ml-icon-btn[aria-pressed="true"] {
+  background: rgba(79, 70, 229, 0.10);
+  border-color: transparent;
+  color: var(--accent-indigo);
+  box-shadow: none;
+}
+.tb-btn.active-emerald, .tb-btn-label.active-emerald { background: rgba(5, 150, 105, 0.10); border-color: transparent; color: var(--accent-emerald); }
+.tb-btn.active-rose, .tb-btn-label.active-rose { background: rgba(220, 38, 38, 0.10); border-color: transparent; color: var(--accent-rose); }
+
+/* ───────── ONE button system: flat + crisp ─────────
+   Spans every legacy button class so the whole app reads as one set. */
+
+/* Primary — solid indigo, flat (no gradient / lift / glow) */
+.btn-primary, .ml-btn-primary, .btn-accent {
+  background: var(--accent-indigo);
+  color: #fff;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  box-shadow: none;
+  font-weight: 600;
+  height: 36px;
+  padding: 0 15px;
+  transition: background 0.14s ease, transform 0.08s ease;
+}
+.btn-primary:hover, .ml-btn-primary:hover, .btn-accent:hover {
+  background: var(--accent-indigo-hover);
+  transform: none;
+  box-shadow: none;
+}
+.btn-primary:active, .ml-btn-primary:active, .btn-accent:active { transform: scale(0.985); box-shadow: none; }
+
+/* Secondary — flat white, hairline border */
+.btn-secondary, .ml-btn-secondary {
+  background: #fff;
+  color: var(--text-primary);
+  border: 1px solid var(--border-default);
+  border-radius: 8px;
+  box-shadow: none;
+  font-weight: 600;
+  height: 36px;
+  padding: 0 15px;
+}
+.btn-secondary:hover, .ml-btn-secondary:hover {
+  background: var(--bg-surface);
+  border-color: var(--border-strong);
+  transform: none;
+  box-shadow: none;
+}
+.btn-secondary:active, .ml-btn-secondary:active { transform: scale(0.985); }
+
+/* Ghost — flat text button */
+.btn, .btn-ghost, .ml-btn-ghost { border-radius: 8px; box-shadow: none; }
+.btn-ghost:hover, .ml-btn-ghost:hover, .btn:hover { background: var(--bg-surface); box-shadow: none; }
+
+/* Danger */
+.btn-danger, .ml-btn-danger {
+  background: var(--accent-rose); color: #fff; border: 1px solid transparent;
+  border-radius: 8px; box-shadow: none; font-weight: 600;
+}
+.btn-danger:hover, .ml-btn-danger:hover { background: #C81E3A; box-shadow: none; transform: none; }
+
+/* Success / violet — keep colour, drop the shadow */
+.ml-btn-success, .ml-btn-violet { box-shadow: none; }
+
+/* Icon buttons — compact flat */
+.btn-icon { width: 32px; height: 32px; border-radius: 8px; box-shadow: none; }
+.ml-icon-btn { border-radius: 8px; box-shadow: none; }
+
+/* Generic ml-btn sizing for density */
+.ml-btn { height: 36px; padding: 0 15px; border-radius: 8px; box-shadow: none; }
+.ml-btn:hover { transform: none; box-shadow: none; }
+.ml-btn-sm { height: 30px; padding: 0 11px; }
+.ml-btn-lg { height: 42px; padding: 0 20px; }
+
+/* ── Surfaces: flat (hairline ring + at most one soft shadow) ── */
+.panel, .ml-surface {
+  border: 1px solid var(--border-subtle);
+  border-radius: 12px;
+  box-shadow: var(--shadow-card);
+}
+.panel:hover { box-shadow: var(--shadow-card-hover); }
+.ml-surface-elevated { border: 1px solid var(--border-subtle); box-shadow: var(--shadow-sm); }
+.ml-premium-card { border: 1px solid var(--border-subtle); border-radius: 14px; box-shadow: var(--shadow-card); }
+.ml-premium-card:hover { transform: none; box-shadow: var(--shadow-card-hover); }
+
+/* Preview / teaching stage — flat */
+.preview-frame {
+  border: 1px solid var(--border-subtle);
+  border-radius: 12px;
+  box-shadow: var(--shadow-card);
+}
+.preview-frame::after { content: none !important; box-shadow: none; }
+
+/* Dropdowns / popovers — flat */
+.dropdown-menu, .ml-share-popover {
+  border-radius: 12px;
+  border: 1px solid var(--border-default);
+  box-shadow: 0 8px 28px -8px rgba(17, 20, 28, 0.22);
+}
+
+/* ── Inputs: flat ── */
+.input-field, .ml-input {
+  background: #fff;
+  border: 1px solid var(--border-default);
+  border-radius: 8px;
+  box-shadow: none;
+  height: 38px;
+}
+.input-field:focus, .ml-input:focus {
+  border-color: var(--accent-indigo);
+  box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.14);
+  background: #fff;
+}
+
+/* ── Brand mark: flat solid (no gradient) ── */
+.ml-brandmark { background: var(--accent-indigo); box-shadow: none; }
+
+/* ── Whiteboard surface-switch + tool active: flat tint ── */
+.tb-btn-whiteboard, .tb-btn-explanation { box-shadow: none; border-radius: 8px; }
+.tb-btn-whiteboard:hover, .tb-btn-explanation:hover { transform: none; box-shadow: none; }
+.tb-btn-whiteboard.is-active, .tb-btn-explanation.is-active { box-shadow: none; }
+.whiteboard-tool.active { background: rgba(79, 70, 229, 0.10); border-color: transparent; color: var(--accent-indigo); }
+
+/* ── Mode picker cards: flat, no hover-lift ── */
+.ml-mode-card { box-shadow: var(--shadow-card); border: 1px solid var(--border-subtle); }
+.ml-mode-card:hover { transform: none; box-shadow: var(--shadow-card-hover); }
+.ml-mode-card-action-primary, .ml-mode-card-action-ghost { box-shadow: none; }
+.ml-mode-card-action-primary:hover, .ml-mode-card-action-ghost:hover { transform: none; }
+
+/* ── Declutter: kill leftover hover-lifts / glows app-wide ── */
+.ml-recent-pill:hover { transform: none; box-shadow: none; }
+.status-pill:hover { box-shadow: none; }
+.header-room-code { box-shadow: none; }
+
+/* ── Gradient text → solid (flat) ── */
+.gradient-text {
+  background: none;
+  -webkit-text-fill-color: currentColor;
+  color: var(--accent-indigo);
+  animation: none;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   v5 HOME — dark landing → crisp light
+   The user chose ONE light theme, so the old .ml-dark-* landing is
+   restyled to the same flat light language. Class names are kept (to
+   avoid churn in Home.tsx); only their appearance changes.
+   ═══════════════════════════════════════════════════════════════ */
+
+.ml-dark-home {
+  background: var(--bg-primary);
+  color: var(--text-primary);
+}
+.ml-dark-home::before, .ml-dark-home::after { content: none !important; display: none !important; }
+.ml-dark-center { padding: 40px 0 32px; gap: 24px; }
+
+/* Brand row */
+.ml-dark-brandmark { background: var(--accent-indigo); box-shadow: none; }
+.ml-dark-wordmark { color: var(--text-primary); }
+.ml-dark-wordmark .accent { color: var(--accent-indigo); }
+.ml-dark-pill {
+  background: #fff;
+  border: 1px solid var(--border-default);
+  color: var(--text-secondary);
+  backdrop-filter: none;
+}
+
+/* Headline — dark + indigo, tighter scale (less wasted space) */
+.ml-dark-headline { font-size: clamp(52px, 8vw, 92px); }
+.ml-dark-headline .word-cream { color: var(--text-primary); }
+.ml-dark-headline .word-grad {
+  background: none;
+  -webkit-text-fill-color: currentColor;
+  color: var(--accent-indigo);
+}
+
+/* Buttons → match the in-app crisp set */
+.ml-dark-btn { height: 44px; padding: 0 20px; border-radius: 8px; }
+.ml-dark-btn-primary { background: var(--accent-indigo); color: #fff; box-shadow: none; }
+.ml-dark-btn-primary:hover { background: var(--accent-indigo-hover); transform: none; box-shadow: none; }
+.ml-dark-btn-glass {
+  background: #fff;
+  border: 1px solid var(--border-default);
+  color: var(--text-primary);
+  backdrop-filter: none;
+}
+.ml-dark-btn-glass:hover { background: var(--bg-surface); border-color: var(--border-strong); transform: none; }
+.ml-dark-btn-ghost { color: var(--text-secondary); }
+.ml-dark-btn-ghost:hover { color: var(--text-primary); background: var(--bg-surface); }
+
+/* Saved-boards / templates cards */
+.ml-dark-saved {
+  background: #fff;
+  border: 1px solid var(--border-subtle);
+  box-shadow: var(--shadow-card);
+  backdrop-filter: none;
+}
+.ml-dark-saved-head { color: var(--text-muted); }
+.ml-dark-saved-count { background: rgba(79, 70, 229, 0.10); color: var(--accent-indigo); }
+.ml-dark-templates .ml-dark-saved-count { background: rgba(124, 58, 237, 0.10); color: var(--accent-violet); }
+.ml-dark-saved-item { background: transparent; }
+.ml-dark-saved-item:hover { background: var(--bg-surface); }
+.ml-dark-templates .ml-dark-saved-item:hover { background: rgba(124, 58, 237, 0.07); }
+.ml-dark-saved-open, .ml-dark-saved-label { color: var(--text-primary); }
+.ml-dark-saved-meta { color: var(--text-muted); }
+.ml-dark-saved-remove { color: var(--text-muted); }
+.ml-dark-saved-remove:hover { color: var(--accent-rose); background: rgba(220, 38, 38, 0.07); }
+.ml-dark-saved-more { color: var(--text-muted); }
+
+/* Capability cards */
+.ml-dark-feature {
+  background: #fff;
+  border: 1px solid var(--border-subtle);
+  box-shadow: var(--shadow-card);
+  backdrop-filter: none;
+}
+.ml-dark-feature strong { color: var(--text-primary); }
+.ml-dark-feature em { color: var(--text-secondary); }
+
+/* Inputs */
+.ml-dark-input {
+  background: #fff;
+  border: 1px solid var(--border-default);
+  color: var(--text-primary);
+  backdrop-filter: none;
+}
+.ml-dark-input::placeholder { color: var(--text-muted); }
+.ml-dark-input:focus { border-color: var(--accent-indigo); background: #fff; box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.14); }
+
+/* Footer + recent pills */
+.ml-dark-footer span, .ml-dark-recent-label { color: var(--text-muted); }
+.ml-dark-recent-pill {
+  background: #fff;
+  border: 1px solid var(--border-default);
+  color: var(--text-secondary);
+  backdrop-filter: none;
+}
+.ml-dark-recent-pill:hover { border-color: var(--accent-indigo); color: var(--accent-indigo); background: #fff; }
