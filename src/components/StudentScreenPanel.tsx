@@ -50,16 +50,16 @@ export default function StudentScreenPanel({
             style={{ background: hasControl ? 'var(--accent-rose-light, rgba(244,63,94,0.12))' : 'var(--accent-indigo-light)', color: hasControl ? '#E11D48' : 'var(--accent-indigo)', fontWeight: 700 }}>
             {hasControl ? '🔙 Take back control' : '✋ Give control'}
           </button>
-          <button onClick={onResync} className="ml-btn ml-btn-sm ml-btn-secondary" title="Rebuild this student from the current class state">
+          <button onClick={onResync} className="ml-btn ml-btn-sm ml-btn-secondary" title="Rebuild this student from the current class state" aria-label="Rebuild this student from the current class state">
             ⟳ Resync
           </button>
-          <button onClick={onClose} className="ml-icon-btn ml-icon-btn-sm" title="Close">✕</button>
+          <button onClick={onClose} className="ml-icon-btn ml-icon-btn-sm" title="Close" aria-label="Close">✕</button>
         </div>
         {/* Screen */}
         <div className="flex-1" style={{ background: '#0b0d12', position: 'relative' }}>
           {html ? (
             <iframe
-              title={`${studentName} screen`}
+              title={`${studentName} screen`} aria-label={`${studentName} screen`}
               srcDoc={html}
               sandbox=""
               className="w-full h-full border-none"

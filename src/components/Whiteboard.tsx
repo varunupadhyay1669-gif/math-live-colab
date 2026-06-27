@@ -300,7 +300,7 @@ const WIDTHS = [2, 4, 6, 10, 16, 24];
 // of the pen sits on the actual draw point). Crosshair is the fallback if the
 // browser refuses the data-URL cursor.
 const PEN_CURSOR = (() => {
-  const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><path d="M17 3a2.8 2.8 0 0 1 4 4L8 20l-5 1 1-5L17 3z" fill="white" stroke="black" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"/><path d="M14 6l4 4" stroke="black" stroke-width="1.4" stroke-linecap="round"/></svg>';
+  const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" aria-hidden="true"><path d="M17 3a2.8 2.8 0 0 1 4 4L8 20l-5 1 1-5L17 3z" fill="white" stroke="black" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"/><path d="M14 6l4 4" stroke="black" stroke-width="1.4" stroke-linecap="round"/></svg>';
   return `url('data:image/svg+xml;utf8,${encodeURIComponent(svg)}') 3 21, crosshair`;
 })();
 
@@ -309,7 +309,7 @@ const PEN_CURSOR = (() => {
 // background. This explicit white-fill / dark-outline hand stays readable on
 // both light and dark surfaces. Fallback to 'grab' if the data URL is refused.
 const HAND_CURSOR = (() => {
-  const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="26" height="26" viewBox="0 0 24 24"><path d="M18 11V6a2 2 0 0 0-4 0v5M14 10V4a2 2 0 0 0-4 0v8M10 12V6a2 2 0 0 0-4 0v7M6 13c-2 0-3 1-3 3 0 4 4 6 8 6h3c4 0 7-3 7-7v-4a2 2 0 0 0-4 0" fill="#ffffff" stroke="#0F172A" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+  const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="26" height="26" viewBox="0 0 24 24" aria-hidden="true"><path d="M18 11V6a2 2 0 0 0-4 0v5M14 10V4a2 2 0 0 0-4 0v8M10 12V6a2 2 0 0 0-4 0v7M6 13c-2 0-3 1-3 3 0 4 4 6 8 6h3c4 0 7-3 7-7v-4a2 2 0 0 0-4 0" fill="#ffffff" stroke="#0F172A" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>';
   return `url('data:image/svg+xml;utf8,${encodeURIComponent(svg)}') 13 13, grab`;
 })();
 
@@ -318,7 +318,7 @@ const HAND_CURSOR = (() => {
 // platforms and didn't match the tool. Hot-spot at the tip of the eraser so
 // "where the eraser actually erases" sits exactly under the cursor.
 const ERASER_CURSOR = (() => {
-  const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><path d="m7 21-4-4 11-11 4 4L7 21z" fill="#ffffff" stroke="#0F172A" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"/><path d="M14 6l4 4" stroke="#0F172A" stroke-width="1.6" stroke-linecap="round"/><path d="M3 21h18" stroke="#0F172A" stroke-width="1.6" stroke-linecap="round"/></svg>';
+  const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" aria-hidden="true"><path d="m7 21-4-4 11-11 4 4L7 21z" fill="#ffffff" stroke="#0F172A" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"/><path d="M14 6l4 4" stroke="#0F172A" stroke-width="1.6" stroke-linecap="round"/><path d="M3 21h18" stroke="#0F172A" stroke-width="1.6" stroke-linecap="round"/></svg>';
   return `url('data:image/svg+xml;utf8,${encodeURIComponent(svg)}') 4 20, cell`;
 })();
 const HIGHLIGHTER_FADE_MS = 4500; // total visible time for a highlighter stroke
@@ -3763,15 +3763,15 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
                 aria-label={item.label}
                 aria-pressed={!!item.pressed}
               >
-                <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                   {item.icon}
                 </svg>
                 <span>{item.label}</span>
               </button>
             ))}
             <div className="whiteboard-rail-divider" />
-            <button onClick={() => uploadInputRef.current?.click()} className="whiteboard-tool" title="Upload image">
-              <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+            <button onClick={() => uploadInputRef.current?.click()} className="whiteboard-tool" title="Upload image" aria-label="Upload image">
+              <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                 <path d="M12 3v12" /><path d="m17 8-5-5-5 5" /><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
               </svg>
               <span>Image</span>
@@ -3786,17 +3786,17 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
               <button
                 onClick={() => setGridModeSynced('blank')}
                 className={`whiteboard-action ${gridMode === 'blank' ? 'active' : ''}`}
-                title="No grid — plain blank background"
+                title="No grid — plain blank background" aria-label="No grid — plain blank background"
               >Blank</button>
               <button
                 onClick={() => setGridModeSynced('grid')}
                 className={`whiteboard-action ${gridMode === 'grid' ? 'active' : ''}`}
-                title="Notebook-paper grid"
+                title="Notebook-paper grid" aria-label="Notebook-paper grid"
               >Grid</button>
               <button
                 onClick={() => setGridModeSynced('graph')}
                 className={`whiteboard-action ${gridMode === 'graph' ? 'active' : ''}`}
-                title="Graph paper with numbered axes through (0,0)"
+                title="Graph paper with numbered axes through (0,0)" aria-label="Graph paper with numbered axes through (0,0)"
               >Graph</button>
             </div>
           )}
@@ -3805,12 +3805,12 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
               <button
                 onClick={() => setEraserMode('stroke')}
                 className={`whiteboard-action ${eraserMode === 'stroke' ? 'active' : ''}`}
-                title="Click on a stroke to delete the whole stroke"
+                title="Click on a stroke to delete the whole stroke" aria-label="Click on a stroke to delete the whole stroke"
               >Stroke</button>
               <button
                 onClick={() => setEraserMode('pixel')}
                 className={`whiteboard-action ${eraserMode === 'pixel' ? 'active' : ''}`}
-                title="Drag across content to erase pixels (precise eraser)"
+                title="Drag across content to erase pixels (precise eraser)" aria-label="Drag across content to erase pixels (precise eraser)"
               >Pixel</button>
             </div>
           )}
@@ -3826,7 +3826,7 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
                   key={size}
                   onClick={() => setTextFontSize(size)}
                   className={`whiteboard-action ${textFontSize === size ? 'active' : ''}`}
-                  title={`${['Small', 'Normal', 'Large', 'Huge'][i]} text (${size}px)`}
+                  title={`${['Small', 'Normal', 'Large', 'Huge'][i]} text (${size}px)`} aria-label={`${['Small', 'Normal', 'Large', 'Huge'][i]} text (${size}px)`}
                   style={{ fontSize: `${10 + i * 2}px`, fontWeight: 700, padding: '4px 10px' }}
                 >Aa</button>
               ))}
@@ -3857,7 +3857,7 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
             const curFillStyle = selectedShape ? (selectedShape.fillStyle || 'hachure') : fillStyle;
             return (
               <>
-                <div className="whiteboard-control-group" title="Fill">
+                <div className="whiteboard-control-group" title="Fill" aria-label="Fill">
                   <button
                     onClick={() => applyShapeStyle({ fillColor: '' })}
                     className={`whiteboard-swatch ${!curFill ? 'active' : ''}`}
@@ -3869,7 +3869,7 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
                   ))}
                 </div>
                 {curFill && (
-                  <div className="whiteboard-control-group" title="Fill style">
+                  <div className="whiteboard-control-group" title="Fill style" aria-label="Fill style">
                     {(['hachure', 'solid', 'cross-hatch'] as const).map(fs => (
                       <button key={fs} onClick={() => applyShapeStyle({ fillStyle: fs })} className="whiteboard-action"
                         style={{ fontSize: 11, padding: '4px 8px', fontWeight: curFillStyle === fs ? 800 : 500, opacity: curFillStyle === fs ? 1 : 0.55 }}>
@@ -3878,7 +3878,7 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
                     ))}
                   </div>
                 )}
-                <div className="whiteboard-control-group" title="Stroke style">
+                <div className="whiteboard-control-group" title="Stroke style" aria-label="Stroke style">
                   {(['solid', 'dashed', 'dotted'] as const).map(ss => (
                     <button key={ss} onClick={() => applyShapeStyle({ strokeStyle: ss })} className="whiteboard-action"
                       style={{ fontSize: 11, padding: '4px 8px', fontWeight: curStroke === ss ? 800 : 500, opacity: curStroke === ss ? 1 : 0.55 }}>
@@ -3892,13 +3892,13 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
           <div className="whiteboard-spacer" />
           {canEdit && (selectedShape || selectedObject || selectedTextId || multiShapeIds.length > 0 || multiObjectIds.length > 0 || multiTextIds.length > 0) && (
             <div className="whiteboard-control-group">
-              <button onClick={duplicateSelection} className="whiteboard-action" title="Duplicate (Ctrl+D)">Duplicate</button>
-              <button onClick={copySelection} className="whiteboard-action" title="Copy (Ctrl+C) — paste in any room">Copy</button>
-              <button onClick={pasteClipboard} className="whiteboard-action" title="Paste (Ctrl+V)">Paste</button>
-              <button onClick={() => zOrderSelection(true)} className="whiteboard-action" title="Bring to front (Ctrl+])">Front</button>
-              <button onClick={() => zOrderSelection(false)} className="whiteboard-action" title="Send to back (Ctrl+[)">Back</button>
+              <button onClick={duplicateSelection} className="whiteboard-action" title="Duplicate (Ctrl+D)" aria-label="Duplicate (Ctrl+D)">Duplicate</button>
+              <button onClick={copySelection} className="whiteboard-action" title="Copy (Ctrl+C) — paste in any room" aria-label="Copy (Ctrl+C) — paste in any room">Copy</button>
+              <button onClick={pasteClipboard} className="whiteboard-action" title="Paste (Ctrl+V)" aria-label="Paste (Ctrl+V)">Paste</button>
+              <button onClick={() => zOrderSelection(true)} className="whiteboard-action" title="Bring to front (Ctrl+])" aria-label="Bring to front (Ctrl+])">Front</button>
+              <button onClick={() => zOrderSelection(false)} className="whiteboard-action" title="Send to back (Ctrl+[)" aria-label="Send to back (Ctrl+[)">Back</button>
               {(multiShapeIds.length + multiObjectIds.length + multiTextIds.length) >= 2 && (
-                <button onClick={groupSelection} className="whiteboard-action" title="Group — move together (Ctrl+G)">Group</button>
+                <button onClick={groupSelection} className="whiteboard-action" title="Group — move together (Ctrl+G)" aria-label="Group — move together (Ctrl+G)">Group</button>
               )}
               {(() => {
                 const { shapeIds, textIds, objIds } = getSelectedSets();
@@ -3907,7 +3907,7 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
                   texts.some(t => t.groupId && textIds.has(t.id)) ||
                   objects.some(o => o.groupId && objIds.has(o.id));
                 return grouped ? (
-                  <button onClick={ungroupSelection} className="whiteboard-action" title="Ungroup (Ctrl+Shift+G)">Ungroup</button>
+                  <button onClick={ungroupSelection} className="whiteboard-action" title="Ungroup (Ctrl+Shift+G)" aria-label="Ungroup (Ctrl+Shift+G)">Ungroup</button>
                 ) : null;
               })()}
             </div>
@@ -3923,8 +3923,8 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
           )}
           {canEdit && (
             <>
-              <button onClick={undo} disabled={!canUndo} className="whiteboard-action" title="Undo (Ctrl+Z)">↶ Undo</button>
-              <button onClick={redo} disabled={!canRedo} className="whiteboard-action" title="Redo (Ctrl+Shift+Z)">↷ Redo</button>
+              <button onClick={undo} disabled={!canUndo} className="whiteboard-action" title="Undo (Ctrl+Z)" aria-label="Undo (Ctrl+Z)">↶ Undo</button>
+              <button onClick={redo} disabled={!canRedo} className="whiteboard-action" title="Redo (Ctrl+Shift+Z)" aria-label="Redo (Ctrl+Shift+Z)">↷ Redo</button>
             </>
           )}
           <button onClick={() => zoomAt(1 / 1.2)} className="whiteboard-action">-</button>
@@ -3946,7 +3946,7 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
                 setShowSaveTemplateModal(true);
               }}
               className="whiteboard-action"
-              title="Save the current board as a reusable lesson template"
+              title="Save the current board as a reusable lesson template" aria-label="Save the current board as a reusable lesson template"
             >
               💾 Save lesson
             </button>
@@ -4066,7 +4066,7 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
                       fontSize: 13,
                       boxShadow: '0 2px 5px rgba(15,23,42,0.10)',
                     }}
-                    title={textEditor.latex ? 'Math mode ON — type LaTeX (eg. x^2, \\frac{a}{b})' : 'Switch to math mode — render typed LaTeX as proper equations'}
+                    title={textEditor.latex ? 'Math mode ON — type LaTeX (eg. x^2, \\frac{a}{b})' : 'Switch to math mode — render typed LaTeX as proper equations'} aria-label={textEditor.latex ? 'Math mode ON — type LaTeX (eg. x^2, \\frac{a}{b})' : 'Switch to math mode — render typed LaTeX as proper equations'}
                   >
                     ƒx
                   </button>
@@ -4148,7 +4148,7 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
                             e.preventDefault();
                             insertAtCursor(textEditor.latex ? s.latex : s.plain);
                           }}
-                          title={`${s.title} — inserts ${textEditor.latex ? s.latex.trim() : s.plain}`}
+                          title={`${s.title} — inserts ${textEditor.latex ? s.latex.trim() : s.plain}`} aria-label={`${s.title} — inserts ${textEditor.latex ? s.latex.trim() : s.plain}`}
                           style={{
                             width: 32,
                             height: 30,
