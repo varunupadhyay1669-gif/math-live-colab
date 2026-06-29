@@ -147,3 +147,49 @@ the seed is recorded. This reuses the existing sync primitives wholesale — no 
 net-new is one lazy route component. Closes the last competitor-parity gap from Cycle 1 that didn't
 require a new dep or a data-model change (remaining open items — function graphing #4, cross-session
 progress #6 — both need a new dep / DB and stay paused per Constraints).
+
+---
+
+## Cycle 5 — live-class DESYNC fix (reported bug, first-principles)
+
+**Bug (live class):** teacher uploaded a stateful, click-navigated quiz lesson (screens toggled via
+JS + `localStorage`); mid-class the **teacher saw the home/map screen while the student was on a
+question** ("it got out of sync in between").
+
+**Root causes (3 subagents traced teacher / student / server; all confirmed in code):**
+1. An interactive student's navigation was relayed **teacher-only and NEVER journaled**
+   (`server.ts` interactive branch). So the live mirror worked, but the instant the teacher's lesson
+   iframe rebuilt — **switching to the whiteboard / another file and back, or a reconnect** — it
+   reloaded the pristine home screen with **nothing in the journal to replay the student's nav** →
+   stuck on the map. (Reproduced in-browser.)
+2. `REMOTE_CLICK` replay **silently dropped** when the target wasn't rendered yet (`syncScript`),
+   with no self-heal — one missed navigation = permanent drift.
+3. The lesson's **`localStorage`** (blob inherits parent origin) persisted across rebuilds and
+   diverged teacher↔student, making replay non-deterministic.
+4. On Render free-tier cold-start the journal/seed were lost and interactions weren't durably saved.
+
+**Fix (layered, each independently tested):**
+- **server.ts** — journal the interactive student's driver events (1-to-1 = de-facto driver), still
+  relayed teacher-only live; throttled durable journal save (cold-start); new `request_replay` event
+  so a remounted iframe pulls + replays the journal on demand.
+- **syncScript.ts** — shim `localStorage`/`sessionStorage` to an in-memory store per load (clean,
+  deterministic boot for every screen — same idea as the `Math.random` seed shim); `REMOTE_CLICK`
+  waits/retries for its target (~600ms) instead of dropping.
+- **Room.tsx** — when the lesson iframe remounts after the teacher was on the whiteboard/temp
+  content, reset the seq filter and `request_replay` so the teacher catches up to the room's real
+  screen (only that transition trips it — normal flow untouched).
+
+**Verification (run, not assumed):**
+- **Faithful 2-iframe browser repro with the REAL `seededSyncScript`:** drove an interactive student
+  into a quiz, remounted the teacher iframe → **bug reproduced** (teacher `home`, student `world`);
+  then catch-up replay → **fixed** (both `world`). Journal carried the 3 nav events; storage shim
+  isolated (`leakedToParent:null`); `REMOTE_CLICK` retry fired on a late-added element.
+- **New stress10** (6 checks): interactive nav journaled + replayed to a late joiner, `request_replay`
+  returns the journal, live bidirectional preserved, no live leak to other students, order preserved,
+  view-only not journaled. Updated verify-sync Test R's stale "not journaled" comment.
+- Full socket suite **174 green** (verify-sync 48, stress 19, stress2 18, stress3 11, stress4 26,
+  stress5 13, stress6 16, stress7 2, stress8 6, stress9 9, stress10 6). tsc 0, build clean.
+
+**Residual (user action):** cold-start durability needs **Upstash Redis** (the file store is
+ephemeral on Render). Turnkey env vars already in `render.yaml`; without it, a server spin-down
+mid-class still resets the room. Flagged, not silently assumed fixed.

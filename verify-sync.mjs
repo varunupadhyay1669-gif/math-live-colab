@@ -391,8 +391,12 @@ async function run() {
   // UPDATED REQUIREMENT (was: fully one-way). With the interaction toggle ON, an
   // interactive (non-holder) student's clicks now relay to the TEACHER so the
   // teacher SEES what the student does (bidirectional sync — the reported need).
-  // They are still NOT broadcast to OTHER students and NOT journaled, so
-  // single-writer among students / no random-sim divergence holds (stress8 BD4).
+  // They are still NOT broadcast LIVE to OTHER students (single-writer among
+  // students / no random-sim divergence holds — stress8 BD4). They ARE now
+  // journaled (desync fix): in a 1-to-1 lesson the interactive student is the
+  // de-facto driver, so journaling their nav lets the teacher's iframe replay
+  // forward to the student's real screen after any rebuild/reconnect instead of
+  // being stuck on the pristine home screen. See stress10.
   t7.emit('toggle_student_interaction', { roomId: ROOM7, allowed: true });
   await delay(200);
   const teacherSees = waitFor(t7, 'interaction', { match: p => p?.type === 'SYNC_CLICK' && p.path === '#x', timeout: 2000 });

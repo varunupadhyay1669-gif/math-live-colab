@@ -656,6 +656,25 @@ async function startServer() {
     pendingSaves.set(roomId, timer);
   }
 
+  // Journaled interactions are deliberately NOT in MUTATING_EVENTS (a save on
+  // every click would storm). But the interaction journal is what a
+  // reconnecting / late-joining client replays to rebuild the lesson's live
+  // screen — if a cold-start/restart loses it, the whole class rebuilds from
+  // the pristine baseline and desyncs ("works at the start, drifts in between").
+  // So persist the journal on a COARSE throttle (coalesced): fresh enough that
+  // a restart loses at most a few seconds of navigation, cheap enough that
+  // rapid clicking doesn't thrash the store. Only meaningful with a durable
+  // store (Upstash); on the ephemeral file store it is a harmless no-op-ish.
+  const lastJournalSaveAt = new Map<string, number>();
+  const JOURNAL_SAVE_MIN_INTERVAL_MS = 4000;
+  function scheduleJournalSave(roomId: string) {
+    if (!roomId) return;
+    const now = Date.now();
+    if (now - (lastJournalSaveAt.get(roomId) || 0) < JOURNAL_SAVE_MIN_INTERVAL_MS) return;
+    lastJournalSaveAt.set(roomId, now);
+    scheduleSave(roomId);
+  }
+
   // Events that change persisted room state. A mutation in any of these
   // schedules a debounced save for that room. High-frequency / transient
   // events (interaction, cursor, laser, pan/zoom view, scroll) are
@@ -2401,6 +2420,7 @@ Build a widget that teaches: ${safePrompt}`;
         // Journal discrete events so late joiners can replay the lesson's
         // interaction stream from the current baseline (see eventLog).
         journalEvent(room, event);
+        scheduleJournalSave(roomId);
         // Teacher → broadcast to all students (one-way sync)
         socket.to(roomId).emit('interaction', event);
       } else if (user?.role === 'student') {
@@ -2447,19 +2467,50 @@ Build a widget that teaches: ${safePrompt}`;
           // determinism. When a student holds control the teacher becomes a
           // mirror, so this single stream drives every screen identically.
           journalEvent(room, event);
+          scheduleJournalSave(roomId);
           socket.to(roomId).emit('interaction', event);
         } else if (room.studentInteractionAllowed) {
           // INTERACTIVE MODE (no control grant): the student is working their
           // OWN copy. Relay their interactions to the TEACHER ONLY so the
           // teacher SEES what the student is doing — the teacher mirrors via
           // REMOTE_* and shows a student-click indicator (bidirectional sync).
-          // NOT broadcast room-wide and NOT journaled: this student is not the
-          // canonical driver, so it must not drive other students or appear in
-          // the late-joiner replay (that would reintroduce multi-writer drift).
+          //
+          // FIRST-PRINCIPLES DESYNC FIX: in a 1-to-1 lesson the interactive
+          // student is the de-facto DRIVER while the teacher watches, so their
+          // navigation MUST be journaled. Previously it was teacher-only +
+          // un-journaled, which meant the moment the teacher's lesson iframe
+          // rebuilt (switching to the whiteboard / another file and back) or
+          // anyone reconnected, there was NOTHING to replay the student's
+          // navigation from — the teacher reloaded to the pristine home/map
+          // screen and was stuck there while the student was deep in a quiz
+          // (the exact reported bug). Journaling it (serverSeq-ordered, made
+          // deterministic by the seed + storage shims in the sync script) lets
+          // the teacher's iframe replay forward to the student's real screen on
+          // every rebuild/late-join. We still relay LIVE to the teacher ONLY
+          // (not room-wide), so a rare multi-student room isn't driven by it.
+          journalEvent(room, event);
+          scheduleJournalSave(roomId);
           const teacherId = resolveTeacherSocketId();
           if (teacherId) io.to(teacherId).emit('interaction', event);
         }
         // When not allowed: student events are silently dropped (view-only mode)
+      }
+    });
+
+    // ─── REPLAY CATCH-UP (a client's lesson iframe remounted) ───
+    // When the teacher switches to the whiteboard / another file and comes
+    // back, their lesson iframe REMOUNTS and boots a FRESH sim on the pristine
+    // home screen. Without a way to catch up it sits on the map while the
+    // student is mid-quiz (the reported desync). This lets that client pull the
+    // current interaction journal on demand and replay it forward to the room's
+    // real screen. Journal-only (no session_state side effects so it can't
+    // trigger a rebuild loop); sent to the requester only.
+    socket.on('request_replay', ({ roomId }: { roomId: string }) => {
+      if (typeof roomId !== 'string') return;
+      const room = rooms.get(roomId);
+      if (!isMember(room, socket.id)) return;
+      if (room.eventLog.length > 0 && !room.eventLogOverflow) {
+        io.to(socket.id).emit('interaction_replay', { events: room.eventLog, count: room.eventLog.length });
       }
     });
 

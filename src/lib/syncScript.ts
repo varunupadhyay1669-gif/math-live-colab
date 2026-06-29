@@ -155,6 +155,53 @@ export const injectedSyncScript = `
       };
     })();
 
+    // ── Deterministic, isolated storage ──
+    // A lesson that persists to localStorage/sessionStorage (progress, XP,
+    // "which screen am I on") is poison for sync. The lesson iframe is a blob:
+    // URL that INHERITS the parent app's origin, so a real localStorage would
+    // (1) persist across every iframe rebuild and full page reload, and
+    // (2) be SHARED-by-origin yet DIVERGE between the teacher's browser and the
+    // student's. The two sides then boot from different saved state, and the
+    // journal replay — which assumes a clean boot — reconstructs the wrong
+    // screen (a root cause of the "teacher on the map, student on the quiz"
+    // desync). We replace both Storages with an in-memory one that starts EMPTY
+    // on every load, exactly like the Math.random seed shim above neutralises
+    // randomness. Lessons that use storage still work; they just don't persist
+    // across reloads — so teacher, student, late-joiner and post-reconnect
+    // rebuild ALL boot from the identical clean slate and replay deterministically.
+    (function() {
+      function makeMemStore() {
+        var data = {};
+        var api = {
+          getItem: function(k) { k = String(k); return Object.prototype.hasOwnProperty.call(data, k) ? data[k] : null; },
+          setItem: function(k, v) { data[String(k)] = String(v); },
+          removeItem: function(k) { delete data[String(k)]; },
+          clear: function() { data = {}; },
+          key: function(i) { var ks = Object.keys(data); return (i >= 0 && i < ks.length) ? ks[i] : null; }
+        };
+        // Proxy faithfully emulates bracket access (store['k']) + length, which
+        // some lessons use instead of getItem/setItem.
+        try {
+          return new Proxy(api, {
+            get: function(t, p) {
+              if (p === 'length') return Object.keys(data).length;
+              if (p in t) return t[p];
+              if (typeof p === 'string' && Object.prototype.hasOwnProperty.call(data, p)) return data[p];
+              return undefined;
+            },
+            set: function(t, p, v) { if (p in t) { t[p] = v; } else { data[String(p)] = String(v); } return true; },
+            has: function(t, p) { return (p in t) || Object.prototype.hasOwnProperty.call(data, p); },
+            deleteProperty: function(t, p) { if (Object.prototype.hasOwnProperty.call(data, p)) delete data[p]; return true; }
+          });
+        } catch (e) { return api; }
+      }
+      try {
+        var ls = makeMemStore(), ss = makeMemStore();
+        try { Object.defineProperty(window, 'localStorage', { value: ls, configurable: true }); } catch (e1) { try { window.localStorage = ls; } catch (e2) {} }
+        try { Object.defineProperty(window, 'sessionStorage', { value: ss, configurable: true }); } catch (e3) { try { window.sessionStorage = ss; } catch (e4) {} }
+      } catch (e) {}
+    })();
+
     // ── Element Path (robust selector generation) ──
     function getElementPath(el) {
       if (!el || el.nodeType !== 1) return '';
@@ -673,18 +720,36 @@ export const injectedSyncScript = `
           } finally { exitRemote(); }
         }
       } else if (data.type === 'REMOTE_CLICK') {
-        var el = findElement(data.path);
-        if (el) {
+        // A replayed click can arrive a tick before its target exists — the
+        // navigation click that BUILDS this screen was replayed just before, and
+        // the lesson may create the new screen's elements a moment later.
+        // Silently dropping the click (the old behaviour) is what permanently
+        // desynced the two sides: once one navigation click is lost, every later
+        // click targets a screen the other side never reached. So if the element
+        // isn't present yet, retry briefly before giving up.
+        var doRemoteClick = function(elc) {
           enterRemote();
           try {
             if (data.clientX !== undefined && data.clientY !== undefined) {
-              el.dispatchEvent(new MouseEvent('click', {
+              elc.dispatchEvent(new MouseEvent('click', {
                 bubbles: true, clientX: data.clientX * window.innerWidth, clientY: data.clientY * window.innerHeight, view: window
               }));
             } else {
-              el.click();
+              elc.click();
             }
           } finally { exitRemote(); }
+        };
+        var rcEl = findElement(data.path);
+        if (rcEl) {
+          doRemoteClick(rcEl);
+        } else if (data.path) {
+          var rcTries = 0;
+          var rcRetry = function() {
+            var el2 = findElement(data.path);
+            if (el2) { doRemoteClick(el2); return; }
+            if (++rcTries < 6) setTimeout(rcRetry, 100);
+          };
+          setTimeout(rcRetry, 60);
         }
       } else if (data.type === 'REMOTE_PING') {
         // Anchor to the pinged ELEMENT when it resolves — layouts differ

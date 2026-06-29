@@ -399,6 +399,13 @@ export default function Room() {
   const lastRevisionRef = useRef(0);
   // Last DOM we broadcast — lets the idle heartbeat skip identical re-sends.
   const lastSentSnapshotRef = useRef<string>('');
+  // Catch-up replay: when the teacher switches to the whiteboard / temp content
+  // and back, the lesson iframe REMOUNTS and boots a fresh sim on the home
+  // screen. These flags drive a one-shot journal replay on that remount so the
+  // teacher catches up to the room's real screen instead of sitting on the map.
+  const prevAwayRef = useRef(false);
+  const lessonCatchupRef = useRef(false);
+  const pendingFullReplayRef = useRef(false);
 
   // THE single entry point for changing the lesson sim's HTML. Dedupe lives
   // here (identical html → no rebuild, sim instance survives) and a genuine
@@ -413,6 +420,17 @@ export default function Room() {
       return html;
     });
   }, []);
+
+  // Detect the teacher returning to the lesson FROM the whiteboard / temp
+  // content. The lesson iframe remounts fresh on that transition, so flag that
+  // its next onLoad must pull + replay the journal to catch up (see
+  // handleIframeLoad). Only this transition trips it, so normal join / reconnect
+  // / live flow is untouched.
+  useEffect(() => {
+    const away = whiteboardMode || showTempContent;
+    if (prevAwayRef.current && !away) lessonCatchupRef.current = true;
+    prevAwayRef.current = away;
+  }, [whiteboardMode, showTempContent]);
 
   const applySessionState = useCallback((state: any) => {
     if (typeof state.revision === 'number') {
@@ -929,6 +947,13 @@ export default function Room() {
     // already applied, so a mere socket blip replays nothing.
     newSocket.on("interaction_replay", ({ events }: { events: any[] }) => {
       if (!Array.isArray(events) || events.length === 0) return;
+      // A catch-up replay (teacher just returned to the lesson from the
+      // whiteboard / temp content) targets a FRESH sim that has applied
+      // nothing, so re-live the WHOLE journal, not just the unseen tail.
+      if (pendingFullReplayRef.current) {
+        lastInboundSeqRef.current = 0;
+        pendingFullReplayRef.current = false;
+      }
       let applied = 0;
       for (const ev of events.slice(0, 400)) {
         if (!ev || typeof ev.type !== 'string' || !ev.type.startsWith('SYNC_')) continue;
@@ -1220,7 +1245,21 @@ export default function Room() {
     if (zoomLevel !== 1) {
       iframeRef.current?.contentWindow?.postMessage({ type: 'SET_ZOOM', zoom: zoomLevel }, '*');
     }
-  }, [scrollSyncEnabled, stepLockEnabled, currentStep, zoomLevel, controlHolderName]);
+    // CATCH-UP: if the lesson iframe just remounted after the teacher was on the
+    // whiteboard / temp content, it booted fresh on the home screen. Pull the
+    // current journal and replay it forward so the teacher returns to the room's
+    // REAL screen (e.g. the quiz question the student is on) instead of being
+    // stranded on the map. Only the away→back transition trips lessonCatchupRef,
+    // so this never fires during normal join / reconnect / live operation.
+    if (lessonCatchupRef.current && !whiteboardMode && !showTempContent) {
+      lessonCatchupRef.current = false;
+      if (socket) {
+        pendingFullReplayRef.current = true;
+        lastInboundSeqRef.current = 0;
+        socket.emit('request_replay', { roomId });
+      }
+    }
+  }, [scrollSyncEnabled, stepLockEnabled, currentStep, zoomLevel, controlHolderName, socket, whiteboardMode, showTempContent, roomId]);
 
   // ── Mirror iframe onLoad: behave like a passive student view ──
   const handleMirrorLoad = useCallback(() => {
