@@ -39,16 +39,16 @@ export default function Leaderboard({ entries, open, onClose, currentStudentName
         className="w-full max-w-md mx-4 rounded-2xl overflow-hidden animate-scale-in"
         onClick={(e) => e.stopPropagation()}
         style={{
-          background: 'linear-gradient(180deg, rgba(255,255,255,0.98) 0%, rgba(250,250,255,0.98) 100%)',
-          border: '1px solid var(--border-subtle, rgba(0,0,0,0.08))',
-          boxShadow: '0 40px 100px rgba(0,0,0,0.35), 0 0 0 1px rgba(255,255,255,0.1) inset',
+          background: '#fff',
+          border: '1px solid var(--border-default, rgba(17,20,28,0.11))',
+          boxShadow: '0 20px 60px -20px rgba(17,20,28,0.30), 0 0 0 1px rgba(17,20,28,0.08)',
         }}
       >
         {/* Header */}
         <div
           className="px-6 py-5 flex items-center justify-between"
           style={{
-            background: 'linear-gradient(135deg, #6366F1 0%, #8B5CF6 50%, #EC4899 100%)',
+            background: '#4F46E5',
             color: '#fff',
           }}
         >
@@ -99,9 +99,7 @@ export default function Leaderboard({ entries, open, onClose, currentStudentName
                     key={e.studentName}
                     className="px-5 py-3 flex items-center gap-3"
                     style={{
-                      background: isCurrent
-                        ? 'linear-gradient(90deg, rgba(99,102,241,0.1), rgba(139,92,246,0.05))'
-                        : 'transparent',
+                      background: isCurrent ? 'rgba(79,70,229,0.08)' : 'transparent',
                     }}
                   >
                     {/* Rank */}
@@ -133,7 +131,7 @@ export default function Leaderboard({ entries, open, onClose, currentStudentName
                               fontWeight: 800,
                               padding: '2px 6px',
                               borderRadius: 6,
-                              background: '#6366F1',
+                              background: '#4F46E5',
                               color: '#fff',
                             }}
                           >
@@ -166,7 +164,7 @@ export default function Leaderboard({ entries, open, onClose, currentStudentName
                             style={{
                               width: `${progress}%`,
                               height: '100%',
-                              background: 'linear-gradient(90deg, #6366F1, #8B5CF6)',
+                              background: '#4F46E5',
                               borderRadius: 3,
                               transition: 'width 0.6s cubic-bezier(.34,1.56,.64,1)',
                             }}

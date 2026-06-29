@@ -73,7 +73,7 @@ export default function SaveBoardBanner({ expiresAt, saving, onSave }: Props) {
           fontSize: 12.5,
           cursor: saving ? 'wait' : 'pointer',
           letterSpacing: '0.01em',
-          boxShadow: '0 2px 6px rgba(79,70,229,0.25)',
+          boxShadow: 'none',
         }}
         aria-label="Save this board to my boards"
       >

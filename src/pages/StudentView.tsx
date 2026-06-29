@@ -1168,8 +1168,8 @@ export default function StudentView() {
             data-tip="View leaderboard"
             onClick={() => setShowLeaderboard(true)}
             style={{
-              background: 'linear-gradient(135deg, rgba(99,102,241,0.12), rgba(139,92,246,0.12))',
-              border: '1px solid rgba(99,102,241,0.25)',
+              background: 'rgba(79,70,229,0.10)',
+              border: '1px solid rgba(79,70,229,0.22)',
               cursor: 'pointer',
               position: 'relative',
             }}
@@ -1183,7 +1183,7 @@ export default function StudentView() {
               <div style={{
                 width: `${myXp % 100}%`,
                 height: '100%',
-                background: 'linear-gradient(90deg, #6366F1, #8B5CF6)',
+                background: '#4F46E5',
                 transition: 'width 0.5s cubic-bezier(.34,1.56,.64,1)',
               }} />
             </div>
@@ -1806,9 +1806,9 @@ export default function StudentView() {
           <div
             className="px-8 py-6 rounded-2xl text-center"
             style={{
-              background: 'linear-gradient(135deg, #6366F1 0%, #8B5CF6 50%, #EC4899 100%)',
+              background: '#4F46E5',
               color: '#fff',
-              boxShadow: '0 40px 120px rgba(99,102,241,0.5), 0 0 0 1px rgba(255,255,255,0.15) inset',
+              boxShadow: '0 24px 60px -16px rgba(17,20,28,0.40), 0 0 0 1px rgba(255,255,255,0.12) inset',
               animation: 'levelUpPop 3.5s cubic-bezier(.34,1.56,.64,1) forwards',
             }}
           >
