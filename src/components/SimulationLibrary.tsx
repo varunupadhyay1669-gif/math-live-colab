@@ -95,7 +95,10 @@ export default function SimulationLibrary({ isOpen, onClose, onLoad, currentHtml
             <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>{items.length} saved simulations</p>
           </div>
           <button onClick={onClose}
-            style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '20px' }}>✕</button>
+            aria-label="Close library"
+            style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '20px' }}>
+            <span aria-hidden="true">✕</span>
+          </button>
         </div>
 
         {/* Save current */}
@@ -114,7 +117,10 @@ export default function SimulationLibrary({ isOpen, onClose, onLoad, currentHtml
                   <button onClick={handleSave} disabled={!saveName.trim()} className="btn-primary text-[12px] disabled:opacity-40"
                     style={{ padding: '7px 14px' }}>Save</button>
                   <button onClick={() => setShowSaveForm(false)} className="btn text-[12px]"
-                    style={{ padding: '7px 12px' }}>✕</button>
+                    aria-label="Cancel save"
+                    style={{ padding: '7px 12px' }}>
+                    <span aria-hidden="true">✕</span>
+                  </button>
                 </div>
               </div>
             ) : (
@@ -178,8 +184,9 @@ export default function SimulationLibrary({ isOpen, onClose, onLoad, currentHtml
               </button>
               <button onClick={() => handleDelete(item.id)}
                 className="opacity-0 group-hover:opacity-100 transition-opacity"
+                aria-label={`Delete ${item.name}`}
                 style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '14px' }}>
-                🗑
+                <span aria-hidden="true">🗑</span>
               </button>
             </div>
           ))}
