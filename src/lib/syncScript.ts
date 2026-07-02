@@ -202,6 +202,50 @@ export const injectedSyncScript = `
       } catch (e) {}
     })();
 
+    // ── Sim load/error reporting ──
+    // When a lesson fails on a STUDENT's machine (CDN script blocked by their
+    // network, WebGL unavailable, a JS crash mid-boot) the teacher previously
+    // had no signal at all — the student just "wasn't following". Capture the
+    // first few fatal-ish errors and post them to the parent, which relays
+    // them to the teacher as a toast. Capture-phase listener because resource
+    // load errors don't bubble. IMG failures are skipped (noisy, non-fatal).
+    var simErrCount = 0;
+    var simErrSeen = {};
+    function reportSimError(msg, src) {
+      try {
+        if (simErrCount >= 3) return;
+        var key = String(msg || '') + '|' + String(src || '');
+        if (simErrSeen[key]) return;
+        simErrSeen[key] = 1;
+        simErrCount++;
+        window.parent.postMessage({
+          type: 'SYNC_SIM_ERROR',
+          message: String(msg || 'Script error').slice(0, 300),
+          source: String(src || '').slice(0, 300)
+        }, '*');
+      } catch (e) {}
+    }
+    window.addEventListener('error', function(e) {
+      try {
+        var t = e && e.target;
+        if (t && t !== window && t.tagName) {
+          var tag = String(t.tagName).toUpperCase();
+          if (tag === 'SCRIPT' || tag === 'LINK') {
+            reportSimError('Failed to load ' + tag.toLowerCase() + ': ' + (t.src || t.href || '(unknown url)'), t.src || t.href || '');
+          }
+          return; // resource error (incl. IMG) — never a JS error object
+        }
+        reportSimError((e && e.message) || 'Script error', (e && e.filename) || '');
+      } catch (err) {}
+    }, true);
+    window.addEventListener('unhandledrejection', function(e) {
+      try {
+        var r = e && e.reason;
+        var m = r && (r.message || (typeof r === 'string' ? r : ''));
+        if (m) reportSimError('Unhandled rejection: ' + m, '');
+      } catch (err) {}
+    });
+
     // ── Element Path (robust selector generation) ──
     function getElementPath(el) {
       if (!el || el.nodeType !== 1) return '';

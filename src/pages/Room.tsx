@@ -399,6 +399,11 @@ export default function Room() {
   const lastRevisionRef = useRef(0);
   // Last DOM we broadcast — lets the idle heartbeat skip identical re-sends.
   const lastSentSnapshotRef = useRef<string>('');
+  // The last lesson HTML the ROOM (server) actually accepted — i.e. content
+  // echoed back via a server broadcast. Used to REVERT the teacher's
+  // optimistic local preview when an upload is rejected (oversized etc.), so
+  // the teacher can never keep teaching on a sim only they can see.
+  const lastRoomAcceptedHtmlRef = useRef<string | null>(null);
   // Catch-up replay: when the teacher switches to the whiteboard / temp content
   // and back, the lesson iframe REMOUNTS and boots a fresh sim on the home
   // screen. These flags drive a one-shot journal replay on that remount so the
@@ -665,7 +670,28 @@ export default function Room() {
       setWhiteboardMode(active);
     });
     newSocket.on("upload_error", ({ message }: { message: string }) => {
-      showNotif(`⚠️ Upload failed: ${message}`);
+      // SPLIT-BRAIN FIX: every upload path applies the content to the teacher's
+      // preview optimistically, BEFORE the server validates it. If the room
+      // rejected it (too large, invalid), the teacher would otherwise keep
+      // teaching on a sim only they can see — the "3D sim works for me but
+      // never loads for the student" bug. Revert to the last content the room
+      // actually accepted so both sides look at the same thing again.
+      const revertTo = lastRoomAcceptedHtmlRef.current;
+      if (revertTo) {
+        setHtmlCode(revertTo);
+        setSimPreviewHtml(revertTo);
+        showNotif(`⚠️ Upload rejected: ${message} — reverted to the last synced lesson (the class never received it)`);
+      } else {
+        setPreviewHtml("");
+        setHtmlCode("");
+        showNotif(`⚠️ Upload rejected: ${message} — the class never received it`);
+      }
+    });
+    // A student's lesson failed to load/run on THEIR machine (blocked CDN
+    // script, WebGL unavailable, JS crash). Without this the teacher has no
+    // signal at all — the student just silently "isn't following".
+    newSocket.on("sim_error", ({ studentName, message }: { studentName: string; message: string }) => {
+      showNotif(`⚠️ ${studentName}'s lesson hit an error: ${message}`);
     });
     newSocket.on("generate_lesson_done", ({ name }: { name: string }) => {
       if (aiTimeoutRef.current) clearTimeout(aiTimeoutRef.current);
@@ -695,6 +721,9 @@ export default function Room() {
         if (revision < lastRevisionRef.current) return;
         lastRevisionRef.current = revision;
       }
+      // Any run_preview FROM the server means the room accepted this content —
+      // remember it as the revert anchor for rejected uploads.
+      if (typeof html === 'string' && html.length > 0) lastRoomAcceptedHtmlRef.current = html;
       // Skip if this is our own echo from run_preview we just emitted
       if (skipOwnPreviewRef.current) {
         skipOwnPreviewRef.current = false;
@@ -1147,10 +1176,12 @@ export default function Room() {
         const s = await getSession(sessionParam);
         if (!s) { showNotif('⚠️ Saved session not found'); stripParam(); return; }
         // Re-seed the HTML lesson as a fresh file so it renders + syncs.
-        if (s.html_used) {
+        if (s.html_used && s.html_used.length <= 2 * 1024 * 1024) {
           const fileId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
           socket.emit('upload_file', { roomId, file: { id: fileId, name: s.topic || 'Reopened session', html: s.html_used, uploadedAt: Date.now() } });
           setSimPreviewHtml(s.html_used);
+        } else if (s.html_used) {
+          showNotif('⚠️ Saved lesson exceeds the 2MB sync limit — not restored to the class');
         }
         // Re-seed the whiteboard only if the room's board is currently empty
         // (same guard as the template hydrator — never pile on top).
@@ -1337,6 +1368,15 @@ export default function Room() {
       }
       if (type === 'STEP_INFO') {
         setMaxStep(e.data.maxStep || 0);
+        return;
+      }
+
+      // The teacher's OWN sim reported a load/runtime failure (CDN script
+      // blocked, WebGL unavailable, JS crash). Surface it locally — and never
+      // let it fall through to the interaction relay below (it must not be
+      // replayed into student iframes as a REMOTE_* event).
+      if (type === 'SYNC_SIM_ERROR') {
+        showNotif(`⚠️ Lesson error on your screen: ${e.data.message || 'unknown'}`);
         return;
       }
 
@@ -1618,6 +1658,12 @@ export default function Room() {
 
   const handlePasteSubmit = () => {
     if (!socket || !pasteCode.trim()) return;
+    // PRE-FLIGHT (split-brain fix): this path had NO size check — a pasted 3D
+    // sim with embedded assets (>2MB) was rejected server-side AFTER the
+    // teacher's preview already showed it (and >5MB never even reached the
+    // server: Socket.IO kills the connection silently). Validate BEFORE
+    // emitting or touching the local preview.
+    if (lessonTooLarge(pasteCode)) return;
     const name = pasteFileName.trim() || `Pasted-${new Date().toLocaleTimeString()}`;
     const entry: FileEntry = {
       id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
@@ -1656,8 +1702,22 @@ export default function Room() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [auth.enabled, auth.user, roomId, savingHistory, files, activeFileId, whiteboardMode, whiteboardState]);
 
+  // PRE-FLIGHT size guard, mirroring the server's MAX_FILE_SIZE (2MB on
+  // html.length). Every send path must call this BEFORE emitting AND before
+  // optimistically applying content locally. Without it, oversized lessons
+  // (3D sims with embedded models/textures are the classic case) were shown
+  // on the teacher's screen while the server rejected them — or, above the
+  // socket's 5MB buffer, silently killed the connection with no error at all.
+  const lessonTooLarge = (html: string): boolean => {
+    const MAX = 2 * 1024 * 1024;
+    if (html.length <= MAX) return false;
+    showNotif(`⚠️ Lesson too large (${(html.length / 1024 / 1024).toFixed(1)}MB, max 2MB) — NOT sent to the class. Tip: load 3D models/textures from a CDN URL instead of embedding them.`);
+    return true;
+  };
+
   const runPreview = () => {
     if (!socket || !activeFileId) return;
+    if (lessonTooLarge(htmlCode)) return;
     // Flag to skip our own echo from the server broadcast
     skipOwnPreviewRef.current = true;
     socket.emit("run_preview", { roomId, fileId: activeFileId, html: htmlCode });

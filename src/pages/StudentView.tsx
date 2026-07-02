@@ -1025,6 +1025,16 @@ export default function StudentView() {
       }
       if (type === 'STEP_INFO') return;
 
+      // Lesson-load diagnostics (CDN script blocked, WebGL failure, JS crash):
+      // relay to the TEACHER via a dedicated event. Deliberately BEFORE the
+      // canInteract gate — a view-only student's broken sim must still report —
+      // and never through the 'interaction' path (it must not be replayed into
+      // anyone's iframe as a REMOTE_* event).
+      if (type === 'SYNC_SIM_ERROR') {
+        socket.emit('sim_error', { roomId, message: e.data.message, source: e.data.source });
+        return;
+      }
+
       if (!type.startsWith('SYNC_')) return;
       // Always allow cursor (teacher can see where students look) and pings
       // (Alt+click "look here" — anyone can point at confusion, even view-only).

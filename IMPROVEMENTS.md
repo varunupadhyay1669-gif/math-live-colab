@@ -193,3 +193,55 @@ question** ("it got out of sync in between").
 **Residual (user action):** cold-start durability needs **Upstash Redis** (the file store is
 ephemeral on Render). Turnkey env vars already in `render.yaml`; without it, a server spin-down
 mid-class still resets the room. Flagged, not silently assumed fixed.
+
+---
+
+## Cycle 6 — 3D-sim delivery audit ("the simulation does not load for the student")
+
+**Reported:** platform fine generally, but a 3D simulation the teacher loads never appears for the
+student. Audited the entire content-delivery pipeline (upload/paste/run/reopen → server caps →
+student receive → iframe render).
+
+**Bugs found (all confirmed in code):**
+1. **Split-brain optimistic uploads** — every send path applied the lesson to the TEACHER's preview
+   *before* server validation (`emit → setSimPreviewHtml → "✅"`). The **paste path had NO size
+   check**; the server rejects >2MB (`upload_error` toast racing the ✅) and **>5MB payloads kill
+   the socket silently** (Socket.IO `maxHttpBufferSize`) with auto-reconnect — teacher teaches a sim
+   only they can see. 3D sims are the classic oversized case (embedded models/textures).
+2. **`run_preview` silently dropped oversized HTML** (bare `return`, no error) while the client
+   toasted "▶ Preview updated **& synced**" — a lie.
+3. **`show_temp_content` had zero validation** (unbounded memory, same split-brain).
+4. **No observability**: a lesson failing ON the student's machine (CDN blocked by their network,
+   WebGL unavailable, JS crash) produced no signal anywhere — the student just "wasn't following".
+5. Stored DOM snapshots (`liveSnapshotHtml`) were uncapped (up to 5MB/room memory + persistence).
+
+**Fixes:**
+- Client pre-flight `lessonTooLarge()` on paste / Run / reopen (file/drop already checked bytes),
+  with a CDN-assets tip in the message; oversized content is never applied locally nor emitted.
+- `upload_error` now **reverts** the teacher's preview to `lastRoomAcceptedHtmlRef` (the last HTML
+  the server echoed back) — the teacher can no longer keep teaching unsynced content.
+- Server: `run_preview` + `show_temp_content` answer `upload_error` instead of silent drops;
+  snapshot storage capped at MAX_FILE_SIZE.
+- **Sim-error reporting channel**: the injected sync script captures script/link load failures,
+  JS errors and unhandled rejections (max 3/load, deduped) → `SYNC_SIM_ERROR` → StudentView relays
+  as `sim_error` (bypasses the interaction gate — view-only students report too; never enters the
+  REMOTE_* replay path) → server routes to the TEACHER ONLY (rate-limited, sanitized, student role
+  only) → toast: "⚠️ Ann's lesson hit an error: Failed to load script …". Teacher's own iframe
+  errors toast locally.
+
+**Verification (run, not assumed):**
+- **New stress11 (11 checks):** 3D-shaped lesson (CDN script + importmap + module + canvas) reaches
+  the student **byte-identical**; oversized upload/run_preview/temp-content all answer
+  `upload_error` with nothing leaked to students and room state unchanged; `sim_error` routes
+  named to the teacher only (view-only student included; teacher-role senders ignored); `hasCanvas`
+  snapshot → late joiner boots the pristine 3D lesson.
+- **Browser (real Three.js from unpkg, REAL seededSyncScript, student view-only mode):** renderer
+  boots, **628 rAF frames**, and `gl.readPixels` right after a render shows **5,185/10,000 lit
+  pixels** — the cube is actually drawn. The broken-sim iframe reported both "Failed to load
+  script" and the JS ReferenceError through the new channel.
+- Full socket suite **185 green** (verify-sync 48, stress 19, stress2 18, stress3 11, stress4 26,
+  stress5 13, stress6 16, stress7 2, stress8 6, stress9 9, stress10 6, stress11 11). tsc 0, build ✓.
+
+**Honest scope note:** if a student's *network* blocks the CDN or their device lacks WebGL, the sim
+still can't run there — but the teacher now sees exactly that reason in real time instead of
+silence, and oversized lessons fail loudly with a revert instead of splitting the class.

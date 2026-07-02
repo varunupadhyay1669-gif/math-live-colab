@@ -1592,7 +1592,14 @@ Build a widget that teaches: ${safePrompt}`;
       if (!requireTeacher(room, socket.id)) return;
       // Cap the broadcast HTML at the same 2MB limit as upload (this path also
       // writes file.html / lastRunHtml, so an uncapped payload would bypass it).
-      if (typeof html !== 'string' || html.length === 0 || html.length > MAX_FILE_SIZE) return;
+      // MUST answer with upload_error, not a silent return: the client applies
+      // the preview optimistically and toasts "synced" — a silent drop left the
+      // teacher teaching content the room never received (split-brain).
+      if (typeof html !== 'string' || html.length === 0) return;
+      if (html.length > MAX_FILE_SIZE) {
+        socket.emit('upload_error', { message: `Lesson too large (${(html.length / 1024 / 1024).toFixed(1)}MB, max 2MB)` });
+        return;
+      }
       // Update the file content
       const file = room.files.find(f => f.id === fileId);
       if (file) {
@@ -1623,7 +1630,9 @@ Build a widget that teaches: ${safePrompt}`;
       // Same reasoning as in dom_snapshot above: a passive snapshot ack does
       // NOT rewrite lastRunHtml or the persisted file source — only the live
       // snapshot. Canvas sims never store a snapshot at all (see dom_snapshot).
-      room.liveSnapshotHtml = hasCanvas ? null : html;
+      // Never store canvas snapshots (blank shells) or oversized ones (a
+      // serialized DOM can exceed the 2MB lesson cap — unbounded room memory).
+      room.liveSnapshotHtml = (hasCanvas || html.length > MAX_FILE_SIZE) ? null : html;
       // Journal survives passive snapshots — see the dom_snapshot handler.
       const revision = bumpRevision(room);
       const replayableNow = room.eventLog.length > 0 && !room.eventLogOverflow;
@@ -1674,7 +1683,9 @@ Build a widget that teaches: ${safePrompt}`;
         // change every snapshot. `lastRunHtml` is the last HTML the teacher
         // actually ran; `file.html` is the saved source. Only force-sync (an
         // explicit teacher request to re-baseline everyone) rewrites those.
-        room.liveSnapshotHtml = html;
+        // Size-capped like uploads: a serialized DOM can outgrow the lesson
+        // cap; storing it would bloat room memory + persistence unboundedly.
+        room.liveSnapshotHtml = html.length > MAX_FILE_SIZE ? null : html;
         // NOTE: passive snapshots do NOT clear the journal. A snapshot only
         // captures DOM — a JS-stateful lesson re-initialises its scripts on
         // load and paints its first screen over the snapshot HTML, so the
@@ -2323,9 +2334,17 @@ Build a widget that teaches: ${safePrompt}`;
     socket.on('show_temp_content', ({ roomId, html, name }: { roomId: string; html: string; name: string }) => {
       const room = rooms.get(roomId);
       if (!requireTeacher(room, socket.id)) return;
-      if (room) room.tempContent = { html, name };
+      // Same validation as uploads — this path stored + broadcast unvalidated
+      // HTML (unbounded memory; oversized payloads split teacher/student views).
+      if (typeof html !== 'string' || html.trim().length === 0) return;
+      if (html.length > MAX_FILE_SIZE) {
+        socket.emit('upload_error', { message: `Explanation too large (${(html.length / 1024 / 1024).toFixed(1)}MB, max 2MB)` });
+        return;
+      }
+      const safeName = sanitizeString(name, 100) || 'Explanation';
+      room.tempContent = { html, name: safeName };
       // Broadcast temporary explanation content to all users in room
-      io.to(roomId).emit('temp_content', { html, name });
+      io.to(roomId).emit('temp_content', { html, name: safeName });
     });
 
     socket.on('clear_temp_content', ({ roomId }: { roomId: string }) => {
@@ -2494,6 +2513,35 @@ Build a widget that teaches: ${safePrompt}`;
           if (teacherId) io.to(teacherId).emit('interaction', event);
         }
         // When not allowed: student events are silently dropped (view-only mode)
+      }
+    });
+
+    // ─── SIM ERROR REPORTING (student → teacher diagnostics) ───
+    // A student's lesson iframe reported a load/runtime failure (CDN script
+    // blocked on their network, WebGL unavailable, JS crash). Relay to the
+    // TEACHER ONLY so they instantly see WHY a student "isn't following",
+    // instead of silence. Loss-tolerant rate limiting; student role only
+    // (the teacher's own errors surface locally client-side).
+    socket.on('sim_error', ({ roomId, message, source }: { roomId: string; message: string; source?: string }) => {
+      if (typeof roomId !== 'string') return;
+      if (!checkRateLimit(socket.id, true)) return;
+      const room = rooms.get(roomId);
+      if (!isMember(room, socket.id)) return;
+      const user = room.users.get(socket.id);
+      if (user?.role !== 'student') return;
+      let teacherId: string | null = room.teacherSocketId;
+      if (!(teacherId && room.users.get(teacherId)?.role === 'teacher')) {
+        teacherId = null;
+        for (const [sid, u] of room.users.entries()) {
+          if (u.role === 'teacher') { teacherId = sid; room.teacherSocketId = sid; break; }
+        }
+      }
+      if (teacherId) {
+        io.to(teacherId).emit('sim_error', {
+          studentName: user.name || 'Student',
+          message: sanitizeString(message, 300) || 'Unknown lesson error',
+          source: sanitizeString(source, 300),
+        });
       }
     });
 
