@@ -245,3 +245,37 @@ student receive → iframe render).
 **Honest scope note:** if a student's *network* blocks the CDN or their device lacks WebGL, the sim
 still can't run there — but the teacher now sees exactly that reason in real time instead of
 silence, and oversized lessons fail loudly with a revert instead of splitting the class.
+
+---
+
+## Cycle 7 — HD whiteboard export (user-requested: session snapshot for LLM context)
+
+**Request:** one button that converts everything written on the whiteboard during the session into
+a high-definition image, suitable as context for large language models.
+
+**Audit of the existing "Export" button:** it was a naive `canvas.toDataURL()` — captured ONLY the
+visible viewport at screen resolution, with a TRANSPARENT background, and MISSED KaTeX math labels
+entirely (they're DOM overlays, not canvas pixels). Inadequate for the stated purpose.
+
+**Shipped: `exportBoardHD` (replaces the old export in place — no new UI surface).**
+- Computes the WORLD-SPACE bounding box of all content (strokes ± width, shapes incl. circle radii
+  + rough.js margin, texts measured line-by-line, images incl. rotation) + padding — the export
+  covers the whole session's writing regardless of pan/zoom.
+- Renders to an offscreen canvas at ~3.4k long edge (scale 1–4×, hard-capped 8k for canvas limits)
+  using the SAME draw routines as the live board (chronological z-order, rough.js shapes,
+  quadratic-smoothed ink, pixel-eraser compositing). Grid/axes render per the room's grid mode
+  (axes labels give an LLM coordinates). White page composited UNDER content (`destination-over`)
+  so eraser holes export white, never transparent.
+- **LaTeX labels export as their raw LaTeX source in monospace** — the KaTeX render is a DOM
+  overlay the canvas cannot rasterise, and raw LaTeX is the most faithful text form an LLM can
+  read anyway. Deliberate, documented trade-off.
+- Skips teaching chrome (selection handles, instruments, in-flight gestures) — content only.
+- Button: "📸 HD Export" in the whiteboard action bar; file `mathslive-board-<room>-<stamp>.png`.
+
+**Verification (run, not assumed):** seeded a real room over sockets (red pen stroke near origin,
+blue rect at ~(2600–3000, 1800–2100) — far OFF-VIEWPORT — plain text + a latex label), opened it
+as the teacher in the browser, clicked the real button with the download intercepted: PNG came out
+**3400×2349**, red stroke pixels 3,896, **blue far-shape pixels 8,714 (full-bounds proven — the
+old export would have cropped it out)**, 164k ink pixels, **0 transparent pixels** (white page).
+tsc 0, build ✓, verify-sync 48 + stress9 9 sanity green (no server/sync changes in this cycle —
+client-only; full 185-check suite unaffected by construction).

@@ -2285,14 +2285,251 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
     // decode) that were created with stale closures. See loadImage.
     redrawCanvasRef.current = redrawCanvas;
 
-    const downloadBoard = useCallback(() => {
-      const canvas = canvasRef.current;
-      if (!canvas) return;
-      const link = document.createElement('a');
-      link.download = `whiteboard-${Date.now()}.png`;
-      link.href = canvas.toDataURL('image/png');
-      link.click();
-    }, []);
+    // ── HD board export ──
+    // Replaces the old viewport-grab (canvas.toDataURL of whatever happened to
+    // be on screen). This renders the ENTIRE board — every stroke/shape/text/
+    // image regardless of pan/zoom — onto an offscreen canvas at high
+    // resolution (~3.4k long edge) over a white background, so one PNG
+    // captures the whole session's writing. Built for handing to an LLM as
+    // context: LaTeX math labels are drawn as their LaTeX SOURCE text (the
+    // KaTeX render is a DOM overlay the canvas can't rasterise — and raw
+    // LaTeX is the most faithful text form a model can read anyway).
+    // This is the EXPORT TWIN of the draw routines inside redrawCanvas —
+    // intentionally separate from the hot live path: it skips live-only
+    // concerns (selection chrome, in-flight gesture, in-edit hiding,
+    // instruments — teaching tools, not written content).
+    const exportBoardHD = useCallback(() => {
+      // 1) Content bounds in board space.
+      const scratch = document.createElement('canvas').getContext('2d');
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      const grow = (x: number, y: number, m = 0) => {
+        if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+        if (x - m < minX) minX = x - m;
+        if (y - m < minY) minY = y - m;
+        if (x + m > maxX) maxX = x + m;
+        if (y + m > maxY) maxY = y + m;
+      };
+      for (const s of strokes) {
+        const m = (s.width || 2) / 2 + 2;
+        for (const p of s.points) grow(p.x, p.y, m);
+      }
+      for (const sh of shapes) {
+        const m = (sh.width || 2) * 2 + 8; // rough.js sketchiness + arrowheads margin
+        if (sh.kind === 'circle') {
+          const r = Math.hypot(sh.x2 - sh.x1, sh.y2 - sh.y1);
+          grow(sh.x1 - r, sh.y1 - r, m); grow(sh.x1 + r, sh.y1 + r, m);
+        } else {
+          grow(sh.x1, sh.y1, m); grow(sh.x2, sh.y2, m);
+        }
+      }
+      for (const t of texts) {
+        const lines = t.text.split('\n');
+        let w = 0;
+        if (scratch) {
+          scratch.font = `${t.fontSize}px ${t.latex ? 'ui-monospace, monospace' : TEXT_FONT_FAMILY}`;
+          for (const ln of lines) w = Math.max(w, scratch.measureText(ln).width);
+        } else {
+          w = Math.max(...lines.map(l => l.length)) * t.fontSize * 0.6;
+        }
+        grow(t.x, t.y);
+        grow(t.x + w, t.y + lines.length * t.fontSize * TEXT_LINE_HEIGHT_RATIO);
+      }
+      for (const o of objects) {
+        // Axis-aligned bounds of the (possibly rotated) image rect.
+        const w = o.width * o.scale, h = o.height * o.scale;
+        const cx = o.x + w / 2, cy = o.y + h / 2;
+        const a = (o.rotation * Math.PI) / 180;
+        const hw = Math.abs(w / 2 * Math.cos(a)) + Math.abs(h / 2 * Math.sin(a));
+        const hh = Math.abs(w / 2 * Math.sin(a)) + Math.abs(h / 2 * Math.cos(a));
+        grow(cx - hw, cy - hh); grow(cx + hw, cy + hh);
+      }
+      if (!Number.isFinite(minX)) { minX = 0; minY = 0; maxX = 1600; maxY = 1000; } // empty board → blank page
+      const PAD = 60;
+      minX -= PAD; minY -= PAD; maxX += PAD; maxY += PAD;
+      const bw = Math.max(1, maxX - minX), bh = Math.max(1, maxY - minY);
+
+      // 2) HD scale: target ~3.4k on the long edge, hard-capped for canvas limits.
+      const longEdge = Math.max(bw, bh);
+      let scale = Math.min(4, Math.max(1, 3400 / longEdge));
+      if (longEdge * scale > 8000) scale = 8000 / longEdge;
+
+      const out = document.createElement('canvas');
+      out.width = Math.round(bw * scale);
+      out.height = Math.round(bh * scale);
+      const ctx = out.getContext('2d');
+      if (!ctx) return;
+      ctx.setTransform(scale, 0, 0, scale, -minX * scale, -minY * scale);
+
+      // 3) Grid (matches what the class saw; axes give the LLM coordinates).
+      if (gridMode !== 'blank') {
+        const minorStep = GRID_STEP, majorStep = GRID_STEP * 5;
+        const gx0 = Math.floor(minX / minorStep) * minorStep, gx1 = Math.ceil(maxX / minorStep) * minorStep;
+        const gy0 = Math.floor(minY / minorStep) * minorStep, gy1 = Math.ceil(maxY / minorStep) * minorStep;
+        ctx.strokeStyle = gridMode === 'graph' ? '#eef2f7' : '#e5e7eb';
+        ctx.lineWidth = 1 / scale;
+        for (let x = gx0; x <= gx1; x += minorStep) { ctx.beginPath(); ctx.moveTo(x, gy0); ctx.lineTo(x, gy1); ctx.stroke(); }
+        for (let y = gy0; y <= gy1; y += minorStep) { ctx.beginPath(); ctx.moveTo(gx0, y); ctx.lineTo(gx1, y); ctx.stroke(); }
+        if (gridMode === 'graph') {
+          ctx.strokeStyle = '#cbd5e1'; ctx.lineWidth = 1.2 / scale;
+          const mx0 = Math.floor(minX / majorStep) * majorStep, mx1 = Math.ceil(maxX / majorStep) * majorStep;
+          const my0 = Math.floor(minY / majorStep) * majorStep, my1 = Math.ceil(maxY / majorStep) * majorStep;
+          for (let x = mx0; x <= mx1; x += majorStep) { ctx.beginPath(); ctx.moveTo(x, gy0); ctx.lineTo(x, gy1); ctx.stroke(); }
+          for (let y = my0; y <= my1; y += majorStep) { ctx.beginPath(); ctx.moveTo(gx0, y); ctx.lineTo(gx1, y); ctx.stroke(); }
+          ctx.strokeStyle = '#475569'; ctx.lineWidth = 1.6 / scale;
+          if (minX <= 0 && maxX >= 0) { ctx.beginPath(); ctx.moveTo(0, gy0); ctx.lineTo(0, gy1); ctx.stroke(); }
+          if (minY <= 0 && maxY >= 0) { ctx.beginPath(); ctx.moveTo(gx0, 0); ctx.lineTo(gx1, 0); ctx.stroke(); }
+          // Axis unit labels — fixed board-unit size so they stay legible.
+          ctx.fillStyle = '#475569';
+          ctx.font = `13px ui-sans-serif, system-ui, sans-serif`;
+          if (minY <= 0 && maxY >= 0) {
+            ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+            for (let x = mx0; x <= mx1; x += majorStep) { if (x !== 0) ctx.fillText(String(Math.round(x / majorStep)), x, 5); }
+          }
+          if (minX <= 0 && maxX >= 0) {
+            ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
+            for (let y = my0; y <= my1; y += majorStep) { if (y !== 0) ctx.fillText(String(Math.round(-y / majorStep)), -5, y); }
+          }
+        }
+      }
+
+      // 4) Content — identical chronological z-order to the live board.
+      const rc = rough.canvas(out);
+      const now = Date.now();
+      type ExpItem =
+        | { kind: 'image'; value: BoardImageObject; z: number }
+        | { kind: 'stroke'; value: DrawStroke; z: number }
+        | { kind: 'shape'; value: BoardShape; z: number }
+        | { kind: 'text'; value: BoardText; z: number };
+      const items: ExpItem[] = [];
+      for (const o of objects) items.push({ kind: 'image', value: o, z: o.zIndex || deriveTimestampFromId(o.id) });
+      for (const s of strokes) items.push({ kind: 'stroke', value: s, z: s.createdAt || deriveTimestampFromId(s.id) });
+      for (const s of shapes) items.push({ kind: 'shape', value: s, z: s.createdAt || deriveTimestampFromId(s.id) });
+      for (const t of texts) items.push({ kind: 'text', value: t, z: t.createdAt || deriveTimestampFromId(t.id) });
+      items.sort((a, b) => a.z - b.z);
+
+      for (const item of items) {
+        if (item.kind === 'image') {
+          const o = item.value;
+          const img = imageCacheRef.current.get(o.id);
+          if (!img?.complete) continue;
+          ctx.save();
+          ctx.translate(o.x + (o.width * o.scale) / 2, o.y + (o.height * o.scale) / 2);
+          ctx.rotate((o.rotation * Math.PI) / 180);
+          ctx.drawImage(img, -(o.width * o.scale) / 2, -(o.height * o.scale) / 2, o.width * o.scale, o.height * o.scale);
+          ctx.restore();
+        } else if (item.kind === 'stroke') {
+          const s = item.value;
+          if (s.points.length === 0) continue;
+          ctx.save();
+          if (s.tool === 'eraser-pixel') {
+            ctx.globalCompositeOperation = 'destination-out';
+            ctx.strokeStyle = '#000'; ctx.lineWidth = s.width;
+          } else if (s.tool === 'highlighter') {
+            const age = now - (s.createdAt ?? now);
+            let alpha = 0.55;
+            if (age > HIGHLIGHTER_HOLD_MS) alpha = 0.55 * Math.max(0, 1 - (age - HIGHLIGHTER_HOLD_MS) / (HIGHLIGHTER_FADE_MS - HIGHLIGHTER_HOLD_MS));
+            if (alpha <= 0) { ctx.restore(); continue; }
+            ctx.globalAlpha = alpha; ctx.globalCompositeOperation = 'multiply';
+            ctx.strokeStyle = s.color; ctx.lineWidth = s.width;
+          } else {
+            ctx.strokeStyle = s.color; ctx.lineWidth = s.width;
+          }
+          ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+          const pts = s.points;
+          if (pts.length === 1) {
+            ctx.beginPath(); ctx.fillStyle = ctx.strokeStyle as string;
+            ctx.arc(pts[0].x, pts[0].y, Math.max(0.6, ctx.lineWidth / 2), 0, Math.PI * 2); ctx.fill();
+          } else if (pts.length === 2) {
+            ctx.beginPath(); ctx.moveTo(pts[0].x, pts[0].y); ctx.lineTo(pts[1].x, pts[1].y); ctx.stroke();
+          } else {
+            ctx.beginPath(); ctx.moveTo(pts[0].x, pts[0].y);
+            for (let i = 1; i < pts.length - 1; i++) {
+              ctx.quadraticCurveTo(pts[i].x, pts[i].y, (pts[i].x + pts[i + 1].x) / 2, (pts[i].y + pts[i + 1].y) / 2);
+            }
+            ctx.quadraticCurveTo(pts[pts.length - 2].x, pts[pts.length - 2].y, pts[pts.length - 1].x, pts[pts.length - 1].y);
+            ctx.stroke();
+          }
+          ctx.restore();
+        } else if (item.kind === 'shape') {
+          const shape = item.value;
+          ctx.save();
+          const sw = shape.width;
+          const seed = shapeSeed(shape.id || 'shape');
+          const dash =
+            shape.strokeStyle === 'dashed' ? [sw * 3, sw * 2.5] :
+            shape.strokeStyle === 'dotted' ? [0.1, sw * 2.2] : undefined;
+          const opts: Record<string, unknown> = { stroke: shape.color, strokeWidth: sw, roughness: 1.1, bowing: 1, seed };
+          if (dash) opts.strokeLineDash = dash;
+          if (shape.fillColor) {
+            opts.fill = shape.fillColor;
+            opts.fillStyle = shape.fillStyle || 'hachure';
+            opts.fillWeight = Math.max(sw * 0.5, 0.6);
+            opts.hachureGap = Math.max(sw * 4, 6);
+          }
+          try {
+            if (shape.kind === 'rect') {
+              rc.rectangle(Math.min(shape.x1, shape.x2), Math.min(shape.y1, shape.y2), Math.abs(shape.x2 - shape.x1), Math.abs(shape.y2 - shape.y1), opts);
+            } else if (shape.kind === 'circle') {
+              const r = Math.hypot(shape.x2 - shape.x1, shape.y2 - shape.y1);
+              rc.ellipse(shape.x1, shape.y1, r * 2, r * 2, opts);
+              if (shape.centerMark) {
+                ctx.fillStyle = shape.color;
+                ctx.beginPath(); ctx.arc(shape.x1, shape.y1, Math.max(sw * 0.9, 3 / scale), 0, Math.PI * 2); ctx.fill();
+              }
+            } else if (shape.kind === 'diamond') {
+              const cx = (shape.x1 + shape.x2) / 2, cy = (shape.y1 + shape.y2) / 2;
+              const left = Math.min(shape.x1, shape.x2), right = Math.max(shape.x1, shape.x2);
+              const top = Math.min(shape.y1, shape.y2), bottom = Math.max(shape.y1, shape.y2);
+              rc.polygon([[cx, top], [right, cy], [cx, bottom], [left, cy]], opts);
+            } else if (shape.kind === 'line' || shape.kind === 'arrow') {
+              rc.line(shape.x1, shape.y1, shape.x2, shape.y2, opts);
+              if (shape.kind === 'arrow') {
+                const angle = Math.atan2(shape.y2 - shape.y1, shape.x2 - shape.x1);
+                const headLen = Math.max(sw * 4, 14), ha = Math.PI / 7;
+                rc.line(shape.x2, shape.y2, shape.x2 - headLen * Math.cos(angle - ha), shape.y2 - headLen * Math.sin(angle - ha), opts);
+                rc.line(shape.x2, shape.y2, shape.x2 - headLen * Math.cos(angle + ha), shape.y2 - headLen * Math.sin(angle + ha), opts);
+              }
+            }
+          } catch {
+            ctx.strokeStyle = shape.color; ctx.lineWidth = sw;
+            if (shape.kind === 'rect') ctx.strokeRect(Math.min(shape.x1, shape.x2), Math.min(shape.y1, shape.y2), Math.abs(shape.x2 - shape.x1), Math.abs(shape.y2 - shape.y1));
+            else { ctx.beginPath(); ctx.moveTo(shape.x1, shape.y1); ctx.lineTo(shape.x2, shape.y2); ctx.stroke(); }
+          }
+          ctx.restore();
+        } else {
+          const t = item.value;
+          ctx.save();
+          ctx.fillStyle = t.color;
+          // LaTeX labels: raw source in monospace (see header comment).
+          ctx.font = `${t.fontSize}px ${t.latex ? 'ui-monospace, Menlo, Consolas, monospace' : TEXT_FONT_FAMILY}`;
+          ctx.textBaseline = 'top'; ctx.textAlign = 'left';
+          const lineH = t.fontSize * TEXT_LINE_HEIGHT_RATIO;
+          const lines = t.text.split('\n');
+          for (let i = 0; i < lines.length; i++) ctx.fillText(lines[i], t.x, t.y + i * lineH);
+          ctx.restore();
+        }
+      }
+
+      // 5) White page UNDER everything (after content, destination-over, so
+      // pixel-eraser holes end up white — not transparent — in the PNG).
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.globalCompositeOperation = 'destination-over';
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, out.width, out.height);
+      ctx.globalCompositeOperation = 'source-over';
+
+      // 6) Download.
+      out.toBlob((blob) => {
+        if (!blob) return;
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        const stamp = new Date().toISOString().slice(0, 16).replace('T', '-').replace(':', '');
+        link.download = `mathslive-board-${roomId || 'session'}-${stamp}.png`;
+        link.href = url;
+        link.click();
+        setTimeout(() => URL.revokeObjectURL(url), 5000);
+      }, 'image/png');
+    }, [strokes, shapes, texts, objects, gridMode, roomId]);
 
     useImperativeHandle(ref, () => ({
       setImage: (dataUrl: string) => {
@@ -2313,9 +2550,9 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
         setSelectedStrokeIndex(null);
         if (socket && isTeacher) socket.emit('whiteboard_reset', { roomId });
       },
-      download: () => downloadBoard(),
+      download: () => exportBoardHD(),
       getCanvas: () => canvasRef.current,
-    }), [addImageObject, downloadBoard, socket, isTeacher, roomId]);
+    }), [addImageObject, exportBoardHD, socket, isTeacher, roomId]);
 
     useEffect(() => {
       if (!initialState) return;
@@ -3931,7 +4168,7 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
           <button onClick={fitBoard} className="whiteboard-action">{Math.round(view.boardScale * 100)}%</button>
           <button onClick={() => zoomAt(1.2)} className="whiteboard-action">+</button>
           <button onClick={centerSelection} className="whiteboard-action">Center</button>
-          <button onClick={downloadBoard} className="whiteboard-action">Export</button>
+          <button onClick={exportBoardHD} className="whiteboard-action" title="Download a high-definition PNG of the WHOLE board — everything written this session, not just the visible area. Great as context for AI/LLMs.">📸 HD Export</button>
           {/* AUTONOMOUS: Save current whiteboard state as a reusable
               template. Opens a small inline modal for naming; on save
               the snapshot lands in localStorage and shows up on the
