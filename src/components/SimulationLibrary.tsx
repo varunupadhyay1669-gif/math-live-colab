@@ -111,8 +111,10 @@ export default function SimulationLibrary({ isOpen, onClose, onLoad, currentHtml
                     className="input-field text-sm flex-1" style={{ padding: '7px 10px' }}>
                     {TOPICS.map(t => <option key={t} value={t}>{t}</option>)}
                   </select>
-                  <button onClick={handleSave} disabled={!saveName.trim()} className="btn-primary text-[12px] disabled:opacity-40"
-                    style={{ padding: '7px 14px' }}>Save</button>
+                  <span title={!saveName.trim() ? "Enter a simulation name to save" : "Save simulation"} style={{ display: 'inline-flex' }}>
+                    <button onClick={handleSave} disabled={!saveName.trim()} className="btn-primary text-[12px] disabled:opacity-40"
+                      style={{ padding: '7px 14px', ...(!saveName.trim() ? { pointerEvents: 'none' } : {}) }}>Save</button>
+                  </span>
                   <button onClick={() => setShowSaveForm(false)} className="btn text-[12px]"
                     style={{ padding: '7px 12px' }}>✕</button>
                 </div>

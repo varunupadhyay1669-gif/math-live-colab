@@ -60,25 +60,28 @@ export default function SaveBoardBanner({ expiresAt, saving, onSave }: Props) {
         <polyline points="12 6 12 12 16 14" />
       </svg>
       <span style={{ color: '#312E81', fontWeight: 600 }}>{text}</span>
-      <button
-        onClick={onSave}
-        disabled={saving}
-        style={{
-          padding: '5px 14px',
-          borderRadius: 8,
-          border: 'none',
-          background: saving ? '#A5B4FC' : '#4F46E5',
-          color: '#fff',
-          fontWeight: 700,
-          fontSize: 12.5,
-          cursor: saving ? 'wait' : 'pointer',
-          letterSpacing: '0.01em',
-          boxShadow: 'none',
-        }}
-        aria-label="Save this board to my boards"
-      >
-        {saving ? 'Saving…' : 'Save to my boards'}
-      </button>
+      <span title={saving ? "Saving your board..." : undefined} style={{ display: 'inline-flex' }}>
+        <button
+          onClick={onSave}
+          disabled={saving}
+          style={{
+            padding: '5px 14px',
+            borderRadius: 8,
+            border: 'none',
+            background: saving ? '#A5B4FC' : '#4F46E5',
+            color: '#fff',
+            fontWeight: 700,
+            fontSize: 12.5,
+            cursor: saving ? 'wait' : 'pointer',
+            letterSpacing: '0.01em',
+            boxShadow: 'none',
+            ...(saving ? { pointerEvents: 'none' } : {})
+          }}
+          aria-label="Save this board to my boards"
+        >
+          {saving ? 'Saving…' : 'Save to my boards'}
+        </button>
+      </span>
     </div>
   );
 }
