@@ -279,3 +279,47 @@ as the teacher in the browser, clicked the real button with the download interce
 old export would have cropped it out)**, 164k ink pixels, **0 transparent pixels** (white page).
 tsc 0, build ✓, verify-sync 48 + stress9 9 sanity green (no server/sync changes in this cycle —
 client-only; full 185-check suite unaffected by construction).
+
+---
+
+## Cycle 8 — adversarial SYNC stress loop (user-requested; loop-until-dry)
+
+**Request:** run a loop of sync-specific stress scenarios until the product is extremely good.
+Method: contract-first — enumerate scenarios NOT covered by the existing 185 checks, write tests
+for the DESIRED behaviour, let failures expose real bugs, fix, re-run everything until two
+consecutive fully-green rounds.
+
+**Bugs found by the loop (both fixed):**
+1. **Server-restart seq poisoning (found by first-principles enumeration, pinned by stress12 R1 +
+   stress13 S1).** Clients keep a "highest serverSeq applied" filter that deliberately survives
+   socket blips — but after a redeploy/cold-start the server's counter restarts near 0, and if the
+   re-served lesson HTML is IDENTICAL the iframe never rebuilds, the filter is never zeroed, and
+   **every fresh event is silently dropped as stale** (sync appears dead after a mid-class
+   restart). Compounding: the hydration `revision` guard also rejected the fresh state (small
+   revision < big tracker). **Fix:** `session_state`/`sync_full_state` now carry the room's true
+   `interactionSeq`; both clients adopt it (and reset the revision guard) whenever the server's
+   counter is BEHIND their filter — the unambiguous restart signature.
+2. **Unbounded interaction events (found by stress13 S5 — failed pre-fix, exactly as designed).**
+   A 200KB `SYNC_INPUT` was relayed to every student AND journaled; with the journal at 2000
+   entries, persisted, and re-sent to every late joiner, one buggy/abusive client could grow room
+   memory + replay payloads by hundreds of MB. **Fix:** 32KB per-event cap (~1000× a normal click)
+   at the top of the `interaction` handler — oversized events are dropped entirely.
+
+**New coverage (43 checks across 2 suites):**
+- **stress12 (23):** session_state carries `interactionSeq`; 120-event burst arrives complete,
+  strictly seq-ordered, no dupes; journal-overflow latch (2050 paced events → late joiner gets NO
+  partial replay but still boots); zombie-overlap reconnect keeps the control grant driving;
+  clean holder exit auto-clears the grant AND unmutes the teacher (room can't freeze); revoke with
+  interaction ON falls back to teacher-only + journaled; zero cross-room leakage under concurrent
+  bursts; 21-toggle storm converges; request_replay hardening (non-member/malformed/spam);
+  250-stroke burst hydrates fully in order; sim_error truncation + malformed flood.
+- **stress13 (20, self-managed server on :3101 — includes a REAL hard-kill):** crash + respawn
+  restores lesson/seed/journal/toggle/interactionSeq from the file store and live sync resumes;
+  rapid upload×3 churn converges everyone on the final seed; student dropped mid-40-event-burst
+  replays the complete story on rejoin; math symbols/emoji survive journal + hydration
+  byte-identical; oversized-event cap; grant flip-flop A→B→A routes correctly at every step
+  (stale holder can never drive).
+
+**Convergence:** full 14-suite matrix (**228 checks**) run twice back-to-back on a live server —
+**228/228 green both rounds** (second round against the same server instance: no cross-run
+contamination). tsc 0, build ✓.

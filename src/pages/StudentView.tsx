@@ -289,6 +289,17 @@ export default function StudentView() {
   }, []);
 
   const applySessionState = useCallback((state: any) => {
+    // ── Server-restart detection ──
+    // The room's interaction counter can only be BEHIND our applied-seq
+    // filter if the room was rebuilt (redeploy / cold-start / reset). The
+    // seq filter deliberately survives socket blips — but after a restart
+    // with IDENTICAL lesson HTML the iframe never rebuilds, the filter is
+    // never zeroed, and every fresh event (seq restarting from 1) is
+    // silently dropped as "stale". Adopt the server's counter instead.
+    if (typeof state.interactionSeq === 'number' && state.interactionSeq < lastInboundSeqRef.current) {
+      lastInboundSeqRef.current = state.interactionSeq;
+      lastRevisionRef.current = 0;
+    }
     if (typeof state.revision === 'number') {
       if (state.revision < lastRevisionRef.current) return;
       lastRevisionRef.current = state.revision;

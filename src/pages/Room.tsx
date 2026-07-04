@@ -438,6 +438,17 @@ export default function Room() {
   }, [whiteboardMode, showTempContent]);
 
   const applySessionState = useCallback((state: any) => {
+    // ── Server-restart detection ──
+    // The room's interaction counter can only be BEHIND our applied-seq
+    // filter if the room was rebuilt (redeploy / cold-start / reset). Without
+    // this, two silent failures compound: the revision guard below rejects
+    // the fresh hydration (small revision < our big tracker), and the seq
+    // filter keeps dropping every new interaction as "stale" — sync appears
+    // dead after a mid-class restart even though everyone reconnected.
+    if (typeof state.interactionSeq === 'number' && state.interactionSeq < lastInboundSeqRef.current) {
+      lastInboundSeqRef.current = state.interactionSeq;
+      lastRevisionRef.current = 0;
+    }
     if (typeof state.revision === 'number') {
       if (state.revision < lastRevisionRef.current) return;
       lastRevisionRef.current = state.revision;
@@ -915,6 +926,11 @@ export default function Room() {
       }
     });
     newSocket.on("force_sync_state", (state: any) => {
+      // Server-restart detection — same rule as applySessionState.
+      if (typeof state.interactionSeq === 'number' && state.interactionSeq < lastInboundSeqRef.current) {
+        lastInboundSeqRef.current = state.interactionSeq;
+        lastRevisionRef.current = 0;
+      }
       if (typeof state.revision === 'number') {
         if (state.revision < lastRevisionRef.current) return;
         lastRevisionRef.current = state.revision;

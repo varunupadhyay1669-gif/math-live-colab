@@ -181,6 +181,15 @@ interface SessionStatePayload {
   bookmarks: Array<{ id: string; name: string; ts: number }>;
   // Shared deterministic-random seed (see RoomData.randomSeed).
   randomSeed: number;
+  // The room's CURRENT interaction sequence counter. Clients keep a
+  // "highest serverSeq applied" filter that deliberately survives socket
+  // blips — but after a server restart / room reset the counter restarts
+  // from 0, and if the lesson HTML is identical the client iframe never
+  // rebuilds, so the stale high filter silently DROPS every new event
+  // ("sync dead after redeploy"). Hydration handing over the server's
+  // true counter lets clients detect the restart (server seq BEHIND their
+  // filter) and adopt it. See stress12 R1.
+  interactionSeq: number;
 }
 
 async function startServer() {
@@ -1000,6 +1009,7 @@ async function startServer() {
       controlHolderName: room.controlHolderName,
       bookmarks: room.bookmarks.map(b => ({ id: b.id, name: b.name, ts: b.ts })),
       randomSeed: room.randomSeed,
+      interactionSeq: room.interactionSeq,
     };
   }
 
@@ -2407,6 +2417,13 @@ Build a widget that teaches: ${safePrompt}`;
       // stress6 P6 (malformed-payload). Also validate roomId/type defensively.
       if (!event || typeof event !== 'object' || typeof event.type !== 'string') return;
       if (typeof roomId !== 'string') return;
+      // SIZE CAP (found by stress13 S5): without it a single oversized event
+      // (e.g. a 200KB SYNC_INPUT value) was broadcast to every student AND
+      // journaled — and the journal (up to 2000 entries) is persisted and
+      // re-sent to every late joiner, so one abusive/buggy client could grow
+      // room memory + replay payloads by hundreds of MB. 32KB is ~1000x a
+      // normal click and far beyond any legitimate lesson input.
+      try { if (JSON.stringify(event).length > 32 * 1024) return; } catch { return; }
       const evtType = event.type;
       const lossTolerant = evtType === 'SYNC_CURSOR' || evtType === 'SYNC_SCROLL'
         || evtType === 'SYNC_DRAG' || evtType === 'SYNC_MOUSEMOVE';
