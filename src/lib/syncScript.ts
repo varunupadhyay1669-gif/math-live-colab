@@ -202,6 +202,20 @@ export const injectedSyncScript = `
       } catch (e) {}
     })();
 
+    // ── Pointer-capture shim ──
+    // Drag replay dispatches SYNTHETIC PointerEvents (pointerId 77777).
+    // Newer OrbitControls (three r137+) call setPointerCapture(pointerId) in
+    // their pointerdown handler; for a synthetic id that isn't an active
+    // pointer the browser throws NotFoundError INSIDE the sim's handler,
+    // killing its whole drag path. Pointer capture is an enhancement, not a
+    // requirement — degrade it to best-effort.
+    try {
+      var _spc = Element.prototype.setPointerCapture;
+      var _rpc = Element.prototype.releasePointerCapture;
+      Element.prototype.setPointerCapture = function (id) { try { return _spc.call(this, id); } catch (e) {} };
+      Element.prototype.releasePointerCapture = function (id) { try { return _rpc.call(this, id); } catch (e) {} };
+    } catch (e) {}
+
     // ── Sim load/error reporting ──
     // When a lesson fails on a STUDENT's machine (CDN script blocked by their
     // network, WebGL unavailable, a JS crash mid-boot) the teacher previously
@@ -275,6 +289,24 @@ export const injectedSyncScript = `
     function findElement(path) {
       if (!path) return null;
       try { return document.querySelector(path); } catch(e) { return null; }
+    }
+
+    // Replay a drag step as BOTH a PointerEvent and a MouseEvent. Modern
+    // libraries (OrbitControls r128+, most drag systems) listen ONLY for
+    // pointer events — replaying MouseEvents alone meant camera drags never
+    // reached them (the "teacher rotates, student's camera doesn't move"
+    // bug). Older/simple sims listen for mouse events, so both are sent —
+    // pointer first (native ordering). The setPointerCapture shim above
+    // keeps libraries that capture the synthetic pointerId from throwing.
+    function dispatchPointerAndMouse(el, kind, opts) {
+      try {
+        if (typeof PointerEvent === 'function') {
+          el.dispatchEvent(new PointerEvent('pointer' + kind, Object.assign({
+            pointerId: 77777, pointerType: 'mouse', isPrimary: true
+          }, opts)));
+        }
+      } catch (e) {}
+      try { el.dispatchEvent(new MouseEvent('mouse' + kind, opts)); } catch (e) {}
     }
 
     // ── Input events ──
@@ -418,6 +450,42 @@ export const injectedSyncScript = `
         enforceScrollLock();
       }
     }, { capture: true, passive: false });
+
+    // ── Wheel sync (camera zoom in 3D sims, custom wheel handlers) ──
+    // Wheel was never captured at all — OrbitControls-style zoom silently
+    // didn't sync (the reported "teacher zooms, student sees nothing").
+    // Coalesce bursts but PRESERVE THE TICK COUNT: OrbitControls zooms a
+    // fixed factor PER EVENT (sign-only, magnitude-blind), so N teacher
+    // ticks must replay as N events or the zoom levels drift apart.
+    // A direction change flushes immediately so up/down ticks never cancel.
+    var wheelAcc = null, wheelTimer = null;
+    function flushWheel() {
+      wheelTimer = null;
+      var w = wheelAcc; wheelAcc = null;
+      if (!w || !w.count) return;
+      window.parent.postMessage({
+        type: 'SYNC_WHEEL', path: w.path, x: w.x, y: w.y,
+        deltaY: w.deltaY, deltaX: w.deltaX, count: w.count, ctrlKey: w.ctrlKey
+      }, '*');
+    }
+    document.addEventListener('wheel', function(e) {
+      if (isRemote()) return;                          // never echo replayed wheels
+      if (interactionBlocked && !presenterMode) return; // view-only students don't emit
+      var dir = e.deltaY >= 0 ? 1 : -1;
+      if (wheelAcc && wheelAcc.dir !== dir) flushWheel();
+      if (!wheelAcc) {
+        wheelAcc = { count: 0, deltaY: 0, deltaX: 0, dir: dir, path: null, x: 0.5, y: 0.5, ctrlKey: false };
+      }
+      wheelAcc.count++;
+      wheelAcc.deltaY += e.deltaY;
+      wheelAcc.deltaX += e.deltaX;
+      wheelAcc.dir = dir;
+      wheelAcc.path = getElementPath(e.target);
+      wheelAcc.x = e.clientX / window.innerWidth;
+      wheelAcc.y = e.clientY / window.innerHeight;
+      wheelAcc.ctrlKey = !!e.ctrlKey;
+      if (!wheelTimer) wheelTimer = setTimeout(flushWheel, 30);
+    }, { capture: true, passive: true });
 
     // Block keyboard scroll keys in view-only mode
     document.addEventListener('keydown', function(e) {
@@ -912,14 +980,14 @@ export const injectedSyncScript = `
         var el = findElement(data.path);
         if (el) {
           enterRemote();
-          try { el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, clientX: data.x * window.innerWidth, clientY: data.y * window.innerHeight, button: data.button || 0 })); }
+          try { dispatchPointerAndMouse(el, 'down', { bubbles: true, cancelable: true, view: window, clientX: data.x * window.innerWidth, clientY: data.y * window.innerHeight, button: data.button || 0, buttons: 1 }); }
           finally { exitRemote(); }
         }
       } else if (data.type === 'REMOTE_MOUSEUP') {
         var el = findElement(data.path);
         if (el) {
           enterRemote();
-          try { el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, clientX: data.x * window.innerWidth, clientY: data.y * window.innerHeight })); }
+          try { dispatchPointerAndMouse(el, 'up', { bubbles: true, cancelable: true, view: window, clientX: data.x * window.innerWidth, clientY: data.y * window.innerHeight, button: 0, buttons: 0 }); }
           finally { exitRemote(); }
         }
       } else if (data.type === 'REMOTE_MOUSEMOVE') {
@@ -932,10 +1000,32 @@ export const injectedSyncScript = `
           var mmy = data.y * window.innerHeight;
           var mmEl = data.path ? findElement(data.path) : null;
           if (!mmEl) { try { mmEl = document.elementFromPoint(mmx, mmy); } catch(e) {} }
-          (mmEl || document).dispatchEvent(new MouseEvent('mousemove', {
-            bubbles: true, clientX: mmx, clientY: mmy, buttons: data.buttons || 1, view: window
-          }));
+          dispatchPointerAndMouse(mmEl || document, 'move', {
+            bubbles: true, cancelable: true, clientX: mmx, clientY: mmy, buttons: data.buttons || 1, view: window
+          });
         } finally { exitRemote(); }
+      } else if (data.type === 'REMOTE_WHEEL') {
+        // Camera-zoom sync for 3D sims. Re-dispatch the coalesced burst as
+        // data.count separate WheelEvents: sign-only handlers (OrbitControls
+        // zooms a fixed factor per EVENT) need the tick count; magnitude
+        // handlers get the per-event share of the total delta.
+        enterRemote();
+        try {
+          var wx = (typeof data.x === 'number' ? data.x : 0.5) * window.innerWidth;
+          var wy = (typeof data.y === 'number' ? data.y : 0.5) * window.innerHeight;
+          var wEl = data.path ? findElement(data.path) : null;
+          if (!wEl) { try { wEl = document.elementFromPoint(wx, wy); } catch(e) {} }
+          wEl = wEl || document.body || document.documentElement;
+          var wn = Math.max(1, Math.min(12, Math.round(data.count || 1)));
+          var perY = (data.deltaY || 0) / wn;
+          var perX = (data.deltaX || 0) / wn;
+          for (var wi = 0; wi < wn; wi++) {
+            wEl.dispatchEvent(new WheelEvent('wheel', {
+              bubbles: true, cancelable: true, view: window,
+              clientX: wx, clientY: wy, deltaY: perY, deltaX: perX, deltaMode: 0, ctrlKey: !!data.ctrlKey
+            }));
+          }
+        } catch(ignore) {} finally { exitRemote(); }
       } else if (data.type === 'REMOTE_DOM') {
         // The presenter (teacher) is the single source of truth: its iframe runs
         // the live, INTERACTIVE simulation that everyone else mirrors. Never

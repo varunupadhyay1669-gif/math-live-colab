@@ -100,9 +100,39 @@ async function BD6_teacherToStudent() {
   await got.then(() => ok('teacher click still reaches the student')).catch(e => bad('teacher->student', e.message));
 }
 
+// BD7: teacher WHEEL (3D camera zoom) broadcasts to students with tick count intact
+async function BD7_teacherWheelToStudent() {
+  console.log('BD7: teacher SYNC_WHEEL -> student (camera zoom sync)');
+  const room = rid('bd7');
+  const t = await joinTeacher(room); await upload(t, room);
+  const s = await joinStudent(room, 'Stu');
+  await delay(150);
+  const got = on1(s, 'interaction', { match: p => p?.type === 'SYNC_WHEEL' && p.id === 'wz1', timeout: 2500 });
+  t.emit('interaction', { roomId: room, event: { type: 'SYNC_WHEEL', id: 'wz1', path: 'canvas', deltaY: -360, count: 3 } });
+  const p = await got.catch(() => null);
+  assert(!!p, 'student receives the teacher WHEEL event', '');
+  assert(!!p && p.count === 3 && p.deltaY === -360, 'tick count + delta preserved through routing', p ? `count=${p.count} dY=${p.deltaY}` : '');
+}
+
+// BD8: interactive student WHEEL relays to the TEACHER only (no leak to other students)
+async function BD8_studentWheelTeacherOnly() {
+  console.log('BD8: interactive student SYNC_WHEEL -> teacher only');
+  const room = rid('bd8');
+  const t = await joinTeacher(room); await upload(t, room);
+  t.emit('toggle_student_interaction', { roomId: room, allowed: true }); await delay(200);
+  const a = await joinStudent(room, 'Ann');
+  const b = await joinStudent(room, 'Bob');
+  const tGets = on1(t, 'interaction', { match: p => p?.id === 'wz2', timeout: 2500 });
+  const bLeak = none(b, 'interaction', 900);
+  a.emit('interaction', { roomId: room, event: { type: 'SYNC_WHEEL', id: 'wz2', path: 'canvas', deltaY: 120, count: 1 } });
+  await tGets.then(() => ok('teacher receives the interactive student WHEEL')).catch(e => bad('student wheel -> teacher', e.message));
+  assert(!((await bLeak)?.id === 'wz2'), 'student wheel does NOT leak to other students', '');
+}
+
 async function run() {
   const tests = [BD1_clickReachesTeacher, BD2_scrollReachesTeacher, BD3_viewOnlyStaysOneWay,
-    BD4_notToOtherStudents, BD5_controlHolderRoomWide, BD6_teacherToStudent];
+    BD4_notToOtherStudents, BD5_controlHolderRoomWide, BD6_teacherToStudent,
+    BD7_teacherWheelToStudent, BD8_studentWheelTeacherOnly];
   for (const test of tests) { try { await test(); } catch (e) { bad(test.name + ' threw', e.message); } await delay(150); }
   console.log(`\nSTRESS8 RESULT: ${pass} passed, ${fail} failed`);
   if (fails.length) { console.log('FAILURES:'); fails.forEach(f => console.log('  - ' + f)); }

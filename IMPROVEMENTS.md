@@ -323,3 +323,48 @@ consecutive fully-green rounds.
 **Convergence:** full 14-suite matrix (**228 checks**) run twice back-to-back on a live server —
 **228/228 green both rounds** (second round against the same server instance: no cross-run
 contamination). tsc 0, build ✓.
+
+---
+
+## Cycle 9 — 3D camera sync: wheel zoom + OrbitControls drag (reported bug)
+
+**Reported:** teacher's 3D sim (three r128 + OrbitControls + post-processing) loads and syncs its
+buttons, but **zooming and 360° orbiting don't reach the student**.
+
+**Root causes (both engine gaps, not the sim's fault):**
+1. **Wheel was never captured.** The sync script listened to wheel ONLY to block it in view-only
+   mode — there was no SYNC_WHEEL event, so no sim's zoom could ever sync.
+2. **Drag replay used the wrong event type.** OrbitControls (r128+) listens for POINTER events;
+   the engine replayed drags as synthetic MouseEvents, which pointer-based libraries never hear.
+   (Simple mouse-handler sims worked, which masked the gap.)
+
+**Fix (syncScript.ts + plumbing):**
+- **SYNC_WHEEL capture** — coalesces bursts but **preserves the tick count** (OrbitControls zooms a
+  fixed factor per EVENT, sign-only; N teacher ticks must replay as N events or zoom levels drift).
+  Direction changes flush immediately. View-only students don't emit; remote replays don't echo.
+- **REMOTE_WHEEL replay** — re-dispatches count WheelEvents on the path-resolved element
+  (elementFromPoint fallback).
+- **Dual Pointer+Mouse dispatch** for REMOTE_MOUSEDOWN/MOUSEMOVE/MOUSEUP (pointer first, native
+  ordering) so both modern pointer-based and legacy mouse-based sims follow drags.
+- **setPointerCapture shim** — newer OrbitControls (r137+) call setPointerCapture(pointerId) on our
+  synthetic pointer id and would throw NotFoundError inside their own handler; degraded to
+  best-effort.
+- Plumbing: SYNC_WHEEL rate-limited as loss-tolerant; excluded from both clients' snapshot-request
+  triggers; journal saves now gated to replayable types (wheel streams no longer schedule disk
+  writes). Not journaled (high-frequency, like scroll/mousemove — camera state for late joiners
+  remains out of scope, same as drags).
+
+**Verification (run, not assumed):** 2-iframe harness with the USER'S EXACT sim (byte-identical
+except let→var on one line so the harness can read the camera) + the real seededSyncScript:
+- **Zoom full loop:** 6 synthetic wheel ticks on the teacher canvas → 6/6 captured through the
+  coalescer → replayed → **student camera distance 33.54 → 24.66, exactly matching the teacher's**.
+- **Orbit replay:** REMOTE_MOUSEDOWN/8×MOVE/UP → student's r128 OrbitControls rotated the camera
+  (azimuth 0 → −0.053 rad) — was completely dead pre-fix.
+- **Click regression:** REMOTE_CLICK still advances the sim's step button.
+- New **stress8 BD7/BD8** (suite 6→10 checks): teacher wheel broadcasts with count+delta intact;
+  interactive student wheel relays teacher-only, no leak to other students.
+- Full 14-suite matrix: **232 green** (one stress13 crash-respawn timing flake in the matrix run;
+  clean on three direct runs). tsc 0, build ✓.
+
+**Honest scope note:** touch pinch-zoom (two-finger dolly on tablets) is not yet captured — only
+wheel + drag. Multi-touch replay is a separate, larger piece if it's ever needed.

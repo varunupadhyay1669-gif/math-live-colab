@@ -2426,7 +2426,7 @@ Build a widget that teaches: ${safePrompt}`;
       try { if (JSON.stringify(event).length > 32 * 1024) return; } catch { return; }
       const evtType = event.type;
       const lossTolerant = evtType === 'SYNC_CURSOR' || evtType === 'SYNC_SCROLL'
-        || evtType === 'SYNC_DRAG' || evtType === 'SYNC_MOUSEMOVE';
+        || evtType === 'SYNC_DRAG' || evtType === 'SYNC_MOUSEMOVE' || evtType === 'SYNC_WHEEL';
       if (!checkRateLimit(socket.id, lossTolerant)) return; // Rate limited
       updateRoomActivity(roomId);
       event.userId = socket.id;
@@ -2456,7 +2456,7 @@ Build a widget that teaches: ${safePrompt}`;
         // Journal discrete events so late joiners can replay the lesson's
         // interaction stream from the current baseline (see eventLog).
         journalEvent(room, event);
-        scheduleJournalSave(roomId);
+        if (REPLAYABLE_EVENT_TYPES.has(event.type)) scheduleJournalSave(roomId);
         // Teacher → broadcast to all students (one-way sync)
         socket.to(roomId).emit('interaction', event);
       } else if (user?.role === 'student') {
@@ -2503,7 +2503,7 @@ Build a widget that teaches: ${safePrompt}`;
           // determinism. When a student holds control the teacher becomes a
           // mirror, so this single stream drives every screen identically.
           journalEvent(room, event);
-          scheduleJournalSave(roomId);
+          if (REPLAYABLE_EVENT_TYPES.has(event.type)) scheduleJournalSave(roomId);
           socket.to(roomId).emit('interaction', event);
         } else if (room.studentInteractionAllowed) {
           // INTERACTIVE MODE (no control grant): the student is working their
@@ -2525,7 +2525,7 @@ Build a widget that teaches: ${safePrompt}`;
           // every rebuild/late-join. We still relay LIVE to the teacher ONLY
           // (not room-wide), so a rare multi-student room isn't driven by it.
           journalEvent(room, event);
-          scheduleJournalSave(roomId);
+          if (REPLAYABLE_EVENT_TYPES.has(event.type)) scheduleJournalSave(roomId);
           const teacherId = resolveTeacherSocketId();
           if (teacherId) io.to(teacherId).emit('interaction', event);
         }

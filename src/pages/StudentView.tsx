@@ -1086,7 +1086,7 @@ export default function StudentView() {
       // trigger a full-DOM snapshot (that was wiping the teacher's focused
       // field). Snapshot only on discrete navigation (clicks, pointer, keys),
       // debounced so a burst collapses to one.
-      if (type !== 'SYNC_SCROLL' && type !== 'SYNC_MOUSEMOVE' && type !== 'SYNC_INPUT' && type !== 'SYNC_CHANGE') {
+      if (type !== 'SYNC_SCROLL' && type !== 'SYNC_MOUSEMOVE' && type !== 'SYNC_INPUT' && type !== 'SYNC_CHANGE' && type !== 'SYNC_WHEEL') {
         if (studentSnapTimerRef.current) clearTimeout(studentSnapTimerRef.current);
         studentSnapTimerRef.current = setTimeout(() => {
           postToIframe({ type: 'REQUEST_HTML', requestId: 'sstate-' + Date.now() });

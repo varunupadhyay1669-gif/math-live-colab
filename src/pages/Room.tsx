@@ -1417,7 +1417,7 @@ export default function Room() {
           const remoteEvent = { ...e.data, type: type.replace('SYNC_', 'REMOTE_') };
           postToMirror(remoteEvent);
         }
-        if (!mirrorOnly && type !== 'SYNC_CURSOR' && type !== 'SYNC_SCROLL' && type !== 'SYNC_ZOOM' && type !== 'SYNC_MOUSEMOVE') {
+        if (!mirrorOnly && type !== 'SYNC_CURSOR' && type !== 'SYNC_SCROLL' && type !== 'SYNC_ZOOM' && type !== 'SYNC_MOUSEMOVE' && type !== 'SYNC_WHEEL') {
           // SYNC_MOUSEMOVE streams during a drag; debouncing a snapshot per
           // move would storm the iframe. The trailing SYNC_MOUSEUP triggers
           // the authoritative snapshot once the gesture settles.
