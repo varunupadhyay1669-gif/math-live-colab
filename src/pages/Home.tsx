@@ -337,17 +337,26 @@ export default function Home() {
                       onChange={(e) => setLoginEmail(e.target.value)}
                       onKeyDown={(e) => e.key === "Enter" && sendMagicLink()}
                     />
-                    <button
-                      className="ml-dark-btn ml-dark-btn-primary"
-                      onClick={sendMagicLink}
-                      disabled={!loginEmail.trim() || sendingLink}
-                      style={{ width: "100%" }}
+                    <span
+                      title={
+                        !(!loginEmail.trim() || sendingLink) ? undefined
+                        : sendingLink ? "Sending..."
+                        : "Please enter your email"
+                      }
+                      style={{ display: "block", width: "100%" }}
                     >
-                      {sendingLink ? "Sending…" : "Email me a sign-in link"}
-                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                        <path d="M5 12h14M13 6l6 6-6 6" />
-                      </svg>
-                    </button>
+                      <button
+                        className="ml-dark-btn ml-dark-btn-primary"
+                        onClick={sendMagicLink}
+                        disabled={!loginEmail.trim() || sendingLink}
+                        style={{ width: "100%", pointerEvents: (!loginEmail.trim() || sendingLink) ? "none" : undefined }}
+                      >
+                        {sendingLink ? "Sending…" : "Email me a sign-in link"}
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                          <path d="M5 12h14M13 6l6 6-6 6" />
+                        </svg>
+                      </button>
+                    </span>
                     {loginError && (
                       <p style={{ color: "#F87171", fontSize: 12.5, textAlign: "center" }}>{loginError}</p>
                     )}
@@ -396,17 +405,25 @@ export default function Home() {
                 onChange={(e) => setClassCode(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && createRoom()}
               />
-              <button
-                className="ml-dark-btn ml-dark-btn-primary"
-                onClick={createRoom}
-                disabled={!teacherName.trim()}
-                style={{ width: "100%" }}
+              <span
+                title={
+                  teacherName.trim() ? undefined
+                  : "Please enter what you are teaching"
+                }
+                style={{ display: "block", width: "100%" }}
               >
-                Create room
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                  <path d="M5 12h14M13 6l6 6-6 6" />
-                </svg>
-              </button>
+                <button
+                  className="ml-dark-btn ml-dark-btn-primary"
+                  onClick={createRoom}
+                  disabled={!teacherName.trim()}
+                  style={{ width: "100%", pointerEvents: !teacherName.trim() ? "none" : undefined }}
+                >
+                  Create room
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <path d="M5 12h14M13 6l6 6-6 6" />
+                  </svg>
+                </button>
+              </span>
                 </>
               )}
               <div className="ml-dark-back-row">
@@ -436,17 +453,25 @@ export default function Home() {
                 value={roomCode}
                 onChange={(e) => setRoomCode(e.target.value.trim())}
               />
-              <button
-                type="submit"
-                className="ml-dark-btn ml-dark-btn-primary"
-                disabled={!roomCode.trim() || !studentName.trim()}
-                style={{ width: "100%" }}
+              <span
+                title={
+                  !(!roomCode.trim() || !studentName.trim()) ? undefined
+                  : "Please enter your name and room code"
+                }
+                style={{ display: "block", width: "100%" }}
               >
-                Join room
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                  <path d="M5 12h14M13 6l6 6-6 6" />
-                </svg>
-              </button>
+                <button
+                  type="submit"
+                  className="ml-dark-btn ml-dark-btn-primary"
+                  disabled={!roomCode.trim() || !studentName.trim()}
+                  style={{ width: "100%", pointerEvents: (!roomCode.trim() || !studentName.trim()) ? "none" : undefined }}
+                >
+                  Join room
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <path d="M5 12h14M13 6l6 6-6 6" />
+                  </svg>
+                </button>
+              </span>
               <div className="ml-dark-back-row">
                 <button
                   type="button"

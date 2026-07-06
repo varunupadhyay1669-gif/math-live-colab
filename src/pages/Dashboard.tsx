@@ -188,17 +188,26 @@ export default function Dashboard() {
               onChange={(e) => setLabel(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && handleCreate()}
             />
-            <button
-              className="ml-dark-btn ml-dark-btn-primary"
-              onClick={handleCreate}
-              disabled={!studentName.trim() || busy}
-              style={{ width: "100%" }}
+            <span
+              title={
+                !(!studentName.trim() || busy) ? undefined
+                : busy ? "Creating..."
+                : "Please enter a student name"
+              }
+              style={{ display: "block", width: "100%" }}
             >
-              {busy ? "Creating…" : "Create class"}
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                <path d="M12 5v14M5 12h14" />
-              </svg>
-            </button>
+              <button
+                className="ml-dark-btn ml-dark-btn-primary"
+                onClick={handleCreate}
+                disabled={!studentName.trim() || busy}
+                style={{ width: "100%", pointerEvents: (!studentName.trim() || busy) ? "none" : undefined }}
+              >
+                {busy ? "Creating…" : "Create class"}
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M12 5v14M5 12h14" />
+                </svg>
+              </button>
+            </span>
           </div>
 
           {error && (
