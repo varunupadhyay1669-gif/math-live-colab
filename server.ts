@@ -1610,15 +1610,29 @@ Build a widget that teaches: ${safePrompt}`;
         socket.emit('upload_error', { message: `Lesson too large (${(html.length / 1024 / 1024).toFixed(1)}MB, max 2MB)` });
         return;
       }
-      // Update the file content
+      // ── Idempotent re-seed vs. genuine new content ──
+      // run_preview is emitted not only when the teacher runs NEW html, but
+      // ALSO to re-seed the server from the teacher's cache: on reconnect, and
+      // when answering request_html_sync (a student joined while the teacher was
+      // on the whiteboard). Those carry the SAME html. Resetting the baseline
+      // there was a silent class-killer: it wiped the interaction journal (and
+      // reseeded the shared RNG) mid-lesson, so any later catch-up / late-join
+      // had nothing to replay — the teacher (or student) was stranded on the
+      // lesson's home screen while everyone else was mid-quiz. Only a genuine
+      // content change starts a fresh baseline; an identical re-seed preserves
+      // the journal + seed. (Found by browser-reproducing the whiteboard
+      // round-trip — see stress14.)
+      const htmlChanged = room.lastRunHtml !== html;
       const file = room.files.find(f => f.id === fileId);
       if (file) {
         file.html = html;
       }
       room.activeFileId = fileId;
       room.lastRunHtml = html;
-      room.liveSnapshotHtml = null;
-      newContentBaseline(room);
+      if (htmlChanged) {
+        room.liveSnapshotHtml = null;
+        newContentBaseline(room);
+      }
       const revision = bumpRevision(room);
       broadcastFullState(roomId, room, 'run_preview');
       // Send to everyone (including sender for confirmation)

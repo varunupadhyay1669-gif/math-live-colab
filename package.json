@@ -26,7 +26,8 @@
     "stress10": "node stress10.mjs",
     "stress11": "node stress11.mjs",
     "stress12": "node stress12.mjs",
-    "stress13": "node stress13.mjs"
+    "stress13": "node stress13.mjs",
+    "stress14": "node stress14.mjs"
   },
   "dependencies": {
     "@google/genai": "^1.29.0",

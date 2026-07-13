@@ -368,3 +368,47 @@ except let→var on one line so the harness can read the camera) + the real seed
 
 **Honest scope note:** touch pinch-zoom (two-finger dolly on tablets) is not yet captured — only
 wheel + drag. Multi-touch replay is a separate, larger piece if it's ever needed.
+
+---
+
+## Cycle 10 — the REAL desync root cause: run_preview wiped the journal (browser-found)
+
+**Reported (3rd time on this lesson pattern):** a screen-flipping quiz lesson still desynced — the
+teacher ended up on the home/map screen while the student was mid-quiz — despite all prior fixes.
+
+**Method that finally caught it: browser reproduction of the FULL flow** (reasoning alone had
+missed it three times). In a real teacher Room + a socket student driving the actual Ratio-Rush
+lesson: Phase 1 (student answers Q1–Q3) mirrored fine; teacher → whiteboard; student → Q5; teacher
+returns → **STUCK ON HOME, 0 stars**. The console logs were the smoking gun:
+`teacher re-seeded HTML from cache in response to request_html_sync`.
+
+**Root cause:** `run_preview` is emitted not only for NEW content but also to **re-seed the server
+from the teacher's cache** — on reconnect, and (critically) when a student joins while the teacher
+is on the whiteboard (`request_html_sync`). Those carry the SAME html, but `run_preview`
+**unconditionally called `newContentBaseline`**, which **wiped the interaction journal and reseeded
+the shared RNG mid-lesson**. So when the teacher's iframe remounted and asked for the journal to
+catch up, there was almost nothing left to replay — stranding them on the lesson's home screen.
+This silently sabotaged EVERY catch-up / late-join whenever a join or reconnect happened mid-lesson.
+
+**Fix (server):** `run_preview` now resets the baseline **only when the html actually changed**; an
+identical re-seed preserves the journal + seed. (verify-sync Test N still passes — it re-runs
+*different* html.)
+
+**Client hardening (same cycle, all browser-verified):**
+- **Catch-up drops the stale queued events** instead of flushing them: events captured while the
+  lesson iframe was unmounted target a screen the fresh iframe isn't on and, with REMOTE_CLICK's
+  retry, would DOUBLE-APPLY against the authoritative replay and over-advance the quiz.
+- **Live events are held during the replay window** (3s watchdog so it can never wedge), so a click
+  landing mid-catch-up can't double-apply.
+- **Self-heal backstop:** a replayed click that can't resolve after ~600ms of retries means the two
+  sides have drifted to different screens → the iframe posts `SYNC_REPLAY_MISS` → the teacher force-
+  remounts + full-journal catch-up (rate-limited to once / 4s). This corrects ANY residual drift,
+  whatever the cause. The student side intercepts the signal so it never leaks to the room stream.
+
+**Verification (run, not assumed):** browser end-to-end on the user's EXACT Ratio-Rush lesson —
+after the whiteboard round-trip the teacher lands **exactly on "Question 5 of 7", 4 stars, "What is
+the ratio of apples to bananas?"** (was stuck on home pre-fix). New **stress14 (6 checks)** pins the
+run_preview idempotency contract (same html preserves journal + seed; new html resets both; nav
+survives a mid-lesson re-seed). Full **15-suite matrix: 238 green** (verify-sync 48, stress 19,
+stress2 18, stress3 11, stress4 26, stress5 13, stress6 16, stress7 2, stress8 10, stress9 9,
+stress10 6, stress11 11, stress12 23, stress13 20, stress14 6). tsc 0, build clean.

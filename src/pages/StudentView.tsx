@@ -262,6 +262,7 @@ export default function StudentView() {
   const pendingMessagesRef = useRef<any[]>([]);
   const syncEpochRef = useRef(0);
   const lastInboundSeqRef = useRef(0);
+  const lastStudentMissAtRef = useRef(0);
   // Debounce for streaming the student's own DOM snapshot up to the teacher
   // (absolute-state sync so the teacher tracks the student's true state).
   const studentSnapTimerRef = useRef<ReturnType<typeof setTimeout>>();
@@ -1043,6 +1044,21 @@ export default function StudentView() {
       // anyone's iframe as a REMOTE_* event).
       if (type === 'SYNC_SIM_ERROR') {
         socket.emit('sim_error', { roomId, message: e.data.message, source: e.data.source });
+        return;
+      }
+
+      // Internal self-heal signal from THIS iframe (a replayed teacher click
+      // couldn't find its target). It is NOT a real interaction — drop it so it
+      // never gets emitted to the server and replayed into the room. (The
+      // teacher-follows-student direction, where drift actually bites, self-heals
+      // on the teacher side in Room.tsx. Requesting the current content is a
+      // harmless nudge that re-delivers the journal.)
+      if (type === 'SYNC_REPLAY_MISS') {
+        const now = Date.now();
+        if (now - lastStudentMissAtRef.current > 4000) {
+          lastStudentMissAtRef.current = now;
+          socket.emit('request_content', { roomId });
+        }
         return;
       }
 

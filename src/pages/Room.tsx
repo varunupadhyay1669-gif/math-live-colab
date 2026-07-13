@@ -411,6 +411,31 @@ export default function Room() {
   const prevAwayRef = useRef(false);
   const lessonCatchupRef = useRef(false);
   const pendingFullReplayRef = useRef(false);
+  const fullReplayWatchdogRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Self-heal: bumping this forces the lesson iframe to remount from scratch.
+  // Triggered when a replayed click can't find its target (the two sides have
+  // drifted to different screens) — the remount + full-journal catch-up snaps
+  // the teacher back onto the student's real screen.
+  const [iframeRebuildNonce, setIframeRebuildNonce] = useState(0);
+  const lastResyncAtRef = useRef(0);
+  // Ref mirrors so the stable self-heal callback reads live surface state.
+  const whiteboardModeRef = useRef(false);
+  const showTempContentRef = useRef(false);
+  useEffect(() => { whiteboardModeRef.current = whiteboardMode; }, [whiteboardMode]);
+  useEffect(() => { showTempContentRef.current = showTempContent; }, [showTempContent]);
+
+  // Self-heal a drifted lesson iframe: mark a catch-up and force a fresh
+  // remount (new blob URL → reload → handleIframeLoad → request_replay → full
+  // journal replay). Rate-limited so a genuinely broken journal can't loop.
+  const forceLessonResync = useCallback((reason: string) => {
+    if (whiteboardModeRef.current || showTempContentRef.current) return; // only the live lesson iframe
+    const now = Date.now();
+    if (now - lastResyncAtRef.current < 4000) return; // at most once per 4s
+    lastResyncAtRef.current = now;
+    lessonCatchupRef.current = true;
+    setIframeRebuildNonce(n => n + 1);
+    console.info('[sync] self-heal resync:', reason);
+  }, []);
 
   // THE single entry point for changing the lesson sim's HTML. Dedupe lives
   // here (identical html → no rebuild, sim instance survives) and a genuine
@@ -780,6 +805,16 @@ export default function Room() {
     });
 
     newSocket.on("interaction", (event: any) => {
+      // While a full catch-up replay is in flight (the teacher just returned to
+      // the lesson from the whiteboard / temp content and asked for the whole
+      // journal), don't apply live events into the fresh iframe: the replay is
+      // authoritative and, because Socket.IO preserves server→client order,
+      // either delivers this event before the replay (so the replay includes
+      // it) or after (so this handler applies it once the flag has cleared).
+      // Applying here would double-apply against the replay and over-advance a
+      // quiz. Cursor is exempt — it's ephemeral and never replayed. A 3s
+      // watchdog in handleIframeLoad guarantees the flag can never wedge.
+      if (pendingFullReplayRef.current && event.type !== 'SYNC_CURSOR') return;
       if (typeof event.serverSeq === 'number') {
         if (event.serverSeq <= lastInboundSeqRef.current) return;
         lastInboundSeqRef.current = event.serverSeq;
@@ -998,6 +1033,7 @@ export default function Room() {
       if (pendingFullReplayRef.current) {
         lastInboundSeqRef.current = 0;
         pendingFullReplayRef.current = false;
+        if (fullReplayWatchdogRef.current) { clearTimeout(fullReplayWatchdogRef.current); fullReplayWatchdogRef.current = null; }
       }
       let applied = 0;
       for (const ev of events.slice(0, 400)) {
@@ -1272,11 +1308,20 @@ export default function Room() {
   // ── Iframe onLoad: flush pending messages ──
   const handleIframeLoad = useCallback(() => {
     iframeReadyRef.current = true;
-    // Flush any pending messages
+    // Are we about to do a full catch-up replay (teacher returned to the lesson
+    // from the whiteboard / temp content)? If so the queued events are STALE —
+    // they were captured while the iframe was unmounted, they target a screen
+    // this fresh iframe isn't on, and (because REMOTE_CLICK now retries for a
+    // target that appears late) they would DOUBLE-APPLY against the
+    // authoritative replay below and over-advance the quiz. The replay already
+    // contains them in order, so drop the queue instead of flushing it.
+    const doingCatchup = lessonCatchupRef.current && !whiteboardMode && !showTempContent && !!socket;
     const pending = pendingMessagesRef.current;
     pendingMessagesRef.current = [];
-    for (const msg of pending) {
-      iframeRef.current?.contentWindow?.postMessage(msg, '*');
+    if (!doingCatchup) {
+      for (const msg of pending) {
+        iframeRef.current?.contentWindow?.postMessage(msg, '*');
+      }
     }
     // Re-send current state. presenter/interaction follow sole-writer so a
     // teacher who handed off control reloads as a mirror, not a driver.
@@ -1298,13 +1343,15 @@ export default function Room() {
     // REAL screen (e.g. the quiz question the student is on) instead of being
     // stranded on the map. Only the away→back transition trips lessonCatchupRef,
     // so this never fires during normal join / reconnect / live operation.
-    if (lessonCatchupRef.current && !whiteboardMode && !showTempContent) {
+    if (doingCatchup) {
       lessonCatchupRef.current = false;
-      if (socket) {
-        pendingFullReplayRef.current = true;
-        lastInboundSeqRef.current = 0;
-        socket.emit('request_replay', { roomId });
-      }
+      pendingFullReplayRef.current = true;
+      lastInboundSeqRef.current = 0;
+      socket!.emit('request_replay', { roomId });
+      // Watchdog: if the replay never arrives (server hiccup), release the
+      // live-event hold so sync resumes rather than staying frozen.
+      if (fullReplayWatchdogRef.current) clearTimeout(fullReplayWatchdogRef.current);
+      fullReplayWatchdogRef.current = setTimeout(() => { pendingFullReplayRef.current = false; }, 3000);
     }
   }, [scrollSyncEnabled, stepLockEnabled, currentStep, zoomLevel, controlHolderName, socket, whiteboardMode, showTempContent, roomId]);
 
@@ -1396,6 +1443,17 @@ export default function Room() {
         return;
       }
 
+      // SELF-HEAL: a replayed click couldn't find its target after retries —
+      // this iframe has drifted onto a different screen than the driver
+      // (a stateful quiz where a nav/answer replay was missed). Force a fresh
+      // remount + full-journal catch-up so the teacher snaps back onto the
+      // student's real screen. Rate-limited inside forceLessonResync. Must NOT
+      // fall through to the interaction relay (it's not a real interaction).
+      if (type === 'SYNC_REPLAY_MISS') {
+        forceLessonResync('remote-click missed: ' + (e.data.path || '?'));
+        return;
+      }
+
       // Only relay actual SYNC_ interaction events
       if (type.startsWith('SYNC_')) {
         // Check scroll sync gate
@@ -1430,7 +1488,7 @@ export default function Room() {
       window.removeEventListener("message", handler);
       if (snapshotTimerRef.current) clearTimeout(snapshotTimerRef.current);
     };
-  }, [socket, roomId, scrollSyncEnabled, dualView, postToMirror]);
+  }, [socket, roomId, scrollSyncEnabled, dualView, postToMirror, forceLessonResync]);
 
   // SINGLE-WRITER: the teacher drives the sim by default, but when the teacher
   // hands the chalk to a student, the teacher becomes a MIRROR - its sim is
@@ -1492,7 +1550,7 @@ export default function Room() {
     // reset to students — for a routine toolbar button. Keyed on randomSeed so
     // a new lesson baseline rebuilds the sim with the matching seed.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [previewHtml, randomSeed]);
+  }, [previewHtml, randomSeed, iframeRebuildNonce]);
 
   // ── Sync code when active file changes ──
   useEffect(() => {

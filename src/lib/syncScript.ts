@@ -859,7 +859,17 @@ export const injectedSyncScript = `
           var rcRetry = function() {
             var el2 = findElement(data.path);
             if (el2) { doRemoteClick(el2); return; }
-            if (++rcTries < 6) setTimeout(rcRetry, 100);
+            if (++rcTries < 6) { setTimeout(rcRetry, 100); return; }
+            // SELF-HEAL: a replayed click that never resolves after ~600ms means
+            // this screen genuinely doesn't contain the element the OTHER side
+            // clicked — i.e. the two sides have DRIFTED to different screens (a
+            // stateful quiz where a nav/answer replay went missing). Tell the
+            // parent so it can rebuild this iframe from the authoritative journal
+            // instead of silently staying stuck. Skipped for whole-document
+            // paths (body/html), which aren't real drift signals.
+            if (data.path !== 'body' && data.path !== 'html' && data.path.length > 2) {
+              window.parent.postMessage({ type: 'SYNC_REPLAY_MISS', path: data.path }, '*');
+            }
           };
           setTimeout(rcRetry, 60);
         }
