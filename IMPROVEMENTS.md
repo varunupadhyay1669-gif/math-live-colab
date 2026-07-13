@@ -412,3 +412,42 @@ run_preview idempotency contract (same html preserves journal + seed; new html r
 survives a mid-lesson re-seed). Full **15-suite matrix: 238 green** (verify-sync 48, stress 19,
 stress2 18, stress3 11, stress4 26, stress5 13, stress6 16, stress7 2, stress8 10, stress9 9,
 stress10 6, stress11 11, stress12 23, stress13 20, stress14 6). tsc 0, build clean.
+
+---
+
+## Cycle 11 — LIVE MIRROR: an "impossible to desync" sync engine (new architecture)
+
+**User ask:** "build a system that makes it impossible for this sync issue to ever happen —
+whatever the teacher sees the student sees, whatever the student does the teacher sees."
+
+**Why a new engine:** the input-replay model (syncScript) is fundamentally leaky — each side
+INDEPENDENTLY re-derives lesson state by re-running clicks, relying on determinism + a journal.
+Every past desync was a leak (dropped/reordered event, reconnect, re-seed, non-determinism). No
+amount of patching makes it *impossible* to drift.
+
+**The architecture that makes it structurally impossible (`src/lib/mirrorScript.ts`):** exactly ONE
+side runs the lesson (the "source" / authoritative instance). Everyone else renders a live MIRROR of
+the source's REAL DOM (+ canvas pixels) and NEVER runs the lesson JS — so a follower literally
+cannot be on a different screen than the source. A follower's clicks are FORWARDED to the source,
+applied on the real lesson there, and the resulting DOM streams back to everyone.
+- Source: a `MutationObserver` serializes the live body on change (leading-edge send = same-tick
+  mirror, no lag) + a content-deduped 500ms heartbeat (self-correcting: any missed/late snapshot
+  converges within 500ms) + a canvas-frame channel for `<canvas>`/WebGL (skips fixed overlays).
+- Follower: a script-STRIPPED shell (`stripLessonScripts`) + the mirror agent; applies snapshots
+  via `body.innerHTML`, paints canvas frames, forwards its own input. A (re)loaded follower asks for
+  a full snapshot and is instantly correct.
+- Result: NO journal, NO replay, NO seed, NO determinism assumptions. Late-join / reconnect =
+  "send me the current DOM" → correct in one round-trip.
+
+**Proof (browser-verified, isolated 2-iframe harness on a faithful clone of the Ratio-Rush
+mechanics — screens toggled by JS, dynamic options, localStorage):**
+- 9/9 walkthrough steps EXACT match, BOTH directions: source-driven nav AND follower-driven clicks
+  (answer / Next / pick a world) all forwarded + mirrored identically (screen, stars, feedback).
+- **The killer case:** with the source mid-quiz (Q3/★2), RELOADING the follower (the whiteboard
+  round-trip / reconnect that broke the old engine every time) → the follower instantly re-shows
+  Q3/★2 and stays locked as the source continues. Structurally impossible to strand on home.
+
+**Status:** the engine is built and proven in isolation. Wiring it in as the app's live sync path
+(source = current driver: teacher by default / interactive student / control holder; everyone else a
+mirror; relayed through the server) is the next step — a deliberate, browser-verified change to the
+core teaching render path, staged so live classes aren't destabilized. Harness: `gen-mirror-harness.mts`.
