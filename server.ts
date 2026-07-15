@@ -43,6 +43,10 @@ interface RoomData {
   // Temporary explanation content (persists so late-joining students see it)
   tempContent: { html: string; name: string } | null;
   liveSnapshotHtml: string | null;
+  // LIVE MIRROR: the teacher's authoritative iframe DOM (latest snapshot),
+  // relayed to students and cached so a late-joiner renders instantly.
+  // Transient (NOT persisted) — re-sent by the source on the next mutation.
+  mirrorBody: string | null;
   revision: number;
   whiteboard: {
     objects: any[];
@@ -332,6 +336,7 @@ async function startServer() {
       interactionSeq: 0,
       tempContent: null,
       liveSnapshotHtml: null,
+      mirrorBody: null,
       revision: 0,
       whiteboard: { objects: [], strokes: [], shapes: [], view: null, gridMode: 'grid', instruments: [], texts: [] },
       annotations: [],
@@ -362,6 +367,10 @@ async function startServer() {
   function newContentBaseline(room: RoomData) {
     resetEventJournal(room);
     room.randomSeed = newRandomSeed();
+    // Drop the old lesson's mirror snapshot so a student joining right after a
+    // lesson switch never renders the previous lesson's DOM (the source will
+    // stream the new one within a frame of its iframe rebuilding).
+    room.mirrorBody = null;
   }
 
   // ── Event journal helpers ──
@@ -2591,6 +2600,57 @@ Build a widget that teaches: ${safePrompt}`;
       if (room.eventLog.length > 0 && !room.eventLogOverflow) {
         io.to(socket.id).emit('interaction_replay', { events: room.eventLog, count: room.eventLog.length });
       }
+    });
+
+    // ─── LIVE MIRROR relay (the "impossible to desync" engine) ───
+    // The teacher's iframe is the single authoritative lesson instance; it
+    // streams its REAL DOM here and the server relays it to every student, who
+    // render it read-only (they never run the lesson JS, so they cannot be on a
+    // different screen). A student that may drive forwards its input to the
+    // teacher, who applies it on the real lesson and streams the result back.
+    // No journal / replay / seed involved — desync is structurally impossible.
+    socket.on('mirror_dom', ({ roomId, body, scrollX, scrollY }: { roomId: string; body: string; scrollX?: number; scrollY?: number }) => {
+      if (typeof roomId !== 'string' || typeof body !== 'string' || body.length > MAX_FILE_SIZE) return;
+      const room = rooms.get(roomId);
+      if (!isMember(room, socket.id) || room.users.get(socket.id)?.role !== 'teacher') return;
+      room.mirrorBody = body;
+      socket.to(roomId).emit('mirror_dom', { body, scrollX, scrollY });
+    });
+    socket.on('mirror_canvas', ({ roomId, canvases }: { roomId: string; canvases: any }) => {
+      if (typeof roomId !== 'string' || !Array.isArray(canvases)) return;
+      if (!checkRateLimit(socket.id, true)) return;
+      const room = rooms.get(roomId);
+      if (!isMember(room, socket.id) || room.users.get(socket.id)?.role !== 'teacher') return;
+      socket.to(roomId).emit('mirror_canvas', { canvases });
+    });
+    socket.on('mirror_scroll', ({ roomId, scrollX, scrollY }: { roomId: string; scrollX?: number; scrollY?: number }) => {
+      if (typeof roomId !== 'string') return;
+      if (!checkRateLimit(socket.id, true)) return;
+      const room = rooms.get(roomId);
+      if (!isMember(room, socket.id) || room.users.get(socket.id)?.role !== 'teacher') return;
+      socket.to(roomId).emit('mirror_scroll', { scrollX, scrollY });
+    });
+    socket.on('mirror_input', ({ roomId, input }: { roomId: string; input: any }) => {
+      if (typeof roomId !== 'string' || !input || typeof input !== 'object') return;
+      if (!checkRateLimit(socket.id, false)) return;
+      const room = rooms.get(roomId);
+      if (!isMember(room, socket.id)) return;
+      const user = room.users.get(socket.id);
+      if (user?.role !== 'student') return;
+      // Only a student who may DRIVE (interactive toggle on, or holds control)
+      // can forward input to the teacher's authoritative instance.
+      const mayDrive = room.studentInteractionAllowed || (!!user.name && user.name === room.controlHolderName);
+      if (!mayDrive) return;
+      if (room.teacherSocketId) io.to(room.teacherSocketId).emit('mirror_input', { input, studentName: user.name });
+    });
+    socket.on('mirror_request', ({ roomId }: { roomId: string }) => {
+      if (typeof roomId !== 'string') return;
+      const room = rooms.get(roomId);
+      if (!isMember(room, socket.id)) return;
+      // Serve the cached body immediately (instant late-join), then ask the
+      // teacher to push a fresh one (covers canvas + freshest state).
+      if (room.mirrorBody) io.to(socket.id).emit('mirror_dom', { body: room.mirrorBody });
+      if (room.teacherSocketId) io.to(room.teacherSocketId).emit('mirror_request', {});
     });
 
     // ─── STUDENT ABSOLUTE-STATE SNAPSHOT (student → teacher) ───

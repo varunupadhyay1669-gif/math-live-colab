@@ -2,6 +2,7 @@
 import { useParams, useNavigate, useSearchParams } from "react-router-dom";
 import { io, Socket } from "socket.io-client";
 import { seededSyncScript } from "../lib/syncScript";
+import { mirrorScriptFor, stripLessonScripts } from "../lib/mirrorScript";
 import { cleanDisplayName } from "../lib/displayName";
 import { stepLockScript } from "../lib/stepLockScript";
 import { setupAttentionDetection } from "../lib/attentionDetector";
@@ -20,6 +21,20 @@ import StepGate from "../components/StepGate";
 import ConnectionStatus from "../components/ConnectionStatus";
 import Leaderboard from "../components/Leaderboard";
 import Whiteboard from "../components/Whiteboard";
+
+// ── LIVE MIRROR ("impossible to desync") ──
+// When on (the default), a student's lesson iframe is a script-STRIPPED shell
+// that renders a live mirror of the teacher's REAL DOM (+ canvas). It never runs
+// the lesson's own JS, so it literally cannot be on a different screen than the
+// teacher — the class of "student stuck on the map / wrong quiz question" bugs
+// becomes structurally impossible. A driving student's input is forwarded to the
+// teacher's authoritative lesson and the resulting DOM streams back.
+// Escape hatch: localStorage.mathslive_sync === 'replay' falls back to the
+// classic input-replay engine (no redeploy needed) if a specific lesson ever
+// misbehaves under mirroring.
+const MIRROR_MODE = (() => {
+  try { return localStorage.getItem('mathslive_sync') !== 'replay'; } catch { return true; }
+})();
 
 // ── Types ──
 interface FileEntry {
@@ -417,8 +432,14 @@ export default function StudentView() {
     if (!currentHtml) { setIframeUrl(""); return; }
     // Mark iframe as not ready while we rebuild it
     iframeReadyRef.current = false;
-    let content = currentHtml;
-    const scripts = seededSyncScript(randomSeed) + stepLockScript;
+    // LIVE MIRROR: build a follower shell — the lesson's own <script>s are
+    // STRIPPED so it never runs the lesson (that would make it a diverging
+    // instance); only the follower agent runs, painting the teacher's streamed
+    // DOM. Keeps <head>/<style>/<link> so the mirror looks identical.
+    const scripts = MIRROR_MODE
+      ? mirrorScriptFor('follower')
+      : seededSyncScript(randomSeed) + stepLockScript;
+    let content = MIRROR_MODE ? stripLessonScripts(currentHtml) : currentHtml;
     if (content.includes("<head>")) {
       content = content.replace("<head>", "<head>" + scripts);
     } else if (content.includes("<html>")) {
@@ -578,6 +599,22 @@ export default function StudentView() {
 
     // NOTE: the legacy `live_dom` continuous follow-mirror is retired (see
     // dom_snapshot above). The server no longer emits it; no listener here.
+
+    // ── LIVE MIRROR (source → follower) ──
+    // The teacher's authoritative DOM/canvas, relayed by the server. Paint it
+    // into the follower shell. This is the "impossible to desync" path: the
+    // student renders exactly what the teacher's real lesson produced.
+    newSocket.on("mirror_dom", ({ body, scrollX, scrollY }: { body: string; scrollX?: number; scrollY?: number }) => {
+      if (typeof body !== 'string') return;
+      postToIframe({ type: 'MIRROR_APPLY', body, scrollX, scrollY });
+    });
+    newSocket.on("mirror_canvas", ({ canvases }: { canvases: any[] }) => {
+      if (!Array.isArray(canvases)) return;
+      postToIframe({ type: 'MIRROR_CANVAS', canvases });
+    });
+    newSocket.on("mirror_scroll", ({ scrollX, scrollY }: { scrollX?: number; scrollY?: number }) => {
+      postToIframe({ type: 'MIRROR_SCROLL', scrollX, scrollY });
+    });
 
     newSocket.on("force_sync_state", (state: any) => {
       if (typeof state.revision === 'number') {
@@ -997,6 +1034,8 @@ export default function StudentView() {
     // (or they hold control) — so in a 1-to-1 lesson they can actually click the
     // buttons. In view-only it stays false and the mirror overlay blocks taps.
     iframeRef.current?.contentWindow?.postMessage({ type: 'SET_INTERACTION_MODE', allowed: canInteractRef.current }, '*');
+    // LIVE MIRROR: mirror the same drive gate onto the follower agent.
+    iframeRef.current?.contentWindow?.postMessage({ type: 'SET_MIRROR_INTERACT', allowed: canInteractRef.current }, '*');
     // Re-send current state
     iframeRef.current?.contentWindow?.postMessage({ type: 'SET_SCROLL_SYNC', enabled: scrollSyncEnabled }, '*');
     if (currentStep < 999) {
@@ -1020,6 +1059,26 @@ export default function StudentView() {
       if (e.source !== iframeRef.current?.contentWindow) return;
       const type = e.data?.type;
       if (!type) return;
+
+      // ── LIVE MIRROR (follower → source) ──
+      // Forward this follower's input to the teacher's authoritative lesson, and
+      // announce readiness so we pull a fresh snapshot (late-join / reconnect /
+      // lesson switch). MUST be handled BEFORE the SYNC_ relay below —
+      // 'SYNC_MIRROR_INPUT' starts with 'SYNC_' but is mirror input, not a
+      // journaled interaction. The server re-checks drive eligibility.
+      if (type === 'SYNC_MIRROR_INPUT') {
+        socket.emit('mirror_input', {
+          roomId,
+          input: { kind: e.data.kind, path: e.data.path, value: e.data.value, deltaY: e.data.deltaY, key: e.data.key },
+        });
+        return;
+      }
+      if (type === 'MIRROR_FOLLOWER_READY') {
+        socket.emit('mirror_request', { roomId });
+        // Tell the follower whether it may drive right now.
+        iframeRef.current?.contentWindow?.postMessage({ type: 'SET_MIRROR_INTERACT', allowed: canInteractRef.current }, '*');
+        return;
+      }
 
       // Student → teacher absolute-state snapshot response: forward the
       // student's REAL DOM up so the teacher's view tracks the student's
@@ -1127,6 +1186,9 @@ export default function StudentView() {
   // blocks taps. Scroll works regardless (overlay forwards it; no scroll lock).
   useEffect(() => {
     postToIframe({ type: 'SET_INTERACTION_MODE', allowed: canInteract });
+    // LIVE MIRROR: same gate controls whether the follower may forward its input
+    // to the teacher's authoritative lesson (drive) or is a pure view-only mirror.
+    postToIframe({ type: 'SET_MIRROR_INTERACT', allowed: canInteract });
   }, [canInteract, iframeUrl, postToIframe]);
 
   // ── Challenge Timer Countdown ──

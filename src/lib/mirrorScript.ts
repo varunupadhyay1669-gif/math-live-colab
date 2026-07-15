@@ -60,6 +60,23 @@ export const mirrorScript = `
     var applyingInput = false;   // suppress self-triggered streams while applying forwarded input
     var lastSentAt = 0, trailTimer = null;
 
+    // Force preserveDrawingBuffer on every WebGL context the lesson creates.
+    // Without it, canvas.toDataURL() on a WebGL canvas returns BLACK on many
+    // GPUs/browsers (the drawing buffer is cleared after each composite), which
+    // would make 3D/WebGL sims mirror as an empty canvas. This runs before any
+    // lesson script (the mirror agent is first in <head>), so it patches the
+    // context at creation — Three.js, raw WebGL, and everything in between.
+    try {
+      var _getCtx = HTMLCanvasElement.prototype.getContext;
+      HTMLCanvasElement.prototype.getContext = function (type, attrs) {
+        if (type === 'webgl' || type === 'webgl2' || type === 'experimental-webgl') {
+          attrs = attrs || {};
+          if (attrs.preserveDrawingBuffer !== true) { try { attrs.preserveDrawingBuffer = true; } catch (e) {} }
+        }
+        return _getCtx.call(this, type, attrs);
+      };
+    } catch (e) {}
+
     function bakeFormState(root) {
       // Reflect live form values into attributes so they survive serialization.
       try {
@@ -179,16 +196,25 @@ export const mirrorScript = `
   }
 
   // ═══════════════════════ FOLLOWER (dumb mirror) ═══════════════════════
-  var applyingDom = false, lastBody = null, allow = false;
+  var applyingDom = false, lastBody = null, allow = false, lastCanvasList = null;
 
   function applySnapshot(d) {
     if (d.body == null || d.body === lastBody) return;
     lastBody = d.body;
     applyingDom = true;
     try { document.body.innerHTML = d.body; } catch (e) {}
+    // Restore the source's scroll position (a body swap resets it to the top),
+    // so long/scrolling lessons track the teacher instead of jumping up.
+    try { if (typeof d.scrollX === 'number' || typeof d.scrollY === 'number') window.scrollTo(d.scrollX || 0, d.scrollY || 0); } catch (e) {}
     applyingDom = false;
+    // A body swap recreates any <canvas> BLANK (innerHTML can't carry pixels).
+    // Immediately re-draw the most recent captured frame so a lesson that
+    // mutates the DOM while a canvas/3D sim runs doesn't flicker to empty
+    // between the swap and the next ~120ms canvas tick.
+    if (lastCanvasList) paintCanvases(lastCanvasList);
   }
   function paintCanvases(list) {
+    lastCanvasList = list;
     for (var i = 0; i < list.length; i++) {
       (function (item) {
         var c = findElement(item.sel);
@@ -219,6 +245,7 @@ export const mirrorScript = `
     var d = e.data; if (!d || !d.type) return;
     if (d.type === 'MIRROR_APPLY') applySnapshot(d);
     else if (d.type === 'MIRROR_CANVAS') paintCanvases(d.canvases || []);
+    else if (d.type === 'MIRROR_SCROLL') { try { window.scrollTo(d.scrollX || 0, d.scrollY || 0); } catch (e) {} }
     else if (d.type === 'SET_MIRROR_INTERACT') allow = !!d.allowed;
   });
   post({ type: 'MIRROR_FOLLOWER_READY' });

@@ -451,3 +451,45 @@ mechanics — screens toggled by JS, dynamic options, localStorage):**
 (source = current driver: teacher by default / interactive student / control holder; everyone else a
 mirror; relayed through the server) is the next step — a deliberate, browser-verified change to the
 core teaching render path, staged so live classes aren't destabilized. Harness: `gen-mirror-harness.mts`.
+
+---
+
+## Cycle 12 — LIVE MIRROR wired in as the app's DEFAULT sync path (+ full-app verify)
+
+The engine from Cycle 11 is now the real render path (user chose "make it the default"). **The
+teacher's iframe is the single authoritative lesson (always the source); every student renders a
+follower mirror; the interactive/control toggle only enables input-forwarding — no iframe role-flip.**
+
+**Server (`server.ts`):** additive relay handlers + a transient `room.mirrorBody` cache —
+`mirror_dom` (teacher→students, role-gated to teacher, cached), `mirror_canvas`, `mirror_scroll`,
+`mirror_input` (student→teacher, gated on `studentInteractionAllowed || controlHolder`),
+`mirror_request` (serves the cached body instantly + pokes the teacher for a fresh snapshot).
+`newContentBaseline` clears the cache so a switch never serves the old lesson.
+**Teacher (`Room.tsx`):** injects `mirrorScriptFor('source')` into the lesson iframe; relays
+`SYNC_MIRROR*`→server; applies forwarded `mirror_input`/`mirror_request` onto the real lesson.
+**Student (`StudentView.tsx`):** the lesson iframe is now `stripLessonScripts(html)` +
+`mirrorScriptFor('follower')` — it never runs the lesson JS. Relays follower input up, paints
+streamed DOM/canvas down. Escape hatch: `localStorage.mathslive_sync='replay'` → classic engine.
+**3D robustness (`mirrorScript.ts`):** the source patches `getContext` to force
+`preserveDrawingBuffer:true`, so WebGL `toDataURL` capture is non-black on every GPU/browser; the
+follower re-paints the last canvas frame after a DOM swap (no flicker on HUD-updating 3D sims).
+
+**Why the original "3D doesn't load for the student" bug is now IMPOSSIBLE:** the student never
+loads or runs the 3D at all — no CDN, no WebGL support needed on their machine — it just displays the
+teacher's rendered pixels.
+
+**Verified (socket + real browser, two tabs on a live server):**
+- `stress15` (9/9): relay routing, teacher-only stream gate, view-only drive-block, control-holder
+  drive, late-join cache serve, new-content cache clear. No regression (verify-sync 48, stress 19,
+  stress14 6; tsc 0; build clean).
+- Browser, real app, stateful Ratio quiz: teacher→student EXACT lockstep (nav + localStorage stars +
+  feedback); **late-join mid-quiz lands on the current question, not home** (the classic desync,
+  now impossible); interactive student drives the teacher's real lesson and the result mirrors back
+  (bidirectional); **whiteboard round-trip stays locked** (teacher iframe resets → student mirrors
+  the reset; never stranded on a different screen).
+- Browser, WebGL sim: the follower (WebGL stripped) shows the teacher's canvas pixels exactly
+  (center pixel match) via the frame channel; `preserveDrawingBuffer` patch confirmed applied.
+
+**Known tradeoff:** followers see canvas/3D at the capture rate (~8fps, PNG) rather than a local
+60fps render, and a driving student's input has one server round-trip of latency — the deliberate
+price of "can never desync." Tunable (capture rate / JPEG) if smoother 3D is wanted later.

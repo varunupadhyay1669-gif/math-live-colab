@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { useParams, useNavigate, useSearchParams } from "react-router-dom";
 import { io, Socket } from "socket.io-client";
 import { seededSyncScript } from "../lib/syncScript";
+import { mirrorScriptFor } from "../lib/mirrorScript";
 import { stepLockScript } from "../lib/stepLockScript";
 import { DEMO_LESSON_HTML, DEMO_LESSON_NAME } from "../lib/demoLesson";
 import { cleanDisplayName } from "../lib/displayName";
@@ -1046,6 +1047,19 @@ export default function Room() {
       if (applied > 0) showNotif(`⚡ Restored your lesson — replayed ${applied} steps`);
     });
 
+    // ── LIVE MIRROR: a driving student's input, applied on the real lesson ──
+    // A student who may drive (interactive / holds control) forwarded an input.
+    // Apply it on THIS authoritative iframe; the resulting DOM streams back to
+    // everyone. The server already gated this to eligible students.
+    newSocket.on("mirror_input", ({ input }: { input: any }) => {
+      if (!input || typeof input !== 'object') return;
+      postToIframe({ type: 'MIRROR_INPUT', ...input });
+    });
+    // A (re)joining student asked for a fresh full snapshot.
+    newSocket.on("mirror_request", () => {
+      postToIframe({ type: 'MIRROR_REQUEST' });
+    });
+
     // ── Control handoff ──
     newSocket.on("control_changed", ({ holderName }: { holderName: string | null }) => {
       setControlHolderName(holderName);
@@ -1410,6 +1424,16 @@ export default function Room() {
       const type = e.data?.type;
       if (!type) return;
 
+      // ── LIVE MIRROR (source → students) ──
+      // The authoritative iframe streams its real DOM/canvas. Relay to the
+      // server (which fans out to every follower). MUST be handled and returned
+      // BEFORE the SYNC_ interaction relay below — 'SYNC_MIRROR' starts with
+      // 'SYNC_' but is a snapshot, not a replayable interaction.
+      if (type === 'SYNC_MIRROR') { socket.emit('mirror_dom', { roomId, body: e.data.body, scrollX: e.data.scrollX, scrollY: e.data.scrollY }); return; }
+      if (type === 'SYNC_MIRROR_CANVAS') { socket.emit('mirror_canvas', { roomId, canvases: e.data.canvases }); return; }
+      if (type === 'SYNC_MIRROR_SCROLL') { socket.emit('mirror_scroll', { roomId, scrollX: e.data.scrollX, scrollY: e.data.scrollY }); return; }
+      if (type === 'MIRROR_SOURCE_READY') { return; }
+
       // Internal sync events — not interactions
       if (type === 'SYNC_PROVIDE_HTML') {
         if (snapshotRequestRef.current && e.data.requestId === snapshotRequestRef.current) {
@@ -1531,7 +1555,11 @@ export default function Room() {
     // Mark iframe as not ready while we rebuild it
     iframeReadyRef.current = false;
     let content = previewHtml;
-    const scripts = seededSyncScript(randomSeed) + stepLockScript;
+    // LIVE MIRROR: the teacher's lesson iframe is the single authoritative
+    // instance. The 'source' agent streams its real DOM (+ canvas) to students,
+    // who render a read-only mirror and can never be on a different screen. It
+    // rides alongside the classic sync scripts (different message namespace).
+    const scripts = seededSyncScript(randomSeed) + stepLockScript + mirrorScriptFor('source');
     if (content.includes("<head>")) {
       content = content.replace("<head>", "<head>" + scripts);
     } else if (content.includes("<html>")) {
