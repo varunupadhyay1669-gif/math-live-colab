@@ -3134,6 +3134,52 @@ Build a widget that teaches: ${safePrompt}`;
     });
   });
 
+  // ─── HTTP API: QUICK DEPLOY (drop HTML → instant shareable page) ───
+  // Paste or upload HTML on the landing page and get a live link in one step —
+  // no login, no delay. We persist it as an ANONYMOUS room (24h TTL, the same
+  // lifecycle as any ad-hoc room), so:
+  //   • it's viewable at /p/:id (the standalone viewer renders the REAL HTML,
+  //     scripts intact — works with NO teacher present: deploy-and-forget), and
+  //   • it can be opened as a live class at /room/:id (Live Mirror) any time.
+  // Registered BEFORE the global express.json() below so it gets a large body
+  // limit (lesson HTML can be up to MAX_FILE_SIZE, far past the 100kb default).
+  function genPageId(): string {
+    const alphabet = 'abcdefghijkmnopqrstuvwxyz23456789'; // no look-alikes (0/o/1/l)
+    let id = '';
+    for (let i = 0; i < 8; i++) id += alphabet[Math.floor(Math.random() * alphabet.length)];
+    return id;
+  }
+  app.post('/api/publish', express.json({ limit: '6mb' }), async (req, res) => {
+    try {
+      const body = (req.body || {}) as { html?: unknown; name?: unknown };
+      const html = typeof body.html === 'string' ? body.html : '';
+      if (!html.trim()) { res.status(400).json({ error: 'No HTML provided' }); return; }
+      if (html.length > MAX_FILE_SIZE) {
+        res.status(413).json({ error: `HTML too large (max ${Math.round(MAX_FILE_SIZE / 1024 / 1024)}MB)` });
+        return;
+      }
+      const name = sanitizeString(body.name, 80) || 'Shared page';
+      // Unique, valid, hard-to-guess id (retry on the rare in-memory collision).
+      let id = genPageId();
+      for (let i = 0; i < 5 && rooms.has(id); i++) id = genPageId();
+      if (rooms.has(id)) { res.status(503).json({ error: 'Please try again' }); return; }
+      const room = createRoom();
+      const fileId = 'deploy';
+      room.files = [{ id: fileId, name, html, uploadedAt: Date.now() }];
+      room.activeFileId = fileId;
+      room.lastRunHtml = html;
+      room.revision = 1;
+      rooms.set(id, room);
+      updateRoomActivity(id);
+      await persistRoom(id); // durable so the link survives the deployer closing the tab
+      console.log(`🚀 Quick-deploy published → /p/${id} (${(html.length / 1024).toFixed(0)}KB, 24h TTL)`);
+      res.json({ id, expiresAt: computeExpiresAt(room), viewPath: `/p/${id}`, roomPath: `/room/${id}` });
+    } catch (err) {
+      console.error('Publish failed:', err);
+      res.status(500).json({ error: 'Publish failed' });
+    }
+  });
+
   // ─── HTTP API: Room content fallback ───
   // Students can fetch room HTML via plain HTTP if Socket.io delivery fails
   app.use(express.json());

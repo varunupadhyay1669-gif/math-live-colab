@@ -4,7 +4,7 @@ import { v4 as uuidv4 } from "uuid";
 import { savedBoards, templates, type SavedBoard, type LessonTemplate } from "../lib/prefs";
 import { useAuth } from "../lib/auth";
 
-type Mode = null | "teacher" | "student";
+type Mode = null | "teacher" | "student" | "deploy";
 
 // Tiny "5m ago" / "2h ago" / "yesterday" helper. Avoid depending on a
 // date library for one little label.
@@ -76,6 +76,58 @@ export default function Home() {
     }
   };
   const [mode, setMode] = useState<Mode>(null);
+
+  // ── Quick Deploy: drop HTML → instant shareable page (no login, 24h) ──
+  const [deployTab, setDeployTab] = useState<"paste" | "upload">("paste");
+  const [deployHtml, setDeployHtml] = useState("");
+  const [deployName, setDeployName] = useState("");
+  const [deploying, setDeploying] = useState(false);
+  const [deployError, setDeployError] = useState<string | null>(null);
+  const [deployedId, setDeployedId] = useState<string | null>(null);
+  const [deployCopied, setDeployCopied] = useState(false);
+
+  const publishHtml = async () => {
+    const html = deployHtml;
+    if (!html.trim() || deploying) return;
+    setDeploying(true);
+    setDeployError(null);
+    try {
+      const res = await fetch("/api/publish", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ html, name: deployName.trim() || undefined }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { setDeployError(data?.error || `Deploy failed (${res.status}).`); return; }
+      setDeployedId(data.id);
+    } catch {
+      setDeployError("Couldn't reach the server. Check your connection and try again.");
+    } finally {
+      setDeploying(false);
+    }
+  };
+
+  const onDeployFile = (file: File | null | undefined) => {
+    if (!file) return;
+    setDeployError(null);
+    if (file.size > 16 * 1024 * 1024) { setDeployError("File too large (max 16MB)."); return; }
+    const reader = new FileReader();
+    reader.onload = () => {
+      setDeployHtml(String(reader.result || ""));
+      setDeployName(file.name.replace(/\.html?$/i, ""));
+    };
+    reader.onerror = () => setDeployError("Couldn't read that file.");
+    reader.readAsText(file);
+  };
+
+  const resetDeploy = () => {
+    setDeployedId(null); setDeployHtml(""); setDeployName(""); setDeployError(null); setDeployCopied(false);
+  };
+  const deployedUrl = deployedId ? `${window.location.origin}/p/${deployedId}` : "";
+  const copyDeployed = async () => {
+    if (!deployedUrl) return;
+    try { await navigator.clipboard.writeText(deployedUrl); setDeployCopied(true); setTimeout(() => setDeployCopied(false), 1800); } catch { /* blocked */ }
+  };
 
   // Flow: as soon as a signed-in teacher reaches the teacher path, send them
   // to their dashboard — the hub where they create per-student rooms.
@@ -195,6 +247,20 @@ export default function Home() {
                   Join a room
                 </button>
               </div>
+
+              {/* Quick Deploy — drop HTML, get an instant shareable link. No
+                  login, no delay, live for 24h. Perfect for AI-generated pages,
+                  demos and prototypes. */}
+              <button
+                className="ml-dark-btn ml-dark-btn-glass ml-dark-deploy-cta"
+                onClick={() => { resetDeploy(); setMode("deploy"); }}
+                style={{ width: "100%", justifyContent: "center", marginTop: 2 }}
+              >
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M13 2L3 14h7l-1 8 10-12h-7l1-8z" />
+                </svg>
+                Quick deploy HTML — paste or upload, get an instant link
+              </button>
 
               {/* AUTONOMOUS: Miro-style "My boards" — saved rooms from
                   this browser. Hidden when empty so first-time users
@@ -457,6 +523,113 @@ export default function Home() {
                 </button>
               </div>
             </form>
+          )}
+
+          {/* Quick Deploy panel */}
+          {mode === "deploy" && (
+            <div className="ml-dark-form ml-dark-deploy">
+              {!deployedId ? (
+                <>
+                  <div className="ml-dark-deploy-head">
+                    <div className="ml-dark-deploy-title">Drop HTML, get a live link</div>
+                    <div className="ml-dark-deploy-sub">Paste code or upload a file — instant, no sign-in, live for 24 hours.</div>
+                  </div>
+
+                  <div className="ml-dark-deploy-tabs" role="tablist">
+                    <button
+                      role="tab"
+                      aria-selected={deployTab === "paste"}
+                      className={`ml-dark-deploy-tab${deployTab === "paste" ? " is-active" : ""}`}
+                      onClick={() => setDeployTab("paste")}
+                    >
+                      Paste code
+                    </button>
+                    <button
+                      role="tab"
+                      aria-selected={deployTab === "upload"}
+                      className={`ml-dark-deploy-tab${deployTab === "upload" ? " is-active" : ""}`}
+                      onClick={() => setDeployTab("upload")}
+                    >
+                      Upload file
+                    </button>
+                  </div>
+
+                  {deployTab === "paste" ? (
+                    <textarea
+                      autoFocus
+                      className="ml-dark-input ml-dark-input-mono ml-dark-deploy-textarea"
+                      placeholder="Paste your HTML here — <!doctype html>…"
+                      value={deployHtml}
+                      onChange={(e) => setDeployHtml(e.target.value)}
+                      spellCheck={false}
+                    />
+                  ) : (
+                    <label
+                      className="ml-dark-deploy-drop"
+                      onDragOver={(e) => { e.preventDefault(); }}
+                      onDrop={(e) => { e.preventDefault(); onDeployFile(e.dataTransfer.files?.[0]); }}
+                    >
+                      <input
+                        type="file"
+                        accept=".html,.htm,text/html"
+                        style={{ display: "none" }}
+                        onChange={(e) => onDeployFile(e.target.files?.[0])}
+                      />
+                      <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                        <path d="M12 15V3M7 8l5-5 5 5M5 21h14" />
+                      </svg>
+                      <span className="ml-dark-deploy-drop-main">
+                        {deployHtml ? `✓ ${deployName || "file"}.html loaded` : "Drop an HTML file here, or click to choose"}
+                      </span>
+                      <span className="ml-dark-deploy-drop-sub">Max 16MB · .html</span>
+                    </label>
+                  )}
+
+                  {deployError && <p className="ml-dark-deploy-error">{deployError}</p>}
+
+                  <button
+                    className="ml-dark-btn ml-dark-btn-primary"
+                    onClick={publishHtml}
+                    disabled={!deployHtml.trim() || deploying}
+                    style={{ width: "100%" }}
+                  >
+                    {deploying ? "Deploying…" : "Deploy now"}
+                    {!deploying && (
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                        <path d="M5 12h14M13 6l6 6-6 6" />
+                      </svg>
+                    )}
+                  </button>
+                </>
+              ) : (
+                <div className="ml-dark-deploy-done">
+                  <div className="ml-dark-deploy-done-badge">✓ Live</div>
+                  <div className="ml-dark-deploy-title">Your page is deployed</div>
+                  <div className="ml-dark-deploy-linkrow">
+                    <input className="ml-dark-input ml-dark-input-mono" readOnly value={deployedUrl} onFocus={(e) => e.target.select()} />
+                    <button className="ml-dark-btn ml-dark-btn-glass" onClick={copyDeployed} style={{ flex: "0 0 auto" }}>
+                      {deployCopied ? "Copied ✓" : "Copy"}
+                    </button>
+                  </div>
+                  <div className="ml-dark-deploy-actions">
+                    <a className="ml-dark-btn ml-dark-btn-primary" href={deployedUrl} target="_blank" rel="noreferrer" style={{ flex: 1, textDecoration: "none" }}>
+                      Open page
+                    </a>
+                    <button className="ml-dark-btn ml-dark-btn-glass" onClick={() => navigate(`/room/${deployedId}?name=${encodeURIComponent("Host")}`)} style={{ flex: 1 }}>
+                      Open as live class
+                    </button>
+                  </div>
+                  <div className="ml-dark-deploy-sub" style={{ textAlign: "center" }}>Live for 24 hours · anyone with the link can view</div>
+                  <button className="ml-dark-btn ml-dark-btn-ghost" onClick={resetDeploy} style={{ width: "100%" }}>
+                    Deploy another
+                  </button>
+                </div>
+              )}
+
+              <div className="ml-dark-back-row">
+                <button className="ml-dark-btn ml-dark-btn-ghost" onClick={() => setMode(null)}>← Back</button>
+              </div>
+            </div>
           )}
 
         </main>

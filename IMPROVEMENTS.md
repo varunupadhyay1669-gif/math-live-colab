@@ -493,3 +493,31 @@ teacher's rendered pixels.
 **Known tradeoff:** followers see canvas/3D at the capture rate (~8fps, PNG) rather than a local
 60fps render, and a driving student's input has one server round-trip of latency — the deliberate
 price of "can never desync." Tunable (capture rate / JPEG) if smoother 3D is wanted later.
+
+---
+
+## Cycle 13 — QUICK DEPLOY: drop HTML → instant shareable page (pagedrop-style)
+
+**User ask:** "on the landing page let me paste HTML or upload a file and deploy it directly — no
+login, no delay, expires in a day."
+
+A one-step publisher for AI-generated pages, demos and prototypes, reusing the existing room
+lifecycle so there's no new storage/expiry system to maintain.
+- **Landing (`Home.tsx` + `index.css`):** a "Quick deploy HTML" entry opens a panel with Paste /
+  Upload tabs (drag-drop or choose), a Deploy button, then a result card with the link + copy +
+  "Open page" / "Open as live class". No account, styled to the dark landing.
+- **Server (`server.ts`):** `POST /api/publish` (registered before the global 100kb `express.json`
+  so it gets a 6mb limit) validates + persists the HTML as an ANONYMOUS room (24h TTL, the same
+  lifecycle as any ad-hoc room, durable so the link survives the deployer closing the tab) and
+  returns a short unguessable id. Reuses the existing `/api/room/:id/content` to serve it.
+- **Viewer (`DeployView.tsx`, route `/p/:id`):** renders the REAL HTML from a blob URL with the
+  lesson sandbox — scripts RUN, so it works with NO teacher present (deploy-and-forget) for static
+  pages AND interactive demos. Slim bar: MathsLive, copy link, "Open as live class", deploy your
+  own. Friendly expired/missing state (24h).
+- **Bridge:** because a deploy IS a real room, "Open as live class" opens `/room/:id` with the Live
+  Mirror source — instant path from a shared page to a taught lesson.
+
+**Verified in-browser (real app on a live server):** landing button → panel → paste HTML → Deploy →
+`/p/:id` renders and **runs the page's JS**; the file-upload path (drag-drop / choose) does the
+same; "Open as live class" loads the page as a room with the mirror source active; a bad id shows
+the expired state. tsc 0, build clean.

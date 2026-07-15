@@ -23,6 +23,7 @@ const Room = lazy(() => import('./pages/Room'));
 const StudentView = lazy(() => import('./pages/StudentView'));
 const Dashboard = lazy(() => import('./pages/Dashboard'));
 const ReplayView = lazy(() => import('./pages/ReplayView'));
+const DeployView = lazy(() => import('./pages/DeployView'));
 
 // Tiny fallback while the route chunk loads. Matches the home page
 // background colour so there's no flash of wrong-colour content. The
@@ -108,6 +109,8 @@ export default function App() {
               <Route path="/student/:roomId" element={<StudentView />} />
               {/* Offline lesson re-watch player (loads a downloaded recording) */}
               <Route path="/replay" element={<ReplayView />} />
+              {/* Quick-deploy standalone viewer: drop HTML → /p/:id shows the live page */}
+              <Route path="/p/:pageId" element={<DeployView />} />
               {/* Catch-all 404 — must be last */}
               <Route path="*" element={<NotFound />} />
             </Routes>
