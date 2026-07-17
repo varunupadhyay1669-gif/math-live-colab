@@ -77,24 +77,35 @@ export const mirrorScript = `
       };
     } catch (e) {}
 
-    function bakeFormState(root) {
-      // Reflect live form values into attributes so they survive serialization.
+    // Reflect the source's LIVE form values into the follower's copy by writing
+    // to the DETACHED CLONE — NEVER the real DOM. Writing setAttribute/textContent
+    // on the live <input>/<textarea>/<select> fires a mutation, which re-triggers
+    // the MutationObserver, which serializes again → an infinite self-feeding loop
+    // that froze the whole tab for ANY lesson with a form field (even a totally
+    // static one; the identical-body dedup meant the throttle never engaged). The
+    // clone is structurally identical, so the i-th field maps 1:1 in document order.
+    function bakeFormStateInto(orig, clone) {
       try {
-        root.querySelectorAll('input, textarea, select').forEach(function (el) {
-          if (el.tagName === 'INPUT') {
-            if (el.type === 'checkbox' || el.type === 'radio') {
-              if (el.checked) el.setAttribute('checked', 'checked'); else el.removeAttribute('checked');
-            } else { el.setAttribute('value', el.value); }
-          } else if (el.tagName === 'TEXTAREA') { el.textContent = el.value; }
-          else if (el.tagName === 'SELECT') {
-            Array.prototype.forEach.call(el.options, function (o) { if (o.selected) o.setAttribute('selected', 'selected'); else o.removeAttribute('selected'); });
+        var a = orig.querySelectorAll('input, textarea, select');
+        var b = clone.querySelectorAll('input, textarea, select');
+        for (var i = 0; i < a.length && i < b.length; i++) {
+          var o = a[i], c = b[i];
+          if (o.tagName === 'INPUT') {
+            if (o.type === 'checkbox' || o.type === 'radio') {
+              if (o.checked) c.setAttribute('checked', 'checked'); else c.removeAttribute('checked');
+            } else { c.setAttribute('value', o.value); }
+          } else if (o.tagName === 'TEXTAREA') { c.textContent = o.value; }
+          else if (o.tagName === 'SELECT') {
+            for (var j = 0; j < o.options.length && j < c.options.length; j++) {
+              if (o.options[j].selected) c.options[j].setAttribute('selected', 'selected'); else c.options[j].removeAttribute('selected');
+            }
           }
-        });
+        }
       } catch (e) {}
     }
     function serializeBody() {
-      bakeFormState(document.body);
       var clone = document.body.cloneNode(true);
+      bakeFormStateInto(document.body, clone);
       // The follower must NEVER run lesson JS — strip every script from the copy.
       try { clone.querySelectorAll('script').forEach(function (s) { s.parentNode && s.parentNode.removeChild(s); }); } catch (e) {}
       return clone.innerHTML;
