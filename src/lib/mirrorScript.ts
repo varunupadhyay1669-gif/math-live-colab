@@ -58,7 +58,7 @@ export const mirrorScript = `
   // ═══════════════════════ SOURCE (authoritative) ═══════════════════════
   if (isSource) {
     var applyingInput = false;   // suppress self-triggered streams while applying forwarded input
-    var lastSentAt = 0, trailTimer = null;
+    var lastSentAt = 0, trailTimer = null, lastMutAt = 0, burstStart = 0;
 
     // Force preserveDrawingBuffer on every WebGL context the lesson creates.
     // Without it, canvas.toDataURL() on a WebGL canvas returns BLACK on many
@@ -114,15 +114,26 @@ export const mirrorScript = `
       lastSentAt = Date.now();
       try { post({ type: 'SYNC_MIRROR', body: body, scrollX: window.scrollX || 0, scrollY: window.scrollY || 0 }); } catch (e) {}
     }
-    // Leading-edge throttle: MutationObserver batches a whole synchronous DOM
-    // update into ONE callback, so on the first change after a quiet moment we
-    // send IMMEDIATELY — the mirror updates in the same tick, never one action
-    // behind. Bursts within 40ms coalesce into a trailing send.
+    // Adaptive leading-edge throttle. The mirror runs on the SAME main thread as
+    // the app UI (a same-origin blob iframe shares the parent's event loop), and
+    // serializing the whole <body> on every mutation would starve the teacher's
+    // buttons on an ANIMATED lesson (a requestAnimationFrame loop mutating the
+    // DOM ~60×/s). So:
+    //   • DISCRETE changes (quiz clicks, spaced >120ms apart) still send within
+    //     ~60ms — the mirror feels instant, never a step behind.
+    //   • A SUSTAINED mutation burst (animation running >350ms) backs off to
+    //     ~4/s. That's plenty for a DOM mirror — canvas/3D visuals stream on
+    //     their own throttled channel — and it keeps the main thread responsive.
+    // MutationObserver already coalesces a synchronous DOM update into one call.
     function scheduleSnapshot() {
       if (applyingInput) return;
       var now = Date.now();
-      if (now - lastSentAt >= 40) { sendSnapshot(); }
-      else if (!trailTimer) { trailTimer = setTimeout(sendSnapshot, 40); }
+      if (now - lastMutAt < 120) { if (!burstStart) burstStart = now; } else { burstStart = 0; }
+      lastMutAt = now;
+      var minInterval = (burstStart && now - burstStart > 350) ? 250 : 60;
+      var wait = minInterval - (now - lastSentAt);
+      if (wait <= 0) { sendSnapshot(); }
+      else if (!trailTimer) { trailTimer = setTimeout(sendSnapshot, wait); }
     }
 
     // Canvas pixel channel (3D / WebGL). Skip fixed-position overlays (decorative
