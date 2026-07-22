@@ -222,12 +222,26 @@ export const mirrorScript = `
 
   function applySnapshot(d) {
     if (d.body == null || d.body === lastBody) return;
+    var firstPaint = (lastBody === null);
     lastBody = d.body;
+    // Replacing body.innerHTML resets the scroll to the top. On a LIVE update
+    // (the student did something → the teacher's lesson changed → a fresh
+    // snapshot comes back) that yanked the student back to the top of the page
+    // on every action. So we snapshot THIS viewer's scroll before the swap and
+    // restore it after — the student stays exactly where they were. The
+    // teacher's own scrolling is mirrored separately via MIRROR_SCROLL. Only on
+    // the FIRST paint (initial render / late-join / reconnect) do we align to
+    // the teacher's snapshot scroll so a late joiner lands where the teacher is.
+    var keepX = window.pageXOffset || 0, keepY = window.pageYOffset || 0;
     applyingDom = true;
     try { document.body.innerHTML = d.body; } catch (e) {}
-    // Restore the source's scroll position (a body swap resets it to the top),
-    // so long/scrolling lessons track the teacher instead of jumping up.
-    try { if (typeof d.scrollX === 'number' || typeof d.scrollY === 'number') window.scrollTo(d.scrollX || 0, d.scrollY || 0); } catch (e) {}
+    try {
+      if (firstPaint && (typeof d.scrollX === 'number' || typeof d.scrollY === 'number')) {
+        window.scrollTo(d.scrollX || 0, d.scrollY || 0);
+      } else {
+        window.scrollTo(keepX, keepY);
+      }
+    } catch (e) {}
     applyingDom = false;
     // A body swap recreates any <canvas> BLANK (innerHTML can't carry pixels).
     // Immediately re-draw the most recent captured frame so a lesson that
