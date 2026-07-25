@@ -585,9 +585,16 @@ the round-trip. Free win for the mirror, lesson uploads and whiteboard alike.
 **3. Canvas frames were PNG.** WebP q0.6 measured **3.5× smaller** on a real lesson canvas with no
 visible loss at these sizes; a browser without WebP silently returns PNG, so it's safe unconditionally.
 
-**Known remaining gap (documented, not yet fixed):** `serializeHeadStyles()` reads `outerHTML`, which
-cannot see `sheet.insertRule()` / `deleteRule()` / `replaceSync()` or constructed `adoptedStyleSheets`
-— none of those change markup. Lessons using runtime CSS injection are still silently mis-styled.
+**4. CSSOM injection was invisible (now fixed).** `serializeHeadStyles()` read element `outerHTML`,
+which cannot see `sheet.insertRule()` / `deleteRule()` / `replace()` / `replaceSync()` or constructed
+`adoptedStyleSheets` — none of those change any markup, so lessons that inject CSS at runtime were
+silently mis-styled for students. Now it reads the LIVE `cssRules` of every sheet (plus
+`document.adoptedStyleSheets`, which never appear in `document.styleSheets` at all), falling back to
+passing a `<link>` through when a cross-origin sheet can't be read. Because the 500ms heartbeat
+re-serializes and content-dedups, a CSSOM change converges automatically within half a second — no
+monkey-patching of CSSOM methods needed (which is what a delta-based engine like rrweb requires).
+Verified in-browser: all three injection routes (`insertRule`, `replaceSync`, `adoptedStyleSheets`)
+now reach the student with the exact computed colours.
 
 **Verified:** full battery **106 checks, 0 failures**; browser-verified node preservation, structural
 morph correctness, canvas pixel survival, and stateful-quiz lockstep (lesson JS still stripped).

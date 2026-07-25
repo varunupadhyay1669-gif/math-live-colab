@@ -135,11 +135,40 @@ export const mirrorScript = `
     // themes, computed layout). Those live OUTSIDE body, so they never reached
     // the follower and the mirror rendered with stale CSS. Captured separately
     // and only sent when changed, so the steady-state cost is zero.
+    // Read LIVE stylesheet rules rather than element markup. This is the whole
+    // trick: sheet.insertRule(), deleteRule(), replace()/replaceSync() and
+    // constructed adoptedStyleSheets change a stylesheet's RULES without
+    // touching any element's HTML — so the previous outerHTML read could not
+    // see them at all, and lessons that inject CSS at runtime (very common for
+    // themes, computed layout and animations) were silently mis-styled for
+    // students. Reading cssRules reflects every one of those, and because our
+    // 500ms heartbeat re-serializes and content-dedups, a CSSOM change is picked
+    // up automatically within half a second — no monkey-patching of CSSOM
+    // methods required (which is what a delta-based engine would need).
     function serializeHeadStyles() {
       var out = '';
+      function dumpSheet(s) {
+        var txt = null;
+        try {
+          if (s.cssRules) {
+            txt = '';
+            for (var j = 0; j < s.cssRules.length; j++) txt += s.cssRules[j].cssText;
+          }
+        } catch (e) { txt = null; } // cross-origin sheet → SecurityError on read
+        if (txt != null) return '<style>' + txt + '</style>';
+        // Unreadable (cross-origin): pass the link through so the follower
+        // fetches it itself, exactly as before.
+        return s.href ? '<link rel="stylesheet" href="' + s.href + '">' : '';
+      }
       try {
-        var nodes = document.head.querySelectorAll('style, link[rel="stylesheet"]');
-        for (var i = 0; i < nodes.length; i++) out += nodes[i].outerHTML;
+        var sheets = document.styleSheets;
+        for (var i = 0; i < sheets.length; i++) out += dumpSheet(sheets[i]);
+      } catch (e) {}
+      try {
+        // Constructed stylesheets adopted by the document never appear in
+        // document.styleSheets at all.
+        var adopted = document.adoptedStyleSheets || [];
+        for (var k = 0; k < adopted.length; k++) out += dumpSheet(adopted[k]);
       } catch (e) {}
       return out;
     }
