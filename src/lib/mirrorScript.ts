@@ -433,20 +433,47 @@ export const mirrorScript = `
     morphChildren(from, to);
   }
   function morphChildren(fromParent, toParent) {
-    // Snapshot both child lists first: we mutate fromParent while iterating,
-    // and a live NodeList would shift under us.
-    var fromKids = [], toKids = [], n;
-    for (n = fromParent.firstChild; n; n = n.nextSibling) fromKids.push(n);
-    for (n = toParent.firstChild; n; n = n.nextSibling) toKids.push(n);
-    var i;
-    for (i = 0; i < toKids.length; i++) {
-      var t = toKids[i], f = fromKids[i];
-      if (!f) { fromParent.appendChild(document.importNode(t, true)); continue; }
-      if (sameNodeType(f, t)) morphNode(f, t);
-      else fromParent.replaceChild(document.importNode(t, true), f);
+    // ID-KEYED matching. Matching purely by POSITION looks fine until the
+    // teacher inserts or removes anything: every later sibling shifts by one,
+    // each gets "morphed" into its neighbour's content, and in practice the
+    // whole tail is destroyed and rebuilt — which silently threw away exactly
+    // what morphing exists to protect (running animations, canvas pixels,
+    // focus/caret, media). Keying on id first means an insert or a reorder
+    // moves the EXISTING node into place instead of rebuilding everything
+    // after it. Nodes without an id still fall back to positional matching,
+    // which is no worse than before.
+    var fromById = null, n;
+    for (n = fromParent.firstChild; n; n = n.nextSibling) {
+      if (n.nodeType === 1 && n.id) { if (!fromById) fromById = {}; fromById['#' + n.id] = n; }
     }
-    for (i = fromKids.length - 1; i >= toKids.length; i--) {
-      try { fromParent.removeChild(fromKids[i]); } catch (e) {}
+    var cursor = fromParent.firstChild;
+    for (var t = toParent.firstChild; t; t = t.nextSibling) {
+      var key = (t.nodeType === 1 && t.id) ? '#' + t.id : null;
+      var match = (key && fromById) ? fromById[key] : null;
+      if (match) {
+        // Reuse the existing node, moving it into position if needed. The node
+        // itself survives, so everything living on it survives with it.
+        if (match !== cursor) fromParent.insertBefore(match, cursor);
+        else cursor = cursor.nextSibling;
+        morphNode(match, t);
+        continue;
+      }
+      // No id to match on: use the node at the cursor if it's compatible — but
+      // never consume an id'd node positionally, since a later incoming node
+      // may still claim it by id.
+      if (cursor && sameNodeType(cursor, t) && !(cursor.nodeType === 1 && cursor.id)) {
+        var next = cursor.nextSibling;
+        morphNode(cursor, t);
+        cursor = next;
+        continue;
+      }
+      fromParent.insertBefore(document.importNode(t, true), cursor);
+    }
+    // Anything from the cursor onward was not claimed — it's gone upstream.
+    while (cursor) {
+      var nx = cursor.nextSibling;
+      try { fromParent.removeChild(cursor); } catch (e) {}
+      cursor = nx;
     }
   }
   // Returns true if the body was patched in place, false if we had to fall back.
