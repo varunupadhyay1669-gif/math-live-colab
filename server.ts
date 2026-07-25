@@ -236,6 +236,14 @@ async function startServer() {
     // give up on the client.
     pingTimeout: 60_000,
     pingInterval: 25_000,
+    // Socket.IO v4 ships perMessageDeflate DISABLED by default, so every Live
+    // Mirror frame — which is literally HTML, the most compressible payload
+    // there is — was crossing the wire raw. Turning it on is a large,
+    // essentially free bandwidth win for the mirror, the lesson uploads and the
+    // whiteboard alike. threshold skips tiny control frames (cursor, ping,
+    // fingerprint heartbeat) where the compression round-trip would cost more
+    // CPU than the bytes it saves.
+    perMessageDeflate: { threshold: 1024 },
   });
 
   const rooms = new Map<string, RoomData>();

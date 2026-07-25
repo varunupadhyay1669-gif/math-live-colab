@@ -556,6 +556,44 @@ transport limit, and the source warns the teacher when a page approaches it. A c
 cross-origin image throws on `toDataURL` forever; previously swallowed (permanently blank canvas),
 now reported once with the actual cause.
 
+---
+
+## Cycle 15 — DOM MORPHING: stop rebuilding the page (researched against rrweb)
+
+Researched the prior art (rrweb, the reference implementation for DOM record/replay) before writing
+more code. Three findings, all confirmed by measurement against our own lessons.
+
+**1. THE BIG ONE — we were destroying the entire page on every frame.** `document.body.innerHTML = …`
+re-creates every element, and a freshly-created element **restarts its CSS animation at t=0**. At our
+frame rate that meant animated lessons never advanced past their first frame on the student's screen.
+The same churn blanked `<canvas>`, reset `<video>`/`<audio>`, dropped focus/caret and reset every
+inner scroller — which is exactly why we had accumulated save/restore hacks for each of those.
+Proven directly: tagged a live node on the follower, and the tag vanished on the next frame.
+**Fixed by MORPHING** — patching the existing tree in place (position + nodeName + id matching, so an
+id change forces a clean replace rather than a wrong in-place morph). Untouched nodes are never
+touched, so animations, pixels, media, focus and scroll simply continue. Any exception falls back to
+the old wholesale swap, so worst case we are exactly as correct as before, never less.
+Re-proven after: the same tagged node survived across frames (`sameNodeObject: true`).
+Verified correctness against a structural-churn lesson — grow, shrink, **reorder**, attribute toggle,
+text change, form value — student matched the teacher exactly on all six, and canvas pixels survived.
+
+**2. Socket.IO ships `perMessageDeflate: false` by default** — so every mirror frame, which is
+literally HTML (the most compressible payload there is), had been crossing the wire **uncompressed**
+all along. Enabled with a 1KB threshold so tiny control frames (cursor, fingerprint heartbeat) skip
+the round-trip. Free win for the mirror, lesson uploads and whiteboard alike.
+
+**3. Canvas frames were PNG.** WebP q0.6 measured **3.5× smaller** on a real lesson canvas with no
+visible loss at these sizes; a browser without WebP silently returns PNG, so it's safe unconditionally.
+
+**Known remaining gap (documented, not yet fixed):** `serializeHeadStyles()` reads `outerHTML`, which
+cannot see `sheet.insertRule()` / `deleteRule()` / `replaceSync()` or constructed `adoptedStyleSheets`
+— none of those change markup. Lessons using runtime CSS injection are still silently mis-styled.
+
+**Verified:** full battery **106 checks, 0 failures**; browser-verified node preservation, structural
+morph correctness, canvas pixel survival, and stateful-quiz lockstep (lesson JS still stripped).
+
+---
+
 **Verified — socket + real browser:** `stress16` (10 checks) pins the relay contract: heartbeat
 relays teacher→students and is rejected from students, the styling envelope rides with each frame
 and is served from cache to late joiners, a >2MB frame relays (was silently dropped), an over-ceiling

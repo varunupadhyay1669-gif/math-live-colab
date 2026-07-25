@@ -214,7 +214,11 @@ export const mirrorScript = `
             var st = window.getComputedStyle(c);
             if (st && st.position === 'fixed') continue;
             if (!c.width || !c.height || c.width < 4 || c.height < 4) continue;
-            out.push({ sel: getElementPath(c), w: c.width, h: c.height, data: c.toDataURL('image/png') });
+            // WebP at q0.6 measured ~3.5x smaller than PNG on real lesson
+            // canvases with no visible quality loss at these sizes. A browser
+            // that doesn't support WebP silently returns PNG from toDataURL,
+            // so this is safe to request unconditionally.
+            out.push({ sel: getElementPath(c), w: c.width, h: c.height, data: c.toDataURL('image/webp', 0.6) });
           } catch (e) {
             // A canvas that has drawn a cross-origin image is "tainted":
             // toDataURL throws SecurityError forever. Previously swallowed, so
@@ -327,6 +331,108 @@ export const mirrorScript = `
     } catch (e) {}
   }
 
+  // ─────────────────── DOM MORPHING (fidelity core) ───────────────────
+  // Replacing document.body.innerHTML destroys and re-creates EVERY element on
+  // every frame. A freshly-created element restarts its CSS animation at t=0,
+  // so at our frame rate animations never advanced past their first frame; the
+  // same churn blanked <canvas>, reset <video>/<audio>, dropped focus and the
+  // caret, and reset every inner scroller — all of which we were papering over
+  // with save/restore hacks.
+  //
+  // Morphing instead PATCHES the existing tree in place: nodes that didn't
+  // change are never touched, so animations, pixels, media playback, focus and
+  // scroll all simply continue. Matching is by position + nodeName + id, so an
+  // id change forces a clean replace rather than a wrong in-place morph.
+  // Any exception falls back to the old wholesale swap — worst case we're
+  // exactly as correct as before, never less.
+  function sameNodeType(a, b) {
+    if (a.nodeType !== b.nodeType) return false;
+    if (a.nodeType !== 1) return true; // text / comment
+    if (a.nodeName !== b.nodeName) return false;
+    return (a.id || '') === (b.id || '');
+  }
+  function syncAttrs(from, to) {
+    var ta = to.attributes, i, name, value;
+    for (i = 0; i < ta.length; i++) {
+      name = ta[i].name; value = ta[i].value;
+      // Only write when different: setting width/height on a <canvas> CLEARS
+      // it, and rewriting an identical attribute would flush styles for nothing.
+      if (from.getAttribute(name) !== value) { try { from.setAttribute(name, value); } catch (e) {} }
+    }
+    var fa = from.attributes;
+    for (i = fa.length - 1; i >= 0; i--) {
+      name = fa[i].name;
+      if (!to.hasAttribute(name)) { try { from.removeAttribute(name); } catch (e) {} }
+    }
+  }
+  function syncFormValue(from, to) {
+    // Never fight a student who is actively typing into this field.
+    if (document.activeElement === from) return;
+    try {
+      if (from.tagName === 'SELECT') {
+        morphChildren(from, to);
+        var opts = to.querySelectorAll('option');
+        for (var i = 0; i < opts.length && i < from.options.length; i++) from.options[i].selected = opts[i].hasAttribute('selected');
+        return;
+      }
+      if (from.type === 'checkbox' || from.type === 'radio') {
+        var want = to.hasAttribute('checked');
+        if (from.checked !== want) from.checked = want;
+        return;
+      }
+      if (from.tagName === 'TEXTAREA') {
+        var tv = to.textContent || '';
+        if (from.value !== tv) from.value = tv;
+        return;
+      }
+      var v = to.getAttribute('value');
+      if (v != null && from.value !== v) from.value = v;
+    } catch (e) {}
+  }
+  function morphNode(from, to) {
+    if (from.nodeType === 3 || from.nodeType === 8) {
+      if (from.nodeValue !== to.nodeValue) from.nodeValue = to.nodeValue;
+      return;
+    }
+    if (from.nodeType !== 1) return;
+    syncAttrs(from, to);
+    var tag = from.tagName;
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') { syncFormValue(from, to); return; }
+    // A <canvas>'s content is pixels, not markup — its children are only
+    // fallback text. Leave it entirely alone so the painted frame survives.
+    if (tag === 'CANVAS') return;
+    morphChildren(from, to);
+  }
+  function morphChildren(fromParent, toParent) {
+    // Snapshot both child lists first: we mutate fromParent while iterating,
+    // and a live NodeList would shift under us.
+    var fromKids = [], toKids = [], n;
+    for (n = fromParent.firstChild; n; n = n.nextSibling) fromKids.push(n);
+    for (n = toParent.firstChild; n; n = n.nextSibling) toKids.push(n);
+    var i;
+    for (i = 0; i < toKids.length; i++) {
+      var t = toKids[i], f = fromKids[i];
+      if (!f) { fromParent.appendChild(document.importNode(t, true)); continue; }
+      if (sameNodeType(f, t)) morphNode(f, t);
+      else fromParent.replaceChild(document.importNode(t, true), f);
+    }
+    for (i = fromKids.length - 1; i >= toKids.length; i--) {
+      try { fromParent.removeChild(fromKids[i]); } catch (e) {}
+    }
+  }
+  // Returns true if the body was patched in place, false if we had to fall back.
+  function applyBodyHtml(html) {
+    try {
+      var tpl = document.createElement('template');
+      tpl.innerHTML = html;
+      morphChildren(document.body, tpl.content);
+      return true;
+    } catch (e) {
+      try { document.body.innerHTML = html; } catch (e2) {}
+      return false;
+    }
+  }
+
   function applySnapshot(d) {
     // Nothing to do when body AND the styling envelope are unchanged.
     if (d.body == null || (d.body === lastBody && (d.attrs == null || d.attrs === lastAttrs) && (d.head == null || d.head === lastHead))) {
@@ -362,7 +468,11 @@ export const mirrorScript = `
     } catch (e) {}
 
     applyingDom = true;
-    try { document.body.innerHTML = d.body; } catch (e) {}
+    // Patch in place rather than rebuilding — see DOM MORPHING above. The
+    // scroll/focus/inner-scroller restores below become no-ops when morphing
+    // succeeds (nothing was destroyed, so nothing needs restoring); they still
+    // cover the wholesale-swap fallback path.
+    applyBodyHtml(d.body);
     applyBodyAttrs(d.attrs);
     applyHead(d.head);
     try {
