@@ -109,6 +109,32 @@ async function run() {
   assert(!(s7 && ((s7.head || '').includes('color:red') || s7.attrs === '[["class","dark"]]')),
     'new content clears cached attrs + head CSS (no stale styling)', s7 ? 'served stale envelope!' : '');
 
+  // ── H8: the teacher's scroll-sync ("Linked") toggle actually gates scroll ──
+  // The mirror relayed the teacher's scroll unconditionally, so UNLINKING did
+  // nothing and students were still dragged to the teacher's position.
+  console.log('H8: the scroll-sync toggle gates teacher→student scrolling');
+  const room3 = rid('mh3');
+  const t3 = await joinTeacher(room3);
+  const stu3 = await joinStudent(room3, 'Stu3');
+  await delay(150);
+  // Linked (default) → scroll relays
+  const linked = on1(stu3, 'mirror_scroll', { match: p => p && p.scrollY === 500, timeout: 2500 });
+  t3.emit('mirror_scroll', { roomId: room3, scrollX: 0, scrollY: 500 });
+  await linked.then(() => ok('Linked: the teacher\'s scroll moves students')).catch(e => bad('linked scroll relays', e.message));
+  // Unlinked → scroll must NOT relay
+  t3.emit('toggle_scroll_sync', { roomId: room3, enabled: false });
+  await delay(250);
+  const unlinked = none(stu3, 'mirror_scroll', 1000);
+  t3.emit('mirror_scroll', { roomId: room3, scrollX: 0, scrollY: 900 });
+  const leaked = await unlinked;
+  assert(!leaked, 'Unlinked: the teacher\'s scroll does NOT drag students', leaked ? `leaked scrollY=${leaked.scrollY}` : '');
+  // Re-linked → relays again (toggle is live, not one-way)
+  t3.emit('toggle_scroll_sync', { roomId: room3, enabled: true });
+  await delay(250);
+  const relinked = on1(stu3, 'mirror_scroll', { match: p => p && p.scrollY === 700, timeout: 2500 });
+  t3.emit('mirror_scroll', { roomId: room3, scrollX: 0, scrollY: 700 });
+  await relinked.then(() => ok('Re-linked: scrolling resumes (toggle works both ways)')).catch(e => bad('relink resumes scroll', e.message));
+
   console.log(`\nSTRESS16 RESULT: ${pass} passed, ${fail} failed`);
   if (fails.length) { console.log('FAILURES:'); fails.forEach(f => console.log('  - ' + f)); }
   for (const s of sockets) { try { s.close(); } catch {} }

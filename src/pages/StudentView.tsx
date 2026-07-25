@@ -1042,6 +1042,9 @@ export default function StudentView() {
     iframeRef.current?.contentWindow?.postMessage({ type: 'SET_INTERACTION_MODE', allowed: canInteractRef.current }, '*');
     // LIVE MIRROR: mirror the same drive gate onto the follower agent.
     iframeRef.current?.contentWindow?.postMessage({ type: 'SET_MIRROR_INTERACT', allowed: canInteractRef.current }, '*');
+    // ...and the scroll lock, so a reloading student is locked from frame one
+    // instead of being briefly free to scroll away.
+    iframeRef.current?.contentWindow?.postMessage({ type: 'SET_MIRROR_SCROLLLOCK', locked: scrollSyncEnabled && !canInteractRef.current }, '*');
     // Re-send current state
     iframeRef.current?.contentWindow?.postMessage({ type: 'SET_SCROLL_SYNC', enabled: scrollSyncEnabled }, '*');
     if (currentStep < 999) {
@@ -1200,6 +1203,17 @@ export default function StudentView() {
     // to the teacher's authoritative lesson (drive) or is a pure view-only mirror.
     postToIframe({ type: 'SET_MIRROR_INTERACT', allowed: canInteract });
   }, [canInteract, iframeUrl, postToIframe]);
+
+  // ── Scroll lock ──
+  // A view-only student in a "Linked" room stays where the teacher put them —
+  // they can't scroll off mid-explanation. The teacher opens it up either by
+  // unlinking scroll (look around freely) or by granting interaction (they're
+  // driving, so they need their own scroll). Teacher-driven scrolling is
+  // unaffected either way.
+  const scrollLocked = scrollSyncEnabled && !canInteract;
+  useEffect(() => {
+    postToIframe({ type: 'SET_MIRROR_SCROLLLOCK', locked: scrollLocked });
+  }, [scrollLocked, iframeUrl, postToIframe]);
 
   // ── Challenge Timer Countdown ──
   useEffect(() => {

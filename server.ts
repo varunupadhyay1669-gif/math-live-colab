@@ -2662,6 +2662,10 @@ Build a widget that teaches: ${safePrompt}`;
       if (!checkRateLimit(socket.id, true)) return;
       const room = rooms.get(roomId);
       if (!isMember(room, socket.id) || room.users.get(socket.id)?.role !== 'teacher') return;
+      // Respect the teacher's scroll-sync ("Linked") toggle. Without this the
+      // mirror dragged every student to the teacher's scroll position even when
+      // the teacher had explicitly UNLINKED scrolling — the toggle did nothing.
+      if (!room.scrollSyncEnabled) return;
       socket.to(roomId).emit('mirror_scroll', { scrollX, scrollY });
     });
     socket.on('mirror_input', ({ roomId, input }: { roomId: string; input: any }) => {

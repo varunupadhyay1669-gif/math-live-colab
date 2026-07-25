@@ -422,12 +422,36 @@ export const mirrorScript = `
   document.addEventListener('wheel', function (e) { if (applyingDom || !allow) return; var p = getElementPath(e.target); post({ type: 'SYNC_MIRROR_INPUT', kind: 'wheel', path: p, deltaY: e.deltaY }); }, { capture: true, passive: true });
   document.addEventListener('keydown', function (e) { if (applyingDom || !allow) return; post({ type: 'SYNC_MIRROR_INPUT', kind: 'key', key: e.key }); }, true);
 
+  // ── SCROLL LOCK ──
+  // When the teacher keeps the class "Linked" and the student is view-only, the
+  // student's view must stay where the teacher put it — they shouldn't be able
+  // to wander off mid-explanation. We block USER-initiated scrolling only;
+  // window.scrollTo() still works, so teacher-driven positioning (MIRROR_SCROLL)
+  // is unaffected. Blocking the gesture (rather than snapping back afterwards)
+  // avoids a jarring fight with the student's finger/wheel.
+  var scrollLocked = false;
+  var SCROLL_KEYS = { PageUp: 1, PageDown: 1, ArrowUp: 1, ArrowDown: 1, Home: 1, End: 1, ' ': 1, Spacebar: 1 };
+  function blockIfLocked(e) {
+    if (!scrollLocked) return;
+    try { e.preventDefault(); } catch (err) {}
+  }
+  document.addEventListener('wheel', blockIfLocked, { capture: true, passive: false });
+  document.addEventListener('touchmove', blockIfLocked, { capture: true, passive: false });
+  document.addEventListener('keydown', function (e) {
+    if (!scrollLocked || !e || !SCROLL_KEYS[e.key]) return;
+    // Never swallow typing: a locked student may still be filling in an input.
+    var t = e.target;
+    if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+    try { e.preventDefault(); } catch (err) {}
+  }, { capture: true, passive: false });
+
   window.addEventListener('message', function (e) {
     var d = e.data; if (!d || !d.type) return;
     if (d.type === 'MIRROR_APPLY') applySnapshot(d);
     else if (d.type === 'MIRROR_CANVAS') paintCanvases(d.canvases || []);
     else if (d.type === 'MIRROR_SCROLL') { try { window.scrollTo(d.scrollX || 0, d.scrollY || 0); } catch (e) {} }
     else if (d.type === 'SET_MIRROR_INTERACT') allow = !!d.allowed;
+    else if (d.type === 'SET_MIRROR_SCROLLLOCK') scrollLocked = !!d.locked;
     else if (d.type === 'MIRROR_PING') {
       // The source tells us the fingerprint of the state it believes we have.
       // A mismatch means a snapshot never reached us (dropped in transit /
