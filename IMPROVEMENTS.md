@@ -521,3 +521,46 @@ lifecycle so there's no new storage/expiry system to maintain.
 `/p/:id` renders and **runs the page's JS**; the file-upload path (drag-drop / choose) does the
 same; "Open as live class" loads the page as a room with the mirror source active; a bad id shows
 the expired state. tsc 0, build clean.
+
+---
+
+## Cycle 14 — MIRROR HARDENING: closing the last desync holes (any HTML, any time)
+
+Live Mirror made a *diverging* student impossible. This cycle closes the remaining ways the mirror
+could still be WRONG — a lost frame, or state that lived outside `<body>`.
+
+**1. The last structural desync hole: a frame lost in transit.** The mirror content-dedups (it never
+re-sends state it believes the follower has). That is what makes it cheap — and it meant a frame
+dropped by a socket hiccup/reconnect was *never retried*: on a STATIC screen (a quiz question just
+sitting there) the source stays silent and the student is stale **forever**. Fixed with a **content
+fingerprint heartbeat**: every 2s the source broadcasts a ~30-byte hash of the state it last sent; a
+follower whose render doesn't match asks for a full resync (after 2 consecutive mismatches, so a
+frame merely in flight doesn't trigger one). Self-healing, negligible cost, and it converges in ~4s.
+
+**2. State outside `<body>` never reached the follower.** `serializeBody()` returned only
+`body.innerHTML`, so two very common patterns silently didn't mirror:
+- runtime-injected `<style>` in `<head>` (themes, animations, computed layout) → follower rendered
+  with stale CSS;
+- `<body>`'s own attributes (`document.body.className = 'dark'`) → dropped entirely by innerHTML.
+Both are now captured (head CSS only re-sent when it changes, so steady-state cost is zero) and the
+server caches the whole envelope so a late joiner served from cache renders styled, not bare.
+
+**3. Interaction state destroyed on every frame.** A `body.innerHTML` swap resets focus, the text
+caret, and the scrollTop of inner scrollable panels — so a student typing lost their cursor whenever
+a frame landed. The follower now captures focus + selection + inner-scroller offsets before the swap
+and restores them after (page scroll was fixed in the previous cycle).
+
+**4. Silent failures made visible.** A frame over the old 2MB *file* cap was dropped by the server
+with no signal (student frozen forever) — transient frames now have their own 4MB ceiling under the
+transport limit, and the source warns the teacher when a page approaches it. A canvas tainted by a
+cross-origin image throws on `toDataURL` forever; previously swallowed (permanently blank canvas),
+now reported once with the actual cause.
+
+**Verified — socket + real browser:** `stress16` (10 checks) pins the relay contract: heartbeat
+relays teacher→students and is rejected from students, the styling envelope rides with each frame
+and is served from cache to late joiners, a >2MB frame relays (was silently dropped), an over-ceiling
+frame is refused without wedging the socket, and new content clears the whole envelope. In-browser on
+an adversarial lesson: runtime-injected CSS and body-class changes mirror exactly; focus, caret,
+typed value and inner-panel scroll all survive repeated frames; and on a **static** lesson a
+simulated lost frame is detected and the teacher force-resends — the complete self-healing loop.
+Full battery: **103 checks, 0 failures.** tsc 0, build clean.

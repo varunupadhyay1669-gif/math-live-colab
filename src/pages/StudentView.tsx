@@ -604,9 +604,15 @@ export default function StudentView() {
     // The teacher's authoritative DOM/canvas, relayed by the server. Paint it
     // into the follower shell. This is the "impossible to desync" path: the
     // student renders exactly what the teacher's real lesson produced.
-    newSocket.on("mirror_dom", ({ body, scrollX, scrollY }: { body: string; scrollX?: number; scrollY?: number }) => {
+    newSocket.on("mirror_dom", ({ body, scrollX, scrollY, attrs, head, h }: { body: string; scrollX?: number; scrollY?: number; attrs?: string; head?: string | null; h?: string }) => {
       if (typeof body !== 'string') return;
-      postToIframe({ type: 'MIRROR_APPLY', body, scrollX, scrollY });
+      postToIframe({ type: 'MIRROR_APPLY', body, scrollX, scrollY, attrs, head, h });
+    });
+    // Fingerprint of the teacher's current screen. The follower compares it with
+    // what it actually rendered and asks for a resync if a frame was lost.
+    newSocket.on("mirror_ping", ({ h }: { h?: string }) => {
+      if (typeof h !== 'string') return;
+      postToIframe({ type: 'MIRROR_PING', h });
     });
     newSocket.on("mirror_canvas", ({ canvases }: { canvases: any[] }) => {
       if (!Array.isArray(canvases)) return;
@@ -1073,6 +1079,10 @@ export default function StudentView() {
         });
         return;
       }
+      // The follower detected its screen no longer matches the teacher's
+      // fingerprint (a frame was lost in transit) — pull a fresh full snapshot.
+      // Rate-limited follower-side (two consecutive mismatches, ~4s).
+      if (type === 'MIRROR_STALE') { socket.emit('mirror_request', { roomId }); return; }
       if (type === 'MIRROR_FOLLOWER_READY') {
         socket.emit('mirror_request', { roomId });
         // Tell the follower whether it may drive right now.

@@ -1429,9 +1429,29 @@ export default function Room() {
       // server (which fans out to every follower). MUST be handled and returned
       // BEFORE the SYNC_ interaction relay below — 'SYNC_MIRROR' starts with
       // 'SYNC_' but is a snapshot, not a replayable interaction.
-      if (type === 'SYNC_MIRROR') { socket.emit('mirror_dom', { roomId, body: e.data.body, scrollX: e.data.scrollX, scrollY: e.data.scrollY }); return; }
+      if (type === 'SYNC_MIRROR') {
+        socket.emit('mirror_dom', {
+          roomId, body: e.data.body, scrollX: e.data.scrollX, scrollY: e.data.scrollY,
+          // Body attributes + runtime-injected head CSS + the content fingerprint
+          // students use to detect a dropped snapshot.
+          attrs: e.data.attrs, head: e.data.head, h: e.data.h,
+        });
+        return;
+      }
       if (type === 'SYNC_MIRROR_CANVAS') { socket.emit('mirror_canvas', { roomId, canvases: e.data.canvases }); return; }
       if (type === 'SYNC_MIRROR_SCROLL') { socket.emit('mirror_scroll', { roomId, scrollX: e.data.scrollX, scrollY: e.data.scrollY }); return; }
+      // Tiny fingerprint heartbeat — lets a student whose snapshot was lost in
+      // transit notice and ask for a resync (the last structural desync hole).
+      if (type === 'SYNC_MIRROR_PING') { socket.emit('mirror_ping', { roomId, h: e.data.h }); return; }
+      // Teacher-only diagnostics: the mirror physically cannot ship this lesson.
+      if (type === 'SYNC_MIRROR_OVERSIZE') {
+        showNotif(`⚠️ This lesson's page is very large (${Math.round((e.data.bytes || 0) / 1024 / 1024)}MB) — students may not update. Try trimming it or splitting it up.`);
+        return;
+      }
+      if (type === 'SYNC_MIRROR_TAINTED') {
+        showNotif('⚠️ A drawing area uses an image from another site, so it can\'t be shared to students. Host the image with CORS enabled.');
+        return;
+      }
       if (type === 'MIRROR_SOURCE_READY') { return; }
 
       // Internal sync events — not interactions

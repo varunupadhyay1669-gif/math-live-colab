@@ -54,6 +54,16 @@ export const mirrorScript = `
   }
   function findElement(p) { if (!p) return null; try { return document.querySelector(p); } catch (e) { return null; } }
   function post(msg) { try { window.parent.postMessage(msg, '*'); } catch (e) {} }
+  // Cheap deterministic content fingerprint (djb2 + length). Both sides run the
+  // SAME function over the SAME signature string, so a mismatch proves the
+  // follower's screen differs from the source's — the basis of the self-healing
+  // divergence check below. Not cryptographic; length-salted so accidental
+  // collisions are vanishingly unlikely for DOM snapshots.
+  function hashStr(s) {
+    var h = 5381, i = s.length;
+    while (i) h = ((h * 33) ^ s.charCodeAt(--i)) >>> 0;
+    return h.toString(36) + '-' + s.length.toString(36);
+  }
 
   // ═══════════════════════ SOURCE (authoritative) ═══════════════════════
   if (isSource) {
@@ -110,20 +120,64 @@ export const mirrorScript = `
       try { clone.querySelectorAll('script').forEach(function (s) { s.parentNode && s.parentNode.removeChild(s); }); } catch (e) {}
       return clone.innerHTML;
     }
-    var lastSentBody = null;
-    // Send the CURRENT body — but only if it differs from the last thing we
-    // sent (content-dedup). This makes every send idempotent + self-correcting:
-    // a missed/late/out-of-order snapshot is harmless because the next send
-    // always reflects the true current DOM, and identical bodies are never
-    // re-sent (cheap heartbeat).
+    // <body>'s OWN attributes. body.innerHTML drops them, so a lesson that does
+    // document.body.className = 'dark' (theme toggles, state-driven styling)
+    // changed nothing on the follower. Tiny payload; sent every snapshot.
+    function serializeBodyAttrs() {
+      var a = [];
+      try {
+        var at = document.body.attributes;
+        for (var i = 0; i < at.length; i++) a.push([at[i].name, at[i].value]);
+      } catch (e) {}
+      return JSON.stringify(a);
+    }
+    // <head> stylesheets. Lessons commonly inject <style> at runtime (animations,
+    // themes, computed layout). Those live OUTSIDE body, so they never reached
+    // the follower and the mirror rendered with stale CSS. Captured separately
+    // and only sent when changed, so the steady-state cost is zero.
+    function serializeHeadStyles() {
+      var out = '';
+      try {
+        var nodes = document.head.querySelectorAll('style, link[rel="stylesheet"]');
+        for (var i = 0; i < nodes.length; i++) out += nodes[i].outerHTML;
+      } catch (e) {}
+      return out;
+    }
+    var lastSentSig = null, lastSentHead = null, lastSentHash = null, oversizeReported = false;
+    // Send the CURRENT state — but only if it differs from the last thing we sent
+    // (content-dedup). Every send is idempotent + self-correcting: a missed/late/
+    // out-of-order snapshot is harmless because the next send always reflects the
+    // true current DOM, and identical state is never re-sent.
     function sendSnapshot(force) {
       if (trailTimer) { clearTimeout(trailTimer); trailTimer = null; }
-      var body;
-      try { body = serializeBody(); } catch (e) { return; }
-      if (!force && body === lastSentBody) return;
-      lastSentBody = body;
+      var body, attrs, head;
+      try { body = serializeBody(); attrs = serializeBodyAttrs(); head = serializeHeadStyles(); } catch (e) { return; }
+      // The signature covers everything the follower renders, so ANY visual
+      // change (body, body attributes, or head CSS) triggers a send.
+      var sig = body + ' ' + attrs + ' ' + head;
+      if (!force && sig === lastSentSig) return;
+      var headChanged = head !== lastSentHead;
+      lastSentSig = sig;
+      lastSentHead = head;
+      lastSentHash = hashStr(sig);
       lastSentAt = Date.now();
-      try { post({ type: 'SYNC_MIRROR', body: body, scrollX: window.scrollX || 0, scrollY: window.scrollY || 0 }); } catch (e) {}
+      // A snapshot too large for the transport would be dropped in transit and
+      // the follower would silently freeze on stale content forever. Report it
+      // once so the failure is visible instead of mysterious.
+      if (body.length > 3500000 && !oversizeReported) {
+        oversizeReported = true;
+        post({ type: 'SYNC_MIRROR_OVERSIZE', bytes: body.length });
+      }
+      try {
+        post({
+          type: 'SYNC_MIRROR', body: body, attrs: attrs,
+          // Only ship head CSS when it actually changed (or on a forced resync,
+          // which must be self-contained since the follower may have missed it).
+          head: (headChanged || force) ? head : null,
+          h: lastSentHash,
+          scrollX: window.scrollX || 0, scrollY: window.scrollY || 0,
+        });
+      } catch (e) {}
     }
     // Adaptive leading-edge throttle. The mirror runs on the SAME main thread as
     // the app UI (a same-origin blob iframe shares the parent's event loop), and
@@ -149,6 +203,7 @@ export const mirrorScript = `
 
     // Canvas pixel channel (3D / WebGL). Skip fixed-position overlays (decorative
     // confetti etc.) and tiny/blank canvases. Throttled independent of the DOM stream.
+    var taintReported = false;
     function captureCanvases() {
       var out = [];
       try {
@@ -160,7 +215,17 @@ export const mirrorScript = `
             if (st && st.position === 'fixed') continue;
             if (!c.width || !c.height || c.width < 4 || c.height < 4) continue;
             out.push({ sel: getElementPath(c), w: c.width, h: c.height, data: c.toDataURL('image/png') });
-          } catch (e) {}
+          } catch (e) {
+            // A canvas that has drawn a cross-origin image is "tainted":
+            // toDataURL throws SecurityError forever. Previously swallowed, so
+            // the student just saw a permanently blank canvas with no clue why.
+            // Report once so the teacher learns the real cause (and the fix:
+            // serve the image with CORS headers, or set crossOrigin on it).
+            if (!taintReported && e && String(e.name) === 'SecurityError') {
+              taintReported = true;
+              post({ type: 'SYNC_MIRROR_TAINTED' });
+            }
+          }
         }
       } catch (e) {}
       return out;
@@ -204,6 +269,17 @@ export const mirrorScript = `
       // idle; guarantees any missed/late mutation-snapshot converges within 500ms
       // so the mirror can never get permanently stuck one step behind.
       setInterval(function () { if (!applyingInput) sendSnapshot(); }, 500);
+      // ── DIVERGENCE PING (closes the last structural desync hole) ──
+      // Content-dedup means a snapshot LOST IN TRANSIT (socket hiccup, reconnect,
+      // relay drop) is never retried: the source believes the follower already
+      // has that state and stays silent until the DOM next changes. On a static
+      // screen — a quiz question sitting there — the follower would show stale
+      // content indefinitely. So every 2s we broadcast just the fingerprint of
+      // what we last sent (a few bytes). A follower whose rendering doesn't match
+      // asks for a full resync. Cost is negligible; the guarantee is absolute.
+      setInterval(function () {
+        if (lastSentHash) post({ type: 'SYNC_MIRROR_PING', h: lastSentHash });
+      }, 2000);
     }
 
     window.addEventListener('message', function (e) {
@@ -219,22 +295,76 @@ export const mirrorScript = `
 
   // ═══════════════════════ FOLLOWER (dumb mirror) ═══════════════════════
   var applyingDom = false, lastBody = null, allow = false, lastCanvasList = null;
+  var lastAttrs = null, lastHead = null, appliedHash = null, staleTicks = 0;
+
+  // Re-apply <body>'s own attributes (class/style/data-*). Without this a lesson
+  // that toggles a body class rendered unstyled on the follower.
+  function applyBodyAttrs(json) {
+    if (json == null || json === lastAttrs) return;
+    lastAttrs = json;
+    try {
+      var want = JSON.parse(json), seen = {};
+      for (var i = 0; i < want.length; i++) { document.body.setAttribute(want[i][0], want[i][1]); seen[want[i][0]] = 1; }
+      var have = document.body.attributes;
+      for (var j = have.length - 1; j >= 0; j--) { if (!seen[have[j].name]) document.body.removeAttribute(have[j].name); }
+    } catch (e) {}
+  }
+  // Mirror runtime-injected <head> CSS into a dedicated container so dynamically
+  // styled lessons look identical. Kept in its own element so we never touch the
+  // follower agent's own script/styles.
+  function applyHead(html) {
+    if (html == null || html === lastHead) return;
+    lastHead = html;
+    try {
+      var host = document.getElementById('mathslive-mirror-head');
+      if (!host) {
+        host = document.createElement('div');
+        host.id = 'mathslive-mirror-head';
+        host.style.display = 'none';
+        (document.head || document.documentElement).appendChild(host);
+      }
+      host.innerHTML = html;
+    } catch (e) {}
+  }
 
   function applySnapshot(d) {
-    if (d.body == null || d.body === lastBody) return;
+    // Nothing to do when body AND the styling envelope are unchanged.
+    if (d.body == null || (d.body === lastBody && (d.attrs == null || d.attrs === lastAttrs) && (d.head == null || d.head === lastHead))) {
+      if (d.h) appliedHash = d.h; staleTicks = 0;
+      return;
+    }
     var firstPaint = (lastBody === null);
     lastBody = d.body;
-    // Replacing body.innerHTML resets the scroll to the top. On a LIVE update
-    // (the student did something → the teacher's lesson changed → a fresh
-    // snapshot comes back) that yanked the student back to the top of the page
-    // on every action. So we snapshot THIS viewer's scroll before the swap and
-    // restore it after — the student stays exactly where they were. The
-    // teacher's own scrolling is mirrored separately via MIRROR_SCROLL. Only on
-    // the FIRST paint (initial render / late-join / reconnect) do we align to
-    // the teacher's snapshot scroll so a late joiner lands where the teacher is.
+    // Replacing body.innerHTML resets scroll, focus, the text caret, and the
+    // scroll position of every inner scrollable panel. On a LIVE update (the
+    // student acts → the teacher's lesson changes → a snapshot comes back) that
+    // yanked the student to the top and dropped them out of whatever they were
+    // typing. So we capture this viewer's interaction state before the swap and
+    // restore it after. The teacher's own scrolling arrives separately via
+    // MIRROR_SCROLL. Only on FIRST paint (initial render / late-join / reconnect)
+    // do we align to the teacher's scroll, so a late joiner lands where they are.
     var keepX = window.pageXOffset || 0, keepY = window.pageYOffset || 0;
+    var focusPath = null, selStart = null, selEnd = null;
+    try {
+      var ae = document.activeElement;
+      if (ae && ae !== document.body && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.isContentEditable)) {
+        focusPath = getElementPath(ae);
+        try { selStart = ae.selectionStart; selEnd = ae.selectionEnd; } catch (e2) {}
+      }
+    } catch (e) {}
+    // Inner scrollers (a scrollable question panel, a code pane, a list).
+    var innerScroll = [];
+    try {
+      var all = document.body.querySelectorAll('*');
+      for (var i = 0; i < all.length && innerScroll.length < 30; i++) {
+        if (all[i].scrollTop > 0 || all[i].scrollLeft > 0) innerScroll.push([getElementPath(all[i]), all[i].scrollTop, all[i].scrollLeft]);
+      }
+    } catch (e) {}
+
     applyingDom = true;
     try { document.body.innerHTML = d.body; } catch (e) {}
+    applyBodyAttrs(d.attrs);
+    applyHead(d.head);
     try {
       if (firstPaint && (typeof d.scrollX === 'number' || typeof d.scrollY === 'number')) {
         window.scrollTo(d.scrollX || 0, d.scrollY || 0);
@@ -242,7 +372,22 @@ export const mirrorScript = `
         window.scrollTo(keepX, keepY);
       }
     } catch (e) {}
+    // Restore inner scrollers, then focus + caret.
+    for (var k = 0; k < innerScroll.length; k++) {
+      try { var t = findElement(innerScroll[k][0]); if (t) { t.scrollTop = innerScroll[k][1]; t.scrollLeft = innerScroll[k][2]; } } catch (e) {}
+    }
+    if (focusPath) {
+      try {
+        var fe = findElement(focusPath);
+        if (fe && fe.focus) {
+          fe.focus({ preventScroll: true });
+          if (selStart != null && fe.setSelectionRange) { try { fe.setSelectionRange(selStart, selEnd); } catch (e3) {} }
+        }
+      } catch (e) {}
+    }
     applyingDom = false;
+    if (d.h) appliedHash = d.h;
+    staleTicks = 0;
     // A body swap recreates any <canvas> BLANK (innerHTML can't carry pixels).
     // Immediately re-draw the most recent captured frame so a lesson that
     // mutates the DOM while a canvas/3D sim runs doesn't flicker to empty
@@ -283,6 +428,18 @@ export const mirrorScript = `
     else if (d.type === 'MIRROR_CANVAS') paintCanvases(d.canvases || []);
     else if (d.type === 'MIRROR_SCROLL') { try { window.scrollTo(d.scrollX || 0, d.scrollY || 0); } catch (e) {} }
     else if (d.type === 'SET_MIRROR_INTERACT') allow = !!d.allowed;
+    else if (d.type === 'MIRROR_PING') {
+      // The source tells us the fingerprint of the state it believes we have.
+      // A mismatch means a snapshot never reached us (dropped in transit /
+      // reconnect) — the one case content-dedup can't self-heal, because the
+      // source won't resend state it thinks we already hold. Require TWO
+      // consecutive mismatches (~4s) so a snapshot merely in flight doesn't
+      // trigger a needless resync, then ask for a full one.
+      if (d.h && d.h !== appliedHash) {
+        staleTicks++;
+        if (staleTicks >= 2) { staleTicks = 0; post({ type: 'MIRROR_STALE' }); }
+      } else staleTicks = 0;
+    }
   });
   post({ type: 'MIRROR_FOLLOWER_READY' });
 })();

@@ -46,7 +46,13 @@ interface RoomData {
   // LIVE MIRROR: the teacher's authoritative iframe DOM (latest snapshot),
   // relayed to students and cached so a late-joiner renders instantly.
   // Transient (NOT persisted) — re-sent by the source on the next mutation.
+  // mirrorAttrs/mirrorHead carry the styling envelope (body attributes and
+  // runtime-injected head CSS) so a cache-served joiner looks identical, and
+  // mirrorHash is the fingerprint students compare against to detect a lost frame.
   mirrorBody: string | null;
+  mirrorAttrs: string | null;
+  mirrorHead: string | null;
+  mirrorHash: string | null;
   revision: number;
   whiteboard: {
     objects: any[];
@@ -337,6 +343,9 @@ async function startServer() {
       tempContent: null,
       liveSnapshotHtml: null,
       mirrorBody: null,
+      mirrorAttrs: null,
+      mirrorHead: null,
+      mirrorHash: null,
       revision: 0,
       whiteboard: { objects: [], strokes: [], shapes: [], view: null, gridMode: 'grid', instruments: [], texts: [] },
       annotations: [],
@@ -371,6 +380,9 @@ async function startServer() {
     // lesson switch never renders the previous lesson's DOM (the source will
     // stream the new one within a frame of its iframe rebuilding).
     room.mirrorBody = null;
+    room.mirrorAttrs = null;
+    room.mirrorHead = null;
+    room.mirrorHash = null;
   }
 
   // ── Event journal helpers ──
@@ -2609,12 +2621,34 @@ Build a widget that teaches: ${safePrompt}`;
     // different screen). A student that may drive forwards its input to the
     // teacher, who applies it on the real lesson and streams the result back.
     // No journal / replay / seed involved — desync is structurally impossible.
-    socket.on('mirror_dom', ({ roomId, body, scrollX, scrollY }: { roomId: string; body: string; scrollX?: number; scrollY?: number }) => {
-      if (typeof roomId !== 'string' || typeof body !== 'string' || body.length > MAX_FILE_SIZE) return;
+    // Cap for a mirror frame. Deliberately larger than MAX_FILE_SIZE (which
+    // governs PERSISTED lesson files): a mirror frame is transient, never
+    // written to the store, and dropping it silently freezes the student's
+    // screen forever. Kept under Socket.IO's 5MB maxHttpBufferSize so the frame
+    // actually reaches the wire; the source separately warns the teacher when a
+    // page approaches this size.
+    const MAX_MIRROR_FRAME = 4 * 1024 * 1024;
+    socket.on('mirror_dom', ({ roomId, body, scrollX, scrollY, attrs, head, h }: { roomId: string; body: string; scrollX?: number; scrollY?: number; attrs?: string; head?: string | null; h?: string }) => {
+      if (typeof roomId !== 'string' || typeof body !== 'string' || body.length > MAX_MIRROR_FRAME) return;
       const room = rooms.get(roomId);
       if (!isMember(room, socket.id) || room.users.get(socket.id)?.role !== 'teacher') return;
       room.mirrorBody = body;
-      socket.to(roomId).emit('mirror_dom', { body, scrollX, scrollY });
+      // Cache the full styling envelope too, so a late joiner served from cache
+      // renders with the same body attributes and runtime CSS as everyone else.
+      room.mirrorAttrs = typeof attrs === 'string' ? attrs : null;
+      if (typeof head === 'string') room.mirrorHead = head;
+      room.mirrorHash = typeof h === 'string' ? h : null;
+      socket.to(roomId).emit('mirror_dom', { body, scrollX, scrollY, attrs, head, h });
+    });
+    // Fingerprint heartbeat (a few bytes): lets a student detect that a snapshot
+    // never arrived and request a resync. Rate-limited as loss-tolerant.
+    socket.on('mirror_ping', ({ roomId, h }: { roomId: string; h?: string }) => {
+      if (typeof roomId !== 'string' || typeof h !== 'string') return;
+      if (!checkRateLimit(socket.id, true)) return;
+      const room = rooms.get(roomId);
+      if (!isMember(room, socket.id) || room.users.get(socket.id)?.role !== 'teacher') return;
+      room.mirrorHash = h;
+      socket.to(roomId).emit('mirror_ping', { h });
     });
     socket.on('mirror_canvas', ({ roomId, canvases }: { roomId: string; canvases: any }) => {
       if (typeof roomId !== 'string' || !Array.isArray(canvases)) return;
@@ -2647,9 +2681,14 @@ Build a widget that teaches: ${safePrompt}`;
       if (typeof roomId !== 'string') return;
       const room = rooms.get(roomId);
       if (!isMember(room, socket.id)) return;
-      // Serve the cached body immediately (instant late-join), then ask the
-      // teacher to push a fresh one (covers canvas + freshest state).
-      if (room.mirrorBody) io.to(socket.id).emit('mirror_dom', { body: room.mirrorBody });
+      // Serve the cached frame immediately (instant late-join), then ask the
+      // teacher to push a fresh one (covers canvas + freshest state). Includes
+      // the styling envelope so the cache-served render isn't unstyled.
+      if (room.mirrorBody) {
+        io.to(socket.id).emit('mirror_dom', {
+          body: room.mirrorBody, attrs: room.mirrorAttrs, head: room.mirrorHead, h: room.mirrorHash,
+        });
+      }
       if (room.teacherSocketId) io.to(room.teacherSocketId).emit('mirror_request', {});
     });
 
