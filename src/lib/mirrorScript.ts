@@ -220,6 +220,9 @@ export const mirrorScript = `
     //     their own throttled channel — and it keeps the main thread responsive.
     // MutationObserver already coalesces a synchronous DOM update into one call.
     function scheduleSnapshot() {
+      // A canvas can appear at any time (3D libraries append theirs once loaded,
+      // or on a "Start" click). Any DOM change is our cue to check.
+      if (!canvasTimer) ensureCanvasTimer();
       if (applyingInput) return;
       var now = Date.now();
       if (now - lastMutAt < 120) { if (!burstStart) burstStart = now; } else { burstStart = 0; }
@@ -237,11 +240,23 @@ export const mirrorScript = `
       var out = [];
       try {
         var cs = document.querySelectorAll('canvas');
+        // Only treat position:fixed canvases as skippable decoration when there
+        // is ALSO a normal-flow canvas to prefer (the confetti-overlay case).
+        // A 3D sim whose only canvas is fixed — which full-screen WebGL
+        // renderers do routinely — was previously skipped entirely, so the
+        // student saw nothing at all.
+        var hasNonFixed = false;
+        for (var p = 0; p < cs.length; p++) {
+          try {
+            var s0 = window.getComputedStyle(cs[p]);
+            if ((!s0 || s0.position !== 'fixed') && cs[p].width >= 4 && cs[p].height >= 4) { hasNonFixed = true; break; }
+          } catch (e0) {}
+        }
         for (var i = 0; i < cs.length && out.length < 4; i++) {
           var c = cs[i];
           try {
             var st = window.getComputedStyle(c);
-            if (st && st.position === 'fixed') continue;
+            if (hasNonFixed && st && st.position === 'fixed') continue;
             if (!c.width || !c.height || c.width < 4 || c.height < 4) continue;
             // WebP at q0.6 measured ~3.5x smaller than PNG on real lesson
             // canvases with no visible quality loss at these sizes. A browser
@@ -267,6 +282,20 @@ export const mirrorScript = `
     function canvasTick() {
       var cv = captureCanvases();
       if (cv.length) { hadCanvas = true; post({ type: 'SYNC_MIRROR_CANVAS', canvases: cv }); }
+    }
+    // Start the pixel channel the moment a canvas EXISTS — not only at two
+    // fixed moments during boot. A 3D lesson typically creates its canvas
+    // dynamically (Three.js appends renderer.domElement once the library has
+    // loaded, often asynchronously), so at both old checkpoints there was no
+    // canvas yet, the interval never started, and the student never received a
+    // single frame — the sim simply never appeared. Called from boot, from
+    // window load, AND from every DOM mutation, so a canvas created at any
+    // point (including after a "Start" button) begins streaming immediately.
+    function ensureCanvasTimer() {
+      if (canvasTimer) return;
+      try { if (!document.querySelector('canvas')) return; } catch (e) { return; }
+      canvasTick(); // paint at once rather than waiting a full interval
+      canvasTimer = setInterval(canvasTick, 120);
     }
 
     // Apply a follower's forwarded input onto the REAL lesson, then re-stream.
@@ -295,8 +324,8 @@ export const mirrorScript = `
       } catch (e) {}
       // The source's OWN scroll should mirror too.
       window.addEventListener('scroll', function () { if (!applyingInput) post({ type: 'SYNC_MIRROR_SCROLL', scrollX: window.scrollX || 0, scrollY: window.scrollY || 0 }); }, { passive: true });
-      setTimeout(function () { sendSnapshot(true); canvasTick(); if (!canvasTimer && (hadCanvas || document.querySelector('canvas'))) canvasTimer = setInterval(canvasTick, 120); }, 40);
-      window.addEventListener('load', function () { setTimeout(function () { sendSnapshot(true); }, 120); if (!canvasTimer && document.querySelector('canvas')) canvasTimer = setInterval(canvasTick, 120); });
+      setTimeout(function () { sendSnapshot(true); ensureCanvasTimer(); }, 40);
+      window.addEventListener('load', function () { setTimeout(function () { sendSnapshot(true); ensureCanvasTimer(); }, 120); });
       // Self-correcting heartbeat: re-check the DOM every 500ms and re-send ONLY
       // if it changed since the last send (content-deduped). Cost is ~0 when
       // idle; guarantees any missed/late mutation-snapshot converges within 500ms
