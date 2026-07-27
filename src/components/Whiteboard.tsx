@@ -1353,6 +1353,141 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
       });
     }, [screenToBoard, loadImage, socket, canMutateImages, roomId, recordAction]);
 
+    // ── PDF worksheet import ──
+    // Renders each page to an image and lays them out down the board as normal
+    // image objects. That's the whole trick: once a page is an image object it
+    // inherits everything the whiteboard already does — pan/zoom to scroll
+    // through the worksheet, the pen to write answers straight into the blank
+    // spaces, z-order so ink sits ON TOP of the page, live sync to every
+    // student, and undo. No new sync path, no new drawing surface.
+    const [pdfBusy, setPdfBusy] = useState<string | null>(null);
+    const pdfWorkerRef = useRef<Worker | null>(null);
+    // Never let a stuck PDF stage sit there silently — surface it instead.
+    const withTimeout = <T,>(p: Promise<T>, ms: number, what: string): Promise<T> =>
+      Promise.race([p, new Promise<T>((_, rej) => setTimeout(() => rej(new Error('timed out: ' + what)), ms))]);
+    const addPdfPages = useCallback(async (file: File) => {
+      const MAX_PAGES = 20;          // a worksheet, not a textbook
+      const TARGET_PX = 1500;        // render width — crisp when zoomed in
+      const PAGE_W = 820;            // board-units wide, so pages line up
+      const GAP = 28;
+      try {
+        setPdfBusy('Opening PDF…');
+        const pdfjs: any = await import('pdfjs-dist');
+        // Hand pdf.js an explicitly-constructed module Worker rather than a
+        // workerSrc URL. Setting workerSrc leaves pdf.js to resolve its own
+        // worker internally, and under Vite that resolves to a SECOND,
+        // differently-hashed copy whose request never completes — the import
+        // then hangs forever with no error. `new Worker(new URL(...),
+        // {type:'module'})` is the form Vite statically analyses and bundles
+        // correctly, and workerPort makes pdf.js use exactly that instance.
+        if (!pdfWorkerRef.current) {
+          pdfWorkerRef.current = new Worker(
+            new URL('pdfjs-dist/build/pdf.worker.min.mjs', import.meta.url),
+            { type: 'module' },
+          );
+        }
+        pdfjs.GlobalWorkerOptions.workerPort = pdfWorkerRef.current;
+
+        const data = await file.arrayBuffer();
+        const pdf: any = await withTimeout<any>(pdfjs.getDocument({ data }).promise, 20000, 'opening the PDF');
+        const pageCount = Math.min(pdf.numPages, MAX_PAGES);
+
+        // Start near the top of what the teacher is currently looking at,
+        // horizontally centred, then stack downwards.
+        const container = containerRef.current;
+        const rect = container?.getBoundingClientRect();
+        const vw = container?.clientWidth || 1000;
+        const anchor = screenToBoard((rect?.left || 0) + vw / 2, (rect?.top || 0) + 60);
+
+        const created: BoardImageObject[] = [];
+        let cursorY = anchor.y;
+        for (let p = 1; p <= pageCount; p++) {
+          setPdfBusy(`Adding page ${p} of ${pageCount}…`);
+          const page = await pdf.getPage(p);
+          const base = page.getViewport({ scale: 1 });
+          const scale = Math.min(2.5, TARGET_PX / base.width);
+          const viewport = page.getViewport({ scale });
+          const canvas = document.createElement('canvas');
+          canvas.width = Math.ceil(viewport.width);
+          canvas.height = Math.ceil(viewport.height);
+          const ctx = canvas.getContext('2d');
+          if (!ctx) continue;
+          // White backing: PDF pages are transparent, and ink on a transparent
+          // page would sit on the board's own background instead of paper.
+          ctx.fillStyle = '#ffffff';
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+          // Two non-obvious requirements here:
+          //  • pdf.js v6 takes the CANVAS ELEMENT (`canvas`). `canvasContext` is
+          //    a back-compat path that additionally requires `canvas: null`.
+          //  • intent:'print' matters for correctness, not print output. With
+          //    the default 'display' intent pdf.js drives rendering from
+          //    requestAnimationFrame, which browsers FREEZE in a backgrounded
+          //    or throttled tab — so the render promise simply never settles and
+          //    the import hangs forever. Print intent renders synchronously off
+          //    the rAF clock, so importing works even if the teacher switches
+          //    tabs while picking the file. It also renders the printable
+          //    appearance of form fields, which is what you want on a worksheet.
+          await withTimeout(
+            page.render({ canvas, viewport, background: '#ffffff', intent: 'print' } as any).promise,
+            20000, `rendering page ${p}`,
+          );
+          const src = canvas.toDataURL('image/jpeg', 0.82);
+
+          const drawScale = PAGE_W / canvas.width;
+          const object: BoardImageObject = {
+            id: newId('img'),
+            type: 'image',
+            src,
+            x: anchor.x - PAGE_W / 2,
+            y: cursorY,
+            width: canvas.width,
+            height: canvas.height,
+            scale: drawScale,
+            rotation: 0,
+            // Keep pages BEHIND anything drawn later: page z-order is stamped
+            // from a base time so student ink (stamped 'now') always paints on top.
+            zIndex: Date.now() - (MAX_PAGES - p) - 100000,
+          };
+          cursorY += canvas.height * drawScale + GAP;
+          created.push(object);
+          setObjects(prev => [...prev, object]);
+          loadImage(object);
+          if (socket && canMutateImages) socket.emit('whiteboard_add_image', { roomId, object });
+          // Yield so the board stays responsive while a long PDF imports.
+          await new Promise(r => setTimeout(r, 0));
+        }
+
+        if (created.length) {
+          // One undo for the whole worksheet, not one per page.
+          recordAction({
+            undo: () => {
+              setObjects(prev => prev.filter(o => !created.some(c => c.id === o.id)));
+              created.forEach(c => {
+                imageCacheRef.current.delete(c.id);
+                if (socket && canMutateImages) socket.emit('whiteboard_remove_object', { roomId, objectId: c.id });
+              });
+            },
+            redo: () => {
+              setObjects(prev => [...prev, ...created.filter(c => !prev.some(o => o.id === c.id))]);
+              created.forEach(c => {
+                loadImage(c);
+                if (socket && canMutateImages) socket.emit('whiteboard_add_image', { roomId, object: c });
+              });
+            },
+          });
+          // Land on the pen so the teacher (or student) can write immediately.
+          setSelectedObjectId(null);
+          setTool('pen');
+        }
+        setPdfBusy(pdf.numPages > MAX_PAGES ? `Added the first ${MAX_PAGES} of ${pdf.numPages} pages` : null);
+        if (pdf.numPages > MAX_PAGES) setTimeout(() => setPdfBusy(null), 4000);
+      } catch (err) {
+        console.error('PDF import failed', err);
+        setPdfBusy(`Could not read that PDF — ${(err as Error)?.message || 'unknown error'}`);
+        setTimeout(() => setPdfBusy(null), 5000);
+      }
+    }, [screenToBoard, loadImage, socket, canMutateImages, roomId, recordAction]);
+
     const updateObject = useCallback((object: BoardImageObject, broadcast = true) => {
       setObjects(prev => prev.map(obj => obj.id === object.id ? object : obj));
       if (broadcast && socket && canMutateImages) socket.emit('whiteboard_update_object', { roomId, object });
@@ -3695,10 +3830,15 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
       addImageObject(outputUrl, w, h);
     }, [addImageObject]);
 
+    const isPdf = (f: File) => f.type === 'application/pdf' || /\.pdf$/i.test(f.name || '');
+
     const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
       const file = e.target.files?.[0];
       e.target.value = '';
       if (!file) return;
+      // A worksheet PDF becomes a stack of page images you can write on;
+      // anything else is a normal single image.
+      if (isPdf(file)) { void addPdfPages(file); return; }
       void ingestImageBlob(file);
     };
 
@@ -3807,16 +3947,18 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
         if (!hasImageFiles(e)) return;
         e.preventDefault();
         setDragOverActive(false);
-        const files = Array.from(e.dataTransfer?.files || []).filter(f => f.type.startsWith('image/'));
+        // Accept dropped PDFs (a worksheet) as well as images.
+        const files = Array.from(e.dataTransfer?.files || []).filter(f => f.type.startsWith('image/') || isPdf(f));
         // Ingest serially — each call eventually calls socket.emit which is
         // cheap, but the canvas positioning logic assumes single-image at
         // a time. Serial keeps placement predictable.
         (async () => {
           for (const file of files) {
             try {
-              await ingestImageBlob(file);
+              if (isPdf(file)) await addPdfPages(file);
+              else await ingestImageBlob(file);
             } catch (err) {
-              console.warn('[whiteboard] image drop failed', err);
+              console.warn('[whiteboard] file drop failed', err);
             }
           }
         })();
@@ -3987,7 +4129,23 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
 
     return (
       <div className="whiteboard-shell">
-        <input ref={uploadInputRef} type="file" accept="image/*" onChange={handleImageUpload} className="hidden" />
+        <input ref={uploadInputRef} type="file" accept="image/*,application/pdf,.pdf" onChange={handleImageUpload} className="hidden" />
+
+        {/* PDF import progress — importing a multi-page worksheet takes a
+            moment and silently doing nothing looks broken. */}
+        {pdfBusy && (
+          <div
+            role="status"
+            style={{
+              position: 'absolute', top: 14, left: '50%', transform: 'translateX(-50%)',
+              zIndex: 60, padding: '8px 16px', borderRadius: 999,
+              background: 'rgba(17,19,32,0.92)', color: '#fff', fontSize: 13, fontWeight: 600,
+              boxShadow: '0 6px 20px rgba(0,0,0,0.25)', pointerEvents: 'none', whiteSpace: 'nowrap',
+            }}
+          >
+            {pdfBusy}
+          </div>
+        )}
 
         {canEdit && (
           <aside className="whiteboard-rail" aria-label="Whiteboard tools">
