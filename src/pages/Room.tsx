@@ -16,6 +16,7 @@ import SaveBoardBanner from "../components/SaveBoardBanner";
 // ── Components ──
 import TeacherControls from "../components/TeacherControls";
 import ChatPanel from "../components/ChatPanel";
+import VideoCall from "../components/VideoCall";
 import FeedbackToasts from "../components/FeedbackToasts";
 import PausedOverlay from "../components/PausedOverlay";
 import TimerDisplay from "../components/TimerDisplay";
@@ -3146,6 +3147,12 @@ export default function Room() {
           variant="sidebar"
         />
       </div>
+
+      {/* Face-to-face video, in a draggable window over the lesson. The teacher
+          is the IMPOLITE side of the negotiation: if both press call at the
+          same instant, the teacher's offer wins and the student yields, so the
+          two never deadlock. */}
+      <VideoCall socket={socket} roomId={roomId!} polite={false} selfLabel="You" />
 
       {/* ═══ NOTIFICATION ═══ */}
       {notification && (

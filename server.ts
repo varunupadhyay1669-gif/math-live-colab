@@ -2622,6 +2622,31 @@ Build a widget that teaches: ${safePrompt}`;
       }
     });
 
+    // ─── VIDEO CALL SIGNALLING (face-to-face inside the lesson) ───
+    // Google Meet / Zoom / Teams all send `X-Frame-Options`, so they can never
+    // be embedded in a page — pasting a Meet link could never show faces here.
+    // Instead the two browsers talk directly (WebRTC) and this room socket is
+    // the introduction channel they need: each side's offer/answer/ICE is
+    // relayed to the other member of the room. The media itself never touches
+    // this server — it flows peer-to-peer, so there's no bandwidth cost here
+    // and no third party in the middle of a lesson.
+    socket.on('rtc_signal', ({ roomId, signal }: { roomId: string; signal: unknown }) => {
+      if (typeof roomId !== 'string' || !signal || typeof signal !== 'object') return;
+      const room = rooms.get(roomId);
+      if (!isMember(room, socket.id)) return;
+      // 1-to-1: everyone else in the room is "the other person".
+      socket.to(roomId).emit('rtc_signal', { signal, from: socket.id });
+    });
+    // "My camera is on / off" — lets the other side show a Join button at the
+    // right moment instead of guessing.
+    socket.on('rtc_presence', ({ roomId, active }: { roomId: string; active: boolean }) => {
+      if (typeof roomId !== 'string') return;
+      const room = rooms.get(roomId);
+      if (!isMember(room, socket.id)) return;
+      const user = room.users.get(socket.id);
+      socket.to(roomId).emit('rtc_presence', { active: !!active, name: user?.name || 'Someone', role: user?.role });
+    });
+
     // ─── LIVE MIRROR relay (the "impossible to desync" engine) ───
     // The teacher's iframe is the single authoritative lesson instance; it
     // streams its REAL DOM here and the server relays it to every student, who
