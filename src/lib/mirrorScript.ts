@@ -68,6 +68,7 @@ export const mirrorScript = `
   // ═══════════════════════ SOURCE (authoritative) ═══════════════════════
   if (isSource) {
     var applyingInput = false;   // suppress self-triggered streams while applying forwarded input
+    var lastForwardedScrollAt = 0; // when a student last drove our scroll (echo guard)
     var lastSentAt = 0, trailTimer = null, lastMutAt = 0, burstStart = 0;
 
     // Force preserveDrawingBuffer on every WebGL context the lesson creates.
@@ -302,7 +303,7 @@ export const mirrorScript = `
     function applyForwardedInput(d) {
       applyingInput = true;
       try {
-        if (d.kind === 'scroll') { window.scrollTo(d.scrollX || 0, d.scrollY || 0); }
+        if (d.kind === 'scroll') { lastForwardedScrollAt = Date.now(); window.scrollTo(d.scrollX || 0, d.scrollY || 0); }
         else {
           var el = d.path ? findElement(d.path) : null;
           if (el) {
@@ -323,7 +324,13 @@ export const mirrorScript = `
         new MutationObserver(scheduleSnapshot).observe(document.documentElement || document.body, { subtree: true, childList: true, attributes: true, characterData: true });
       } catch (e) {}
       // The source's OWN scroll should mirror too.
-      window.addEventListener('scroll', function () { if (!applyingInput) post({ type: 'SYNC_MIRROR_SCROLL', scrollX: window.scrollX || 0, scrollY: window.scrollY || 0 }); }, { passive: true });
+      // Don't bounce a student-driven scroll straight back at them: scrollTo
+      // fires this listener a frame LATER, by which time applyingInput has
+      // already been cleared, so a flag alone isn't enough — hold it briefly.
+      window.addEventListener('scroll', function () {
+        if (applyingInput || Date.now() - lastForwardedScrollAt < 250) return;
+        post({ type: 'SYNC_MIRROR_SCROLL', scrollX: window.scrollX || 0, scrollY: window.scrollY || 0 });
+      }, { passive: true });
       setTimeout(function () { sendSnapshot(true); ensureCanvasTimer(); }, 40);
       window.addEventListener('load', function () { setTimeout(function () { sendSnapshot(true); ensureCanvasTimer(); }, 120); });
       // Self-correcting heartbeat: re-check the DOM every 500ms and re-send ONLY
@@ -624,12 +631,38 @@ export const mirrorScript = `
   // window.scrollTo() still works, so teacher-driven positioning (MIRROR_SCROLL)
   // is unaffected. Blocking the gesture (rather than snapping back afterwards)
   // avoids a jarring fight with the student's finger/wheel.
-  var scrollLocked = false;
+  // Start LOCKED. The lock state arrives by message a moment after the mirror
+  // boots, and starting unlocked left a window at the very beginning of a
+  // lesson where a view-only student could scroll away before the rule landed.
+  // Being briefly locked when you were allowed to scroll is a harmless
+  // half-second; being briefly free when you weren't is the actual bug.
+  var scrollLocked = true;
+  // Suppress echo: teacher scroll → we scrollTo → our own scroll event fires →
+  // we'd forward it back → they scroll → … a feedback loop. Ignore our own
+  // scroll for a moment after applying theirs.
+  var applyingScroll = 0;
+  var lastScrollSentAt = 0;
   var SCROLL_KEYS = { PageUp: 1, PageDown: 1, ArrowUp: 1, ArrowDown: 1, Home: 1, End: 1, ' ': 1, Spacebar: 1 };
   function blockIfLocked(e) {
     if (!scrollLocked) return;
     try { e.preventDefault(); } catch (err) {}
   }
+  // A student who IS allowed to drive should move the teacher's view with them —
+  // otherwise the teacher is left describing something off the student's screen.
+  // The source already knows how to apply a forwarded scroll; this is the half
+  // that was never sent. Throttled, and never echoes a scroll we just applied.
+  window.addEventListener('scroll', function () {
+    if (!allow || applyingDom || scrollLocked) return;
+    if (Date.now() - applyingScroll < 250) return;   // this was their scroll, not ours
+    var now = Date.now();
+    if (now - lastScrollSentAt < 90) return;
+    lastScrollSentAt = now;
+    post({
+      type: 'SYNC_MIRROR_INPUT', kind: 'scroll',
+      scrollX: window.pageXOffset || 0, scrollY: window.pageYOffset || 0,
+    });
+  }, { passive: true });
+
   document.addEventListener('wheel', blockIfLocked, { capture: true, passive: false });
   document.addEventListener('touchmove', blockIfLocked, { capture: true, passive: false });
   document.addEventListener('keydown', function (e) {
@@ -644,7 +677,10 @@ export const mirrorScript = `
     var d = e.data; if (!d || !d.type) return;
     if (d.type === 'MIRROR_APPLY') applySnapshot(d);
     else if (d.type === 'MIRROR_CANVAS') paintCanvases(d.canvases || []);
-    else if (d.type === 'MIRROR_SCROLL') { try { window.scrollTo(d.scrollX || 0, d.scrollY || 0); } catch (e) {} }
+    else if (d.type === 'MIRROR_SCROLL') {
+      applyingScroll = Date.now();
+      try { window.scrollTo(d.scrollX || 0, d.scrollY || 0); } catch (e) {}
+    }
     else if (d.type === 'SET_MIRROR_INTERACT') allow = !!d.allowed;
     else if (d.type === 'SET_MIRROR_SCROLLLOCK') scrollLocked = !!d.locked;
     else if (d.type === 'MIRROR_PING') {

@@ -1079,7 +1079,14 @@ export default function StudentView() {
       if (type === 'SYNC_MIRROR_INPUT') {
         socket.emit('mirror_input', {
           roomId,
-          input: { kind: e.data.kind, path: e.data.path, value: e.data.value, deltaY: e.data.deltaY, key: e.data.key },
+          input: {
+            kind: e.data.kind, path: e.data.path, value: e.data.value,
+            deltaY: e.data.deltaY, key: e.data.key,
+            // Scroll position must ride along too — without these a driving
+            // student's scroll reached the teacher with no coordinates, so the
+            // teacher's view never moved with them.
+            scrollX: e.data.scrollX, scrollY: e.data.scrollY,
+          },
         });
         return;
       }
@@ -1089,8 +1096,12 @@ export default function StudentView() {
       if (type === 'MIRROR_STALE') { socket.emit('mirror_request', { roomId }); return; }
       if (type === 'MIRROR_FOLLOWER_READY') {
         socket.emit('mirror_request', { roomId });
-        // Tell the follower whether it may drive right now.
+        // Tell the follower its permissions IMMEDIATELY on announce. The mirror
+        // now boots scroll-LOCKED and waits for this; previously the lock only
+        // arrived via an effect, leaving a gap at the very start of a lesson
+        // where a view-only student could still scroll away.
         iframeRef.current?.contentWindow?.postMessage({ type: 'SET_MIRROR_INTERACT', allowed: canInteractRef.current }, '*');
+        iframeRef.current?.contentWindow?.postMessage({ type: 'SET_MIRROR_SCROLLLOCK', locked: scrollLockedRef.current }, '*');
         return;
       }
 
@@ -1212,6 +1223,8 @@ export default function StudentView() {
   // driving, so they need their own scroll). Teacher-driven scrolling is
   // unaffected either way.
   const scrollLocked = scrollSyncEnabled && !canInteract;
+  const scrollLockedRef = useRef(scrollLocked);
+  useEffect(() => { scrollLockedRef.current = scrollLocked; }, [scrollLocked]);
   useEffect(() => {
     postToIframe({ type: 'SET_MIRROR_SCROLLLOCK', locked: scrollLocked });
   }, [scrollLocked, iframeUrl, postToIframe]);
