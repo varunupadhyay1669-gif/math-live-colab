@@ -35,12 +35,14 @@ export default function StepControls({
           <div className="h-5 w-px" style={{ background: 'var(--border-subtle)' }} />
 
           {/* Previous */}
-          <button onClick={() => onSetStep(Math.max(1, currentStep - 1))}
-            disabled={currentStep <= 1}
-            className="btn text-[12px] disabled:opacity-30"
-            style={{ padding: '5px 10px' }}>
-            ◀ Prev
-          </button>
+          <span title={currentStep <= 1 ? "Already at the first step" : "Previous step"} style={{ display: 'inline-flex' }}>
+            <button onClick={() => onSetStep(Math.max(1, currentStep - 1))}
+              disabled={currentStep <= 1}
+              className="btn text-[12px] disabled:opacity-30"
+              style={{ padding: '5px 10px', ...(currentStep <= 1 ? { pointerEvents: 'none' } : {}) }}>
+              ◀ Prev
+            </button>
+          </span>
 
           {/* Step indicator */}
           <div className="flex items-center gap-2">
@@ -66,12 +68,14 @@ export default function StepControls({
           </div>
 
           {/* Next */}
-          <button onClick={() => onSetStep(Math.min(maxStep || 999, currentStep + 1))}
-            disabled={maxStep > 0 && currentStep >= maxStep}
-            className="btn text-[12px] disabled:opacity-30"
-            style={{ padding: '5px 10px' }}>
-            Next ▶
-          </button>
+          <span title={maxStep > 0 && currentStep >= maxStep ? "Already at the last step" : "Next step"} style={{ display: 'inline-flex' }}>
+            <button onClick={() => onSetStep(Math.min(maxStep || 999, currentStep + 1))}
+              disabled={maxStep > 0 && currentStep >= maxStep}
+              className="btn text-[12px] disabled:opacity-30"
+              style={{ padding: '5px 10px', ...((maxStep > 0 && currentStep >= maxStep) ? { pointerEvents: 'none' } : {}) }}>
+              Next ▶
+            </button>
+          </span>
 
           <div className="h-5 w-px" style={{ background: 'var(--border-subtle)' }} />
 

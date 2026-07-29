@@ -253,22 +253,26 @@ export default function TeacherControls({
         <div className="toolbar-divider" />
 
         {/* ── Zoom Controls (synced to all students) ── */}
-        <button onClick={onZoomOut} className="tb-btn" data-tip="Zoom out (synced)" disabled={zoomLevel <= 0.5}>
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-            <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="8" y1="11" x2="14" y2="11"/>
-          </svg>
-        </button>
+        <span data-tip={zoomLevel <= 0.5 ? "Minimum zoom reached" : "Zoom out (synced)"} style={{ display: 'inline-flex' }}>
+          <button onClick={onZoomOut} className="tb-btn" disabled={zoomLevel <= 0.5} style={zoomLevel <= 0.5 ? { pointerEvents: 'none' } : undefined}>
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="8" y1="11" x2="14" y2="11"/>
+            </svg>
+          </button>
+        </span>
         <button onClick={onZoomReset} className={`tb-btn-label ${zoomLevel !== 1 ? 'active' : ''}`}
           data-tip="Click to reset to 100%" style={{ minWidth: '52px' }}>
           <span style={{ fontSize: '11.5px', fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>
             {Math.round(zoomLevel * 100)}%
           </span>
         </button>
-        <button onClick={onZoomIn} className="tb-btn" data-tip="Zoom in (synced)" disabled={zoomLevel >= 3}>
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-            <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/>
-          </svg>
-        </button>
+        <span data-tip={zoomLevel >= 3 ? "Maximum zoom reached" : "Zoom in (synced)"} style={{ display: 'inline-flex' }}>
+          <button onClick={onZoomIn} className="tb-btn" disabled={zoomLevel >= 3} style={zoomLevel >= 3 ? { pointerEvents: 'none' } : undefined}>
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/>
+            </svg>
+          </button>
+        </span>
 
         <div className="toolbar-divider" />
 

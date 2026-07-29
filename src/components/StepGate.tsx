@@ -111,11 +111,14 @@ export default function StepGate({ socket, roomId, mode, step, onSave, onClose, 
 
             <div className="flex gap-3">
               <button onClick={onClose} className="btn-secondary flex-1">Cancel</button>
-              <button onClick={handleCreateSave}
-                disabled={!question.trim() || options.filter(o => o.trim()).length < 2}
-                className="btn-primary flex-1 disabled:opacity-40">
-                Save Gate
-              </button>
+              <span title={!question.trim() ? "Enter a question first" : options.filter(o => o.trim()).length < 2 ? "Enter at least two options" : "Save gate"} style={{ display: 'flex', flex: 1 }}>
+                <button onClick={handleCreateSave}
+                  disabled={!question.trim() || options.filter(o => o.trim()).length < 2}
+                  style={(!question.trim() || options.filter(o => o.trim()).length < 2) ? { pointerEvents: 'none', flex: 1 } : { flex: 1 }}
+                  className="btn-primary disabled:opacity-40">
+                  Save Gate
+                </button>
+              </span>
             </div>
           </div>
         ) : (
