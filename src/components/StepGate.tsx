@@ -74,7 +74,7 @@ export default function StepGate({ socket, roomId, mode, step, onSave, onClose, 
                 🚧 Add Gate — Step {step}
               </h3>
               <button onClick={onClose}
-                style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '18px' }}>✕</button>
+                style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '18px' }} aria-label="Close">✕</button>
             </div>
 
             <p className="text-xs mb-3" style={{ color: 'var(--text-muted)' }}>
