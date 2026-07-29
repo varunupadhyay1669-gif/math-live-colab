@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode, type Key } from "react";
 import type { Socket } from "socket.io-client";
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -41,6 +41,16 @@ export default function VideoCall({ socket, roomId, polite, selfLabel = 'You' }:
   const [minimised, setMinimised] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pos, setPos] = useState({ x: 16, y: 84 });
+  // Held in state (not just on the element) so the <video> can be re-attached
+  // whenever it mounts or re-renders — see the wiring effects below.
+  const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
+  const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
+  const [camId, setCamId] = useState<string>('');
+  const [micId, setMicId] = useState<string>('');
+  const [spkId, setSpkId] = useState<string>('');
+  const [menu, setMenu] = useState<null | 'mic' | 'cam'>(null);
+  const [blur, setBlur] = useState<'off' | 'light' | 'strong'>('off');
+  const blurSupported = !!(navigator.mediaDevices?.getSupportedConstraints?.() as any)?.backgroundBlur;
 
   const pcRef = useRef<RTCPeerConnection | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
@@ -62,8 +72,10 @@ export default function VideoCall({ socket, roomId, polite, selfLabel = 'You' }:
     pc.onicecandidate = ({ candidate }) => { if (candidate) emitSignal({ candidate }); };
     pc.ontrack = ({ streams }) => {
       const [stream] = streams;
-      if (remoteVideoRef.current && stream) {
-        remoteVideoRef.current.srcObject = stream;
+      if (stream) {
+        // Keep it in state; a wiring effect attaches it to the element. The
+        // element may not exist yet at this moment.
+        setRemoteStream(stream);
         setConnected(true);
       }
     };
@@ -175,6 +187,87 @@ export default function VideoCall({ socket, roomId, polite, selfLabel = 'You' }:
     };
   }, [socket, polite, ensurePc, emitSignal]);
 
+  // ── Wire streams to the <video> elements AFTER they exist ──
+  // THE self-view bug: while idle the component renders only the button, so
+  // there is no <video> yet. Assigning srcObject inside startCall therefore hit
+  // a null ref and the self-view stayed black forever. Doing it in an effect
+  // runs after the elements mount, and re-runs whenever the window is
+  // minimised/restored or the camera is swapped.
+  useEffect(() => {
+    if (active && localVideoRef.current && localStreamRef.current) {
+      localVideoRef.current.srcObject = localStreamRef.current;
+      localVideoRef.current.play?.().catch(() => { /* autoplay policy — muted, so rare */ });
+    }
+  }, [active, minimised, camId]);
+
+  useEffect(() => {
+    if (remoteVideoRef.current && remoteStream) {
+      remoteVideoRef.current.srcObject = remoteStream;
+      remoteVideoRef.current.play?.().catch(() => { /* user gesture already given */ });
+    }
+  }, [remoteStream, active, minimised]);
+
+  // ── Device list ──
+  // Labels are only readable once permission has been granted, so refresh after
+  // the call starts and whenever the OS device list changes (headset plugged in).
+  const refreshDevices = useCallback(async () => {
+    try {
+      const list = await navigator.mediaDevices.enumerateDevices();
+      setDevices(list);
+    } catch { /* enumeration blocked — menus just stay empty */ }
+  }, []);
+  useEffect(() => {
+    if (!active) return;
+    void refreshDevices();
+    const md = navigator.mediaDevices;
+    md?.addEventListener?.('devicechange', refreshDevices);
+    return () => md?.removeEventListener?.('devicechange', refreshDevices);
+  }, [active, refreshDevices]);
+
+  // Swap the camera (or mic) live: grab the new device, hand it to the peer via
+  // replaceTrack so the call never drops, then swap it into the local preview.
+  const switchDevice = useCallback(async (kind: 'video' | 'audio', deviceId: string) => {
+    try {
+      const constraints: MediaStreamConstraints = kind === 'video'
+        ? { video: { deviceId: { exact: deviceId } }, audio: false }
+        : { audio: { deviceId: { exact: deviceId }, echoCancellation: true, noiseSuppression: true }, video: false };
+      const fresh = await navigator.mediaDevices.getUserMedia(constraints);
+      const newTrack = kind === 'video' ? fresh.getVideoTracks()[0] : fresh.getAudioTracks()[0];
+      if (!newTrack) return;
+      const sender = pcRef.current?.getSenders().find(s => s.track?.kind === kind);
+      if (sender) await sender.replaceTrack(newTrack);
+      const old = kind === 'video'
+        ? localStreamRef.current?.getVideoTracks()[0]
+        : localStreamRef.current?.getAudioTracks()[0];
+      if (old && localStreamRef.current) { localStreamRef.current.removeTrack(old); old.stop(); }
+      localStreamRef.current?.addTrack(newTrack);
+      if (kind === 'video') { setCamId(deviceId); if (localVideoRef.current) localVideoRef.current.srcObject = localStreamRef.current; }
+      else { setMicId(deviceId); newTrack.enabled = micOn; }
+      setMenu(null);
+    } catch (e) {
+      setError(`Could not switch ${kind === 'video' ? 'camera' : 'microphone'}.`);
+    }
+  }, [micOn]);
+
+  // Speaker choice applies to the element that plays the other person's audio.
+  const switchSpeaker = useCallback(async (deviceId: string) => {
+    try {
+      const el = remoteVideoRef.current as (HTMLVideoElement & { setSinkId?: (id: string) => Promise<void> }) | null;
+      if (el?.setSinkId) { await el.setSinkId(deviceId); setSpkId(deviceId); }
+      setMenu(null);
+    } catch { setError('Could not switch speaker.'); }
+  }, []);
+
+  const applyBlur = useCallback(async (mode: 'off' | 'light' | 'strong') => {
+    const track = localStreamRef.current?.getVideoTracks()[0];
+    if (!track) return;
+    try {
+      await track.applyConstraints({ backgroundBlur: mode !== 'off' } as any);
+      setBlur(mode);
+      setMenu(null);
+    } catch { setError('This browser cannot blur the background.'); }
+  }, []);
+
   // Announce ourselves to a peer who joins after we started.
   useEffect(() => {
     if (!socket || !active) return;
@@ -276,14 +369,69 @@ export default function VideoCall({ socket, roomId, polite, selfLabel = 'You' }:
         </div>
       </div>
 
+      {/* Device menu — opens above the bar, like a system picker */}
+      {menu && (
+        <div style={{
+          background: '#fff', color: '#0A0A0F', borderTop: '1px solid rgba(0,0,0,0.08)',
+          maxHeight: 220, overflowY: 'auto', fontSize: 12.5,
+        }}>
+          {menu === 'mic' ? (
+            <>
+              <MenuHeading>Select a microphone</MenuHeading>
+              {devices.filter(d => d.kind === 'audioinput').map((d, i) => (
+                <MenuItem key={d.deviceId} selected={micId ? micId === d.deviceId : i === 0}
+                  onClick={() => switchDevice('audio', d.deviceId)}>
+                  {d.label || `Microphone ${i + 1}`}
+                </MenuItem>
+              ))}
+              <MenuHeading>Select a speaker</MenuHeading>
+              {devices.filter(d => d.kind === 'audiooutput').length === 0 && (
+                <MenuNote>Your browser doesn’t allow choosing a speaker — it uses the system default.</MenuNote>
+              )}
+              {devices.filter(d => d.kind === 'audiooutput').map((d, i) => (
+                <MenuItem key={d.deviceId} selected={spkId ? spkId === d.deviceId : i === 0}
+                  onClick={() => switchSpeaker(d.deviceId)}>
+                  {d.label || `Speaker ${i + 1}`}
+                </MenuItem>
+              ))}
+            </>
+          ) : (
+            <>
+              <MenuHeading>Select a camera</MenuHeading>
+              {devices.filter(d => d.kind === 'videoinput').length === 0 && (
+                <MenuNote>No cameras found.</MenuNote>
+              )}
+              {devices.filter(d => d.kind === 'videoinput').map((d, i) => (
+                <MenuItem key={d.deviceId} selected={camId ? camId === d.deviceId : i === 0}
+                  onClick={() => switchDevice('video', d.deviceId)}>
+                  {d.label || `Camera ${i + 1}`}
+                </MenuItem>
+              ))}
+              <MenuHeading>Video effects</MenuHeading>
+              {blurSupported ? (
+                <>
+                  <MenuItem selected={blur === 'light'} onClick={() => applyBlur('light')}>Light background blur</MenuItem>
+                  <MenuItem selected={blur === 'strong'} onClick={() => applyBlur('strong')}>Strong background blur</MenuItem>
+                  <MenuItem selected={blur === 'off'} onClick={() => applyBlur('off')} danger>Stop background blur</MenuItem>
+                </>
+              ) : (
+                <MenuNote>Background blur isn’t available in this browser.</MenuNote>
+              )}
+            </>
+          )}
+        </div>
+      )}
+
       {/* Controls */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: 8, background: '#151832' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 4, padding: 8, background: '#151832' }}>
         <button onClick={toggleMic} style={{ ...btn, background: micOn ? 'rgba(255,255,255,0.14)' : '#b91c1c' }} title={micOn ? 'Mute' : 'Unmute'}>
           {micOn ? '🎤' : '🔇'}
         </button>
+        <button onClick={() => setMenu(m => m === 'mic' ? null : 'mic')} style={{ ...btn, padding: '6px 5px' }} title="Microphone & speaker options">▾</button>
         <button onClick={toggleCam} style={{ ...btn, background: camOn ? 'rgba(255,255,255,0.14)' : '#b91c1c' }} title={camOn ? 'Turn camera off' : 'Turn camera on'}>
           {camOn ? '📹' : '🚫'}
         </button>
+        <button onClick={() => setMenu(m => m === 'cam' ? null : 'cam')} style={{ ...btn, padding: '6px 5px' }} title="Camera & video options">▾</button>
         <button onClick={() => setMinimised(m => !m)} style={btn} title={minimised ? 'Expand' : 'Minimise'}>
           {minimised ? '▢' : '—'}
         </button>
@@ -295,4 +443,38 @@ export default function VideoCall({ socket, roomId, polite, selfLabel = 'You' }:
       )}
     </div>
   );
+}
+
+// ── Small presentational pieces for the device menu ──
+function MenuHeading({ children }: { children: ReactNode }) {
+  return (
+    <div style={{
+      padding: '8px 12px 4px', fontSize: 11, fontWeight: 700, letterSpacing: '0.04em',
+      textTransform: 'uppercase', color: '#8A91A0',
+    }}>{children}</div>
+  );
+}
+
+function MenuItem({ children, onClick, selected, danger }: {
+  key?: Key;
+  children: ReactNode; onClick: () => void; selected?: boolean; danger?: boolean;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      style={{
+        display: 'flex', alignItems: 'center', gap: 8, width: '100%',
+        padding: '8px 12px', border: 0, background: selected ? 'rgba(79,70,229,0.08)' : 'transparent',
+        color: danger ? '#DC2626' : '#0A0A0F', cursor: 'pointer',
+        fontSize: 12.5, fontWeight: selected ? 700 : 500, textAlign: 'left',
+      }}
+    >
+      <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{children}</span>
+      {selected && <span style={{ color: '#4F46E5', fontWeight: 700 }}>✓</span>}
+    </button>
+  );
+}
+
+function MenuNote({ children }: { children: ReactNode }) {
+  return <div style={{ padding: '6px 12px 10px', fontSize: 11.5, color: '#8A91A0', lineHeight: 1.45 }}>{children}</div>;
 }
