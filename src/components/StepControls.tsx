@@ -26,7 +26,7 @@ export default function StepControls({
       {/* Toggle */}
       <button onClick={onToggleStepLock}
         className={`btn text-[12px] ${stepLockEnabled ? 'btn-toolbar-active' : ''}`}
-        title={stepLockEnabled ? 'Disable Step Lock' : 'Enable Step Lock'}>
+        title={stepLockEnabled ? 'Disable Step Lock' : 'Enable Step Lock'} aria-label={stepLockEnabled ? 'Disable Step Lock' : 'Enable Step Lock'}>
         {stepLockEnabled ? '🔒 Locked' : '🔓 Unlocked'}
       </button>
 
@@ -83,7 +83,7 @@ export default function StepControls({
           {/* Add Gate */}
           <button onClick={onOpenGate}
             className="btn text-[12px]"
-            title="Add a gate question before the next step">
+            title="Add a gate question before the next step" aria-label="Add a gate question before the next step">
             🚧 Add Gate
           </button>
         </>
