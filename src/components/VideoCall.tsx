@@ -50,6 +50,7 @@ export default function VideoCall({ socket, roomId, polite, selfLabel = 'You' }:
   const [spkId, setSpkId] = useState<string>('');
   const [menu, setMenu] = useState<null | 'mic' | 'cam'>(null);
   const [blur, setBlur] = useState<'off' | 'light' | 'strong'>('off');
+  const [blurLoading, setBlurLoading] = useState(false);
   const blurSupported = !!(navigator.mediaDevices?.getSupportedConstraints?.() as any)?.backgroundBlur;
 
   const pcRef = useRef<RTCPeerConnection | null>(null);
@@ -59,6 +60,10 @@ export default function VideoCall({ socket, roomId, polite, selfLabel = 'You' }:
   const makingOfferRef = useRef(false);
   const ignoreOfferRef = useRef(false);
   const dragRef = useRef<{ dx: number; dy: number } | null>(null);
+  // Kept so 'off' can restore the untouched camera, and so teardown can stop
+  // the segmentation loop instead of leaving it spinning.
+  const blurHandleRef = useRef<import('../lib/backgroundBlur').BlurHandle | null>(null);
+  const rawVideoTrackRef = useRef<MediaStreamTrack | null>(null);
 
   const emitSignal = useCallback((signal: unknown) => {
     socket?.emit('rtc_signal', { roomId, signal });
@@ -106,6 +111,11 @@ export default function VideoCall({ socket, roomId, polite, selfLabel = 'You' }:
   }, [emitSignal]);
 
   const stopCall = useCallback((tellPeer = true) => {
+    // Stop the blur pipeline first or its rAF loop keeps running after hang-up.
+    try { blurHandleRef.current?.stop(); } catch { /* noop */ }
+    blurHandleRef.current = null;
+    rawVideoTrackRef.current = null;
+    setBlur('off');
     try { pcRef.current?.close(); } catch { /* already closed */ }
     pcRef.current = null;
     // Releasing every track is what turns the camera light off.
@@ -258,15 +268,69 @@ export default function VideoCall({ socket, roomId, polite, selfLabel = 'You' }:
     } catch { setError('Could not switch speaker.'); }
   }, []);
 
+  // Blur has two routes. If the browser exposes it as a track constraint we use
+  // that — it's free and hardware-accelerated. Otherwise we fall back to
+  // segmenting the picture ourselves, which downloads a model on first use.
   const applyBlur = useCallback(async (mode: 'off' | 'light' | 'strong') => {
-    const track = localStreamRef.current?.getVideoTracks()[0];
-    if (!track) return;
+    const sender = pcRef.current?.getSenders().find(s => s.track?.kind === 'video');
+    setError(null);
+
+    // ── Turning it off ──
+    if (mode === 'off') {
+      if (blurHandleRef.current) {
+        blurHandleRef.current.stop();
+        blurHandleRef.current = null;
+        const raw = rawVideoTrackRef.current;
+        if (raw && sender) await sender.replaceTrack(raw);
+        if (raw && localVideoRef.current) localVideoRef.current.srcObject = new MediaStream([raw, ...(localStreamRef.current?.getAudioTracks() || [])]);
+      } else if (blurSupported) {
+        try { await localStreamRef.current?.getVideoTracks()[0]?.applyConstraints({ backgroundBlur: false } as any); } catch { /* noop */ }
+      }
+      setBlur('off'); setMenu(null);
+      return;
+    }
+
+    // ── Native path ──
+    if (blurSupported && !blurHandleRef.current) {
+      try {
+        await localStreamRef.current?.getVideoTracks()[0]?.applyConstraints({ backgroundBlur: true } as any);
+        setBlur(mode); setMenu(null);
+        return;
+      } catch { /* fall through to the model */ }
+    }
+
+    // ── Already blurring: just change strength ──
+    if (blurHandleRef.current) {
+      blurHandleRef.current.setStrength(mode);
+      setBlur(mode); setMenu(null);
+      return;
+    }
+
+    // ── Model path (first use downloads it) ──
+    const src = localStreamRef.current;
+    if (!src) return;
+    setBlurLoading(true);
+    setMenu(null);
     try {
-      await track.applyConstraints({ backgroundBlur: mode !== 'off' } as any);
+      const { createBlurredStream } = await import('../lib/backgroundBlur');
+      rawVideoTrackRef.current = src.getVideoTracks()[0] || null;
+      const handle = await createBlurredStream(src, mode);
+      blurHandleRef.current = handle;
+      const blurredTrack = handle.stream.getVideoTracks()[0];
+      if (sender && blurredTrack) await sender.replaceTrack(blurredTrack);
+      // Show yourself blurred too, so what you see is what they see.
+      if (localVideoRef.current && blurredTrack) {
+        localVideoRef.current.srcObject = new MediaStream([blurredTrack]);
+        localVideoRef.current.play?.().catch(() => { /* muted */ });
+      }
       setBlur(mode);
-      setMenu(null);
-    } catch { setError('This browser cannot blur the background.'); }
-  }, []);
+    } catch (e) {
+      setError('Background blur could not load (it needs a one-off download).');
+      setBlur('off');
+    } finally {
+      setBlurLoading(false);
+    }
+  }, [blurSupported]);
 
   // Announce ourselves to a peer who joins after we started.
   useEffect(() => {
@@ -408,14 +472,11 @@ export default function VideoCall({ socket, roomId, polite, selfLabel = 'You' }:
                 </MenuItem>
               ))}
               <MenuHeading>Video effects</MenuHeading>
-              {blurSupported ? (
-                <>
-                  <MenuItem selected={blur === 'light'} onClick={() => applyBlur('light')}>Light background blur</MenuItem>
-                  <MenuItem selected={blur === 'strong'} onClick={() => applyBlur('strong')}>Strong background blur</MenuItem>
-                  <MenuItem selected={blur === 'off'} onClick={() => applyBlur('off')} danger>Stop background blur</MenuItem>
-                </>
-              ) : (
-                <MenuNote>Background blur isn’t available in this browser.</MenuNote>
+              <MenuItem selected={blur === 'light'} onClick={() => applyBlur('light')}>Light background blur</MenuItem>
+              <MenuItem selected={blur === 'strong'} onClick={() => applyBlur('strong')}>Strong background blur</MenuItem>
+              <MenuItem selected={blur === 'off'} onClick={() => applyBlur('off')} danger>Stop background blur</MenuItem>
+              {!blurSupported && blur === 'off' && (
+                <MenuNote>First use downloads a small model, so give it a few seconds.</MenuNote>
               )}
             </>
           )}
@@ -438,6 +499,11 @@ export default function VideoCall({ socket, roomId, polite, selfLabel = 'You' }:
         <span style={{ flex: 1 }} />
         <button onClick={() => stopCall()} style={{ ...btn, background: '#dc2626' }} title="End call">End</button>
       </div>
+      {blurLoading && (
+        <div style={{ padding: '6px 8px', background: '#1e293b', color: '#cbd5e1', fontSize: 11 }}>
+          Preparing background blur…
+        </div>
+      )}
       {error && (
         <div style={{ padding: '6px 8px', background: '#7f1d1d', color: '#fff', fontSize: 11 }}>{error}</div>
       )}
