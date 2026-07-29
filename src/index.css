@@ -2139,30 +2139,32 @@ body {
    A single tall column meant scrolling to find anyone once a tutor had more
    than a handful of students. Cards in a responsive grid show many at a glance,
    and the search box above jumps straight to one. */
+/* Built from the design tokens, NOT hardcoded colours: this surface is
+   light-themed, and hardcoded near-white text/cards rendered invisibly on it. */
 .ml-dash-search {
   display: flex; align-items: center; gap: 8px;
   padding: 0 12px; margin-bottom: 14px;
   height: 46px; border-radius: 12px;
-  background: rgba(255, 255, 255, 0.05);
-  border: 1px solid rgba(255, 255, 255, 0.10);
-  color: rgba(245, 245, 244, 0.55);
-  transition: border-color 160ms var(--ml-easing), background 160ms var(--ml-easing);
+  background: var(--bg-card);
+  border: 1px solid var(--border-default);
+  color: var(--text-muted);
+  box-shadow: var(--shadow-sm);
+  transition: border-color 160ms var(--ml-easing), box-shadow 160ms var(--ml-easing);
 }
 .ml-dash-search:focus-within {
-  border-color: rgba(165, 180, 252, 0.55);
-  background: rgba(255, 255, 255, 0.07);
-  box-shadow: 0 0 0 4px rgba(99, 102, 241, 0.14);
+  border-color: var(--accent-indigo);
+  box-shadow: 0 0 0 3px var(--accent-indigo-light);
 }
 .ml-dash-search-input {
   flex: 1; height: 100%; border: 0; background: transparent; outline: none;
-  color: #F5F5F4; font-family: inherit; font-size: 14.5px; font-weight: 500;
+  color: var(--text-primary); font-family: inherit; font-size: 14.5px; font-weight: 500;
 }
-.ml-dash-search-input::placeholder { color: rgba(245, 245, 244, 0.34); }
+.ml-dash-search-input::placeholder { color: var(--text-muted); }
 .ml-dash-search-clear {
   border: 0; background: transparent; cursor: pointer;
-  color: rgba(245, 245, 244, 0.5); font-size: 19px; line-height: 1; padding: 0 2px;
+  color: var(--text-muted); font-size: 19px; line-height: 1; padding: 0 2px;
 }
-.ml-dash-search-clear:hover { color: #F5F5F4; }
+.ml-dash-search-clear:hover { color: var(--text-primary); }
 
 .ml-dash-grid {
   display: grid;
@@ -2172,49 +2174,57 @@ body {
 .ml-dash-card {
   display: flex; flex-direction: column;
   border-radius: 12px; overflow: hidden;
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(255, 255, 255, 0.09);
-  transition: border-color 150ms var(--ml-easing), background 150ms var(--ml-easing), transform 150ms var(--ml-easing);
+  background: var(--bg-card);
+  border: 1px solid var(--border-default);
+  box-shadow: var(--shadow-sm);
+  transition: border-color 150ms var(--ml-easing), box-shadow 150ms var(--ml-easing), transform 150ms var(--ml-easing);
 }
-.ml-dash-card:hover { background: rgba(255, 255, 255, 0.07); border-color: rgba(255, 255, 255, 0.18); transform: translateY(-1px); }
-.ml-dash-card.is-open { border-color: rgba(165, 180, 252, 0.55); }
+.ml-dash-card:hover {
+  border-color: var(--border-strong);
+  box-shadow: var(--shadow-md, 0 4px 12px rgba(15, 17, 23, 0.08));
+  transform: translateY(-1px);
+}
+.ml-dash-card.is-open { border-color: var(--accent-indigo); box-shadow: 0 0 0 3px var(--accent-indigo-light); }
 .ml-dash-card-open {
   display: flex; flex-direction: column; gap: 3px; align-items: flex-start;
   padding: 12px 12px 10px; border: 0; background: none; cursor: pointer; text-align: left; width: 100%;
 }
 .ml-dash-card-name {
-  font-size: 15px; font-weight: 700; color: #F5F5F4; letter-spacing: -0.01em;
+  font-size: 15px; font-weight: 700; color: var(--text-primary); letter-spacing: -0.01em;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%;
 }
 .ml-dash-card-label {
-  font-size: 12px; color: rgba(245, 245, 244, 0.62);
+  font-size: 12px; color: var(--text-secondary);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%;
 }
 .ml-dash-card-code {
   font-family: 'JetBrains Mono', monospace; font-size: 10.5px;
-  color: rgba(245, 245, 244, 0.38);
+  color: var(--text-muted);
 }
 .ml-dash-card-actions {
   display: flex; align-items: center; gap: 4px;
-  padding: 6px 8px; border-top: 1px solid rgba(255, 255, 255, 0.07);
+  padding: 6px 8px; border-top: 1px solid var(--border-subtle);
+  background: var(--bg-surface);
 }
 .ml-dash-card-actions button {
   border: 0; border-radius: 7px; cursor: pointer;
-  background: rgba(255, 255, 255, 0.07); color: rgba(245, 245, 244, 0.82);
+  background: var(--bg-card); color: var(--text-secondary);
+  border: 1px solid var(--border-subtle);
   font-family: inherit; font-size: 11.5px; font-weight: 600; padding: 5px 9px;
 }
-.ml-dash-card-actions button:hover { background: rgba(255, 255, 255, 0.15); color: #fff; }
+.ml-dash-card-actions button:hover { background: var(--accent-indigo); color: #fff; border-color: var(--accent-indigo); }
 .ml-dash-card-del { margin-left: auto; font-size: 15px !important; line-height: 1; padding: 3px 8px !important; }
-.ml-dash-card-del:hover { background: rgba(244, 63, 94, 0.25) !important; color: #FCA5A5 !important; }
+.ml-dash-card-del:hover { background: #DC2626 !important; color: #fff !important; border-color: #DC2626 !important; }
 
 .ml-dash-history {
   margin-top: 12px; padding: 12px 14px; border-radius: 12px;
-  background: rgba(255, 255, 255, 0.05);
-  border: 1px solid rgba(165, 180, 252, 0.28);
+  background: var(--bg-card);
+  border: 1px solid var(--accent-indigo);
+  box-shadow: var(--shadow-sm);
 }
 .ml-dash-history-head {
   display: flex; align-items: center; gap: 10px;
-  font-size: 13.5px; color: rgba(245, 245, 244, 0.85); margin-bottom: 8px;
+  font-size: 13.5px; color: var(--text-primary); margin-bottom: 8px;
 }
 .ml-dash-history-head button { margin-left: auto; }
 
