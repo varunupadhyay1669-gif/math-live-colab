@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../lib/auth";
 import { listClasses, createClass, deleteClass, touchClass, type ClassRow } from "../lib/classes";
+import { filterStudents } from "../lib/studentSearch";
 import { listSessions, type SessionRow } from "../lib/sessions";
 import { cleanDisplayName } from "../lib/displayName";
 
@@ -21,6 +22,11 @@ export default function Dashboard() {
   const [copiedId, setCopiedId] = useState<string | null>(null);
   // Per-student session history (Stage 4): which class is expanded + its rows.
   const [historyOf, setHistoryOf] = useState<string | null>(null);
+  // Type a few letters to jump to a student. Matches on the START of the name
+  // (or of any word in it, so "ka" finds "Anika Kapoor" by surname) and falls
+  // back to a loose contains — then Enter opens the top hit. With more than a
+  // handful of students, typing beats scanning a list every time.
+  const [query, setQuery] = useState("");
   const [sessionsByClass, setSessionsByClass] = useState<Record<string, SessionRow[]>>({});
   const [historyLoading, setHistoryLoading] = useState(false);
 
@@ -72,6 +78,9 @@ export default function Dashboard() {
       setBusy(false);
     }
   };
+
+  // A–Z when idle, best-match-first while typing. See lib/studentSearch.
+  const visible = React.useMemo(() => filterStudents(rows, query), [rows, query]);
 
   const handleOpen = (row: ClassRow) => {
     // Best-effort recency stamp — must never delay opening the room
@@ -214,46 +223,79 @@ export default function Dashboard() {
               share with that student.
             </p>
           ) : (
-            <ul className="ml-dark-saved-list">
-              {rows.map((row) => (
-                <React.Fragment key={row.id}>
-                <li className="ml-dark-saved-item">
-                  <button
-                    className="ml-dark-saved-open"
-                    onClick={() => handleOpen(row)}
-                    title={`Open ${row.student_name}'s room`}
-                  >
-                    <span className="ml-dark-saved-label">
-                      {row.student_name}
-                      {row.label ? ` · ${row.label}` : ""}
-                    </span>
-                    <span className="ml-dark-saved-meta">/live/{row.room_code}</span>
-                  </button>
-                  <button
-                    className="ml-dark-btn ml-dark-btn-glass"
-                    onClick={() => handleCopy(row)}
-                    title="Copy the student's permanent link"
-                  >
-                    {copiedId === row.id ? "Copied!" : "Copy link"}
-                  </button>
-                  <button
-                    className="ml-dark-btn ml-dark-btn-glass"
-                    onClick={() => toggleHistory(row)}
-                    title="Past sessions for this student"
-                  >
-                    {historyOf === row.id ? "Hide history" : "History"}
-                  </button>
-                  <button
-                    className="ml-dark-saved-remove"
-                    onClick={() => handleDelete(row)}
-                    aria-label={`Delete ${row.student_name}'s class`}
-                    title="Delete this class"
-                  >
-                    ×
-                  </button>
-                </li>
-                {historyOf === row.id && (
-                  <li style={{ listStyle: "none", padding: "8px 12px", background: "rgba(255,255,255,0.04)", borderRadius: 8, margin: "2px 0 8px" }}>
+            <>
+              {/* Jump straight to a student by typing. Enter opens the top hit,
+                  so a class is two keystrokes away instead of a scroll. */}
+              <div className="ml-dash-search">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" aria-hidden="true">
+                  <circle cx="11" cy="11" r="7" /><path d="M20 20l-3.5-3.5" />
+                </svg>
+                <input
+                  autoFocus
+                  className="ml-dash-search-input"
+                  placeholder={`Type a name to jump… (${rows.length} student${rows.length === 1 ? "" : "s"})`}
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && visible[0]) handleOpen(visible[0]);
+                    if (e.key === "Escape") setQuery("");
+                  }}
+                  aria-label="Search students"
+                />
+                {query && (
+                  <button className="ml-dash-search-clear" onClick={() => setQuery("")} aria-label="Clear search">×</button>
+                )}
+              </div>
+
+              {visible.length === 0 ? (
+                <p style={{ opacity: 0.7, textAlign: "center", padding: "18px 0" }}>
+                  No student matches “{query}”.
+                </p>
+              ) : (
+                <div className="ml-dash-grid">
+                  {visible.map((row) => (
+                    <div key={row.id} className={`ml-dash-card${historyOf === row.id ? " is-open" : ""}`}>
+                      <button
+                        className="ml-dash-card-open"
+                        onClick={() => handleOpen(row)}
+                        title={`Open ${row.student_name}'s room`}
+                      >
+                        <span className="ml-dash-card-name">{row.student_name}</span>
+                        {row.label && <span className="ml-dash-card-label">{row.label}</span>}
+                        <span className="ml-dash-card-code">/live/{row.room_code}</span>
+                      </button>
+                      <div className="ml-dash-card-actions">
+                        <button onClick={() => handleCopy(row)} title="Copy the student's permanent link">
+                          {copiedId === row.id ? "Copied!" : "Copy"}
+                        </button>
+                        <button onClick={() => toggleHistory(row)} title="Past sessions for this student">
+                          {historyOf === row.id ? "Hide" : "History"}
+                        </button>
+                        <button
+                          className="ml-dash-card-del"
+                          onClick={() => handleDelete(row)}
+                          aria-label={`Delete ${row.student_name}'s class`}
+                          title="Delete this class"
+                        >
+                          ×
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* History for the selected student, shown UNDER the grid so
+                  expanding it never reflows the columns. */}
+              {historyOf && (() => {
+                const row = rows.find(r => r.id === historyOf);
+                if (!row) return null;
+                return (
+                  <div className="ml-dash-history">
+                    <div className="ml-dash-history-head">
+                      <strong>{row.student_name}</strong> · past sessions
+                      <button className="ml-dark-btn ml-dark-btn-ghost" onClick={() => toggleHistory(row)}>Close</button>
+                    </div>
                     {historyLoading && !sessionsByClass[row.id] ? (
                       <div style={{ opacity: 0.7, fontSize: 13 }}>Loading…</div>
                     ) : (sessionsByClass[row.id]?.length ?? 0) === 0 ? (
@@ -275,11 +317,10 @@ export default function Dashboard() {
                         ))}
                       </ul>
                     )}
-                  </li>
-                )}
-                </React.Fragment>
-              ))}
-            </ul>
+                  </div>
+                );
+              })()}
+            </>
           )}
         </div>
       </div>

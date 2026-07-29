@@ -2135,6 +2135,89 @@ body {
   margin-top: 4px;
 }
 
+/* ── Teacher dashboard: searchable A–Z grid of students ──
+   A single tall column meant scrolling to find anyone once a tutor had more
+   than a handful of students. Cards in a responsive grid show many at a glance,
+   and the search box above jumps straight to one. */
+.ml-dash-search {
+  display: flex; align-items: center; gap: 8px;
+  padding: 0 12px; margin-bottom: 14px;
+  height: 46px; border-radius: 12px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  color: rgba(245, 245, 244, 0.55);
+  transition: border-color 160ms var(--ml-easing), background 160ms var(--ml-easing);
+}
+.ml-dash-search:focus-within {
+  border-color: rgba(165, 180, 252, 0.55);
+  background: rgba(255, 255, 255, 0.07);
+  box-shadow: 0 0 0 4px rgba(99, 102, 241, 0.14);
+}
+.ml-dash-search-input {
+  flex: 1; height: 100%; border: 0; background: transparent; outline: none;
+  color: #F5F5F4; font-family: inherit; font-size: 14.5px; font-weight: 500;
+}
+.ml-dash-search-input::placeholder { color: rgba(245, 245, 244, 0.34); }
+.ml-dash-search-clear {
+  border: 0; background: transparent; cursor: pointer;
+  color: rgba(245, 245, 244, 0.5); font-size: 19px; line-height: 1; padding: 0 2px;
+}
+.ml-dash-search-clear:hover { color: #F5F5F4; }
+
+.ml-dash-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(224px, 1fr));
+  gap: 10px;
+}
+.ml-dash-card {
+  display: flex; flex-direction: column;
+  border-radius: 12px; overflow: hidden;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  transition: border-color 150ms var(--ml-easing), background 150ms var(--ml-easing), transform 150ms var(--ml-easing);
+}
+.ml-dash-card:hover { background: rgba(255, 255, 255, 0.07); border-color: rgba(255, 255, 255, 0.18); transform: translateY(-1px); }
+.ml-dash-card.is-open { border-color: rgba(165, 180, 252, 0.55); }
+.ml-dash-card-open {
+  display: flex; flex-direction: column; gap: 3px; align-items: flex-start;
+  padding: 12px 12px 10px; border: 0; background: none; cursor: pointer; text-align: left; width: 100%;
+}
+.ml-dash-card-name {
+  font-size: 15px; font-weight: 700; color: #F5F5F4; letter-spacing: -0.01em;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%;
+}
+.ml-dash-card-label {
+  font-size: 12px; color: rgba(245, 245, 244, 0.62);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%;
+}
+.ml-dash-card-code {
+  font-family: 'JetBrains Mono', monospace; font-size: 10.5px;
+  color: rgba(245, 245, 244, 0.38);
+}
+.ml-dash-card-actions {
+  display: flex; align-items: center; gap: 4px;
+  padding: 6px 8px; border-top: 1px solid rgba(255, 255, 255, 0.07);
+}
+.ml-dash-card-actions button {
+  border: 0; border-radius: 7px; cursor: pointer;
+  background: rgba(255, 255, 255, 0.07); color: rgba(245, 245, 244, 0.82);
+  font-family: inherit; font-size: 11.5px; font-weight: 600; padding: 5px 9px;
+}
+.ml-dash-card-actions button:hover { background: rgba(255, 255, 255, 0.15); color: #fff; }
+.ml-dash-card-del { margin-left: auto; font-size: 15px !important; line-height: 1; padding: 3px 8px !important; }
+.ml-dash-card-del:hover { background: rgba(244, 63, 94, 0.25) !important; color: #FCA5A5 !important; }
+
+.ml-dash-history {
+  margin-top: 12px; padding: 12px 14px; border-radius: 12px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(165, 180, 252, 0.28);
+}
+.ml-dash-history-head {
+  display: flex; align-items: center; gap: 10px;
+  font-size: 13.5px; color: rgba(245, 245, 244, 0.85); margin-bottom: 8px;
+}
+.ml-dash-history-head button { margin-left: auto; }
+
 /* ── Quick Deploy ── */
 .ml-dark-deploy-cta {
   font-size: 13.5px;
