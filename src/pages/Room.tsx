@@ -1730,12 +1730,47 @@ export default function Room() {
     e.target.value = '';
   };
 
+  // ── Ways out of the drop overlay ──
+  // A drag can end without the page ever hearing about it: dragging back out of
+  // the window, dropping on browser chrome, pressing Escape mid-drag, or the OS
+  // cancelling it. Any of those used to leave the overlay stuck over the whole
+  // app. These are the escapes — plus a stalled-drag timeout as the backstop.
+  useEffect(() => {
+    if (!isDragging) return;
+    const clear = () => setIsDragging(false);
+    // relatedTarget === null means the pointer left the window entirely.
+    const onWindowDragLeave = (e: DragEvent) => { if (!e.relatedTarget) clear(); };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') clear(); };
+    // If no drag event arrives for a moment, the drag is over — the browser
+    // just never told us. Refreshed by dragover while a drag is genuinely live.
+    let stall = window.setTimeout(clear, 1500);
+    const onDragOver = () => { window.clearTimeout(stall); stall = window.setTimeout(clear, 1500); };
+
+    window.addEventListener('dragleave', onWindowDragLeave);
+    window.addEventListener('dragover', onDragOver);
+    window.addEventListener('dragend', clear);
+    window.addEventListener('drop', clear);
+    window.addEventListener('keydown', onKey);
+    window.addEventListener('click', clear);
+    window.addEventListener('blur', clear);
+    return () => {
+      window.clearTimeout(stall);
+      window.removeEventListener('dragleave', onWindowDragLeave);
+      window.removeEventListener('dragover', onDragOver);
+      window.removeEventListener('dragend', clear);
+      window.removeEventListener('drop', clear);
+      window.removeEventListener('keydown', onKey);
+      window.removeEventListener('click', clear);
+      window.removeEventListener('blur', clear);
+    };
+  }, [isDragging]);
+
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
     setIsDragging(false);
     if (!socket) return;
     const droppedFiles = (Array.from(e.dataTransfer.files) as File[]).filter(f => /\.html?$/i.test(f.name));
-    if (droppedFiles.length === 0) { showNotif("⚠️ Only .html files please"); return; }
+    if (droppedFiles.length === 0) { showNotif("⚠️ That is not an HTML file. Images and PDFs go on the whiteboard — open it and drop them there."); return; }
     droppedFiles.forEach((file: File) => {
       if (file.size > 2 * 1024 * 1024) { showNotif(`⚠️ ${file.name} is too large (max 2MB)`); return; }
       if (file.size === 0) { showNotif(`⚠️ ${file.name} is empty`); return; }
@@ -2171,14 +2206,26 @@ export default function Room() {
       onDragLeave={(e) => { if (e.currentTarget === e.target) setIsDragging(false); }}
       onDrop={handleDrop}>
 
-      {/* ═══ DROP OVERLAY ═══ */}
+      {/* ═══ DROP OVERLAY ═══
+          pointerEvents:'none' is load-bearing, not cosmetic. Being fixed+inset-0
+          the overlay sits above everything, so with pointer events ON it became
+          the drag target the moment it appeared: the page's dragleave never
+          fired, and the DROP landed on the overlay instead of handleDrop. The
+          overlay could then never dismiss itself — dropping a file (an image,
+          say) left the whole app covered with no way out. Ignoring pointer
+          events makes it purely visual; every drag event passes through to the
+          handlers on the container that know how to clear it. Escape, a click,
+          leaving the window, or a stalled drag also dismiss it (see effect). */}
       {isDragging && (
         <div className="fixed inset-0 z-50 flex items-center justify-center"
-          style={{ background: 'rgba(249,250,251,0.95)', backdropFilter: 'blur(8px)' }}>
+          style={{ background: 'rgba(249,250,251,0.95)', backdropFilter: 'blur(8px)', pointerEvents: 'none' }}>
           <div className="text-center animate-bounce-in">
             <div className="text-7xl mb-4">📂</div>
             <div className="text-2xl font-bold" style={{ color: 'var(--accent-indigo)' }}>Drop HTML files here</div>
             <div className="text-sm mt-2" style={{ color: 'var(--text-muted)' }}>They'll be added to your file library</div>
+            <div className="text-xs mt-3" style={{ color: 'var(--text-muted)', opacity: 0.85 }}>
+              Images go on the whiteboard — press <strong>Esc</strong> or click to cancel
+            </div>
           </div>
         </div>
       )}
