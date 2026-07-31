@@ -22,6 +22,7 @@ import { AuthProvider } from './lib/auth';
 const Room = lazy(() => import('./pages/Room'));
 const StudentView = lazy(() => import('./pages/StudentView'));
 const Dashboard = lazy(() => import('./pages/Dashboard'));
+const StudentDashboard = lazy(() => import('./pages/StudentDashboard'));
 const ReplayView = lazy(() => import('./pages/ReplayView'));
 const DeployView = lazy(() => import('./pages/DeployView'));
 
@@ -103,6 +104,8 @@ export default function App() {
             <Routes>
               <Route path="/" element={<Home />} />
               <Route path="/dashboard" element={<Dashboard />} />
+              {/* One student: profile, goals, and their lesson history */}
+              <Route path="/student-dashboard/:roomCode" element={<StudentDashboard />} />
               <Route path="/room/:roomId" element={<Room />} />
               <Route path="/live/:roomId" element={<StudentView />} />
               {/* Backward compatibility */}

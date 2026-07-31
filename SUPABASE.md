@@ -133,6 +133,24 @@ create policy "sessions owned by teacher" on public.sessions
   for all using (auth.uid() = teacher_id) with check (auth.uid() = teacher_id);
 ```
 
+### Migration 001 — student profile fields
+
+Run this once in **SQL Editor** to turn on the per-student dashboard's profile
+(grade, level, goals, avatar). It is the same file as
+`supabase/migrations/001_student_profile.sql`.
+
+```sql
+alter table public.classes add column if not exists grade  text;
+alter table public.classes add column if not exists level  text;
+alter table public.classes add column if not exists goals  text;  -- one goal per line
+alter table public.classes add column if not exists avatar text;  -- a single emoji
+```
+
+Safe to re-run, and safe while the app is live: every column is nullable with
+no default, so no existing row is touched. **The app works without it** — the
+profile fields read as empty and pressing Save says the migration is still
+needed. Everything else (the class list, links, lesson history) is unaffected.
+
 ---
 
 ## Build status & plan

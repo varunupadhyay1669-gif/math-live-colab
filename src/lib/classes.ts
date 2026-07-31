@@ -12,6 +12,27 @@ export interface ClassRow {
   room_code: string;
   created_at: string;
   last_opened_at: string | null;
+  // ── Student profile (added by the migration in SUPABASE.md) ──
+  // Optional on the type on purpose: a database that hasn't run the migration
+  // yet simply doesn't return them, and every screen must still work. Reads go
+  // through profileFrom() in lib/studentProfile, which normalises the absence.
+  grade?: string | null;
+  level?: string | null;
+  goals?: string | null;    // one goal per line
+  avatar?: string | null;   // a single emoji; blank falls back to initials
+}
+
+/** Thrown when the profile columns haven't been added to the database yet. */
+export class ProfileColumnsMissing extends Error {
+  constructor() {
+    super('Your database does not have the student profile fields yet. Run the migration in SUPABASE.md (one SQL block), then try again.');
+    this.name = 'ProfileColumnsMissing';
+  }
+}
+
+/** Postgres 42703 = undefined_column — the un-migrated database. */
+function isMissingColumn(e: unknown): boolean {
+  return (e as { code?: string })?.code === '42703';
 }
 
 function slug(s: string): string {
@@ -69,11 +90,22 @@ export async function createClass(studentName: string, label?: string): Promise<
 
 export async function updateClass(
   id: string,
-  fields: { student_name?: string; label?: string | null },
+  fields: {
+    student_name?: string; label?: string | null;
+    grade?: string | null; level?: string | null; goals?: string | null; avatar?: string | null;
+  },
 ): Promise<void> {
   if (!supabase) return;
   const { error } = await supabase.from('classes').update(fields).eq('id', id);
+  if (error) throw isMissingColumn(error) ? new ProfileColumnsMissing() : error;
+}
+
+/** One student by their room code. RLS means this resolves only for the owner. */
+export async function getClassByRoomCode(roomCode: string): Promise<ClassRow | null> {
+  if (!supabase) return null;
+  const { data, error } = await supabase.from('classes').select('*').eq('room_code', roomCode).maybeSingle();
   if (error) throw error;
+  return (data as ClassRow) ?? null;
 }
 
 export async function deleteClass(id: string): Promise<void> {

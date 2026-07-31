@@ -3,8 +3,8 @@ import { useNavigate } from "react-router-dom";
 import { useAuth } from "../lib/auth";
 import { listClasses, createClass, deleteClass, touchClass, type ClassRow } from "../lib/classes";
 import { filterStudents } from "../lib/studentSearch";
-import { listSessions, type SessionRow } from "../lib/sessions";
 import { cleanDisplayName } from "../lib/displayName";
+import { avatarFor, profileFrom } from "../lib/studentProfile";
 
 // Teacher hub: a private list of classes (one per student) with permanent
 // links, plus create / open / delete. Only reachable when auth is enabled and
@@ -20,15 +20,11 @@ export default function Dashboard() {
   const [label, setLabel] = useState("");
   const [busy, setBusy] = useState(false);
   const [copiedId, setCopiedId] = useState<string | null>(null);
-  // Per-student session history (Stage 4): which class is expanded + its rows.
-  const [historyOf, setHistoryOf] = useState<string | null>(null);
   // Type a few letters to jump to a student. Matches on the START of the name
   // (or of any word in it, so "ka" finds "Anika Kapoor" by surname) and falls
   // back to a loose contains — then Enter opens the top hit. With more than a
   // handful of students, typing beats scanning a list every time.
   const [query, setQuery] = useState("");
-  const [sessionsByClass, setSessionsByClass] = useState<Record<string, SessionRow[]>>({});
-  const [historyLoading, setHistoryLoading] = useState(false);
 
   // Guard: no auth / not signed in → home.
   useEffect(() => {
@@ -89,6 +85,8 @@ export default function Dashboard() {
     navigate(`/room/${row.room_code}?name=${encodeURIComponent(teacherName)}`);
   };
 
+  const handleProfile = (row: ClassRow) => navigate(`/student-dashboard/${row.room_code}`);
+
   const handleCopy = async (row: ClassRow) => {
     const link = studentLink(row.room_code);
     // navigator.clipboard is undefined on non-HTTPS origins (a common LAN
@@ -130,32 +128,6 @@ export default function Dashboard() {
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to delete class");
     }
-  };
-
-  const toggleHistory = async (row: ClassRow) => {
-    if (historyOf === row.id) { setHistoryOf(null); return; }
-    setHistoryOf(row.id);
-    if (!sessionsByClass[row.id]) {
-      setHistoryLoading(true);
-      try {
-        const list = await listSessions(row.id);
-        setSessionsByClass((prev) => ({ ...prev, [row.id]: list }));
-      } catch {
-        setSessionsByClass((prev) => ({ ...prev, [row.id]: [] }));
-      } finally {
-        setHistoryLoading(false);
-      }
-    }
-  };
-
-  // Reopen a saved session: the room hydrates HTML + whiteboard from ?session.
-  const reopenSession = (row: ClassRow, s: SessionRow) => {
-    navigate(`/room/${row.room_code}?name=${encodeURIComponent(teacherName)}&session=${s.id}`);
-  };
-
-  const fmtDate = (iso: string) => {
-    try { return new Date(iso).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }); }
-    catch { return iso; }
   };
 
   return (
@@ -253,73 +225,47 @@ export default function Dashboard() {
                 </p>
               ) : (
                 <div className="ml-dash-grid">
-                  {visible.map((row) => (
-                    <div key={row.id} className={`ml-dash-card${historyOf === row.id ? " is-open" : ""}`}>
-                      <button
-                        className="ml-dash-card-open"
-                        onClick={() => handleOpen(row)}
-                        title={`Open ${row.student_name}'s room`}
-                      >
-                        <span className="ml-dash-card-name">{row.student_name}</span>
-                        {row.label && <span className="ml-dash-card-label">{row.label}</span>}
-                        <span className="ml-dash-card-code">/live/{row.room_code}</span>
-                      </button>
-                      <div className="ml-dash-card-actions">
-                        <button onClick={() => handleCopy(row)} title="Copy the student's permanent link">
-                          {copiedId === row.id ? "Copied!" : "Copy"}
-                        </button>
-                        <button onClick={() => toggleHistory(row)} title="Past sessions for this student">
-                          {historyOf === row.id ? "Hide" : "History"}
-                        </button>
+                  {visible.map((row) => {
+                    const av = avatarFor(row.student_name, profileFrom(row).avatar);
+                    return (
+                      <div key={row.id} className="ml-dash-card">
+                        {/* The card opens the student's own page — profile, goals
+                            and lesson history. "Open room" below is the
+                            one-click path for when a lesson is starting. */}
                         <button
-                          className="ml-dash-card-del"
-                          onClick={() => handleDelete(row)}
-                          aria-label={`Delete ${row.student_name}'s class`}
-                          title="Delete this class"
+                          className="ml-dash-card-open"
+                          onClick={() => handleProfile(row)}
+                          title={`${row.student_name}'s dashboard`}
                         >
-                          ×
+                          <span className="ml-dash-card-face" style={{ background: av.bg, color: av.fg }} aria-hidden="true">
+                            {av.label}
+                          </span>
+                          <span className="ml-dash-card-name">{row.student_name}</span>
+                          {row.label && <span className="ml-dash-card-label">{row.label}</span>}
+                          <span className="ml-dash-card-code">/live/{row.room_code}</span>
                         </button>
+                        <div className="ml-dash-card-actions">
+                          <button onClick={() => handleOpen(row)} title={`Go straight into ${row.student_name}'s room`}>
+                            Open room
+                          </button>
+                          <button onClick={() => handleCopy(row)} title="Copy the student's permanent link">
+                            {copiedId === row.id ? "Copied!" : "Copy"}
+                          </button>
+                          <button
+                            className="ml-dash-card-del"
+                            onClick={() => handleDelete(row)}
+                            aria-label={`Delete ${row.student_name}'s class`}
+                            title="Delete this class"
+                          >
+                            ×
+                          </button>
+                        </div>
                       </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
 
-              {/* History for the selected student, shown UNDER the grid so
-                  expanding it never reflows the columns. */}
-              {historyOf && (() => {
-                const row = rows.find(r => r.id === historyOf);
-                if (!row) return null;
-                return (
-                  <div className="ml-dash-history">
-                    <div className="ml-dash-history-head">
-                      <strong>{row.student_name}</strong> · past sessions
-                      <button className="ml-dark-btn ml-dark-btn-ghost" onClick={() => toggleHistory(row)}>Close</button>
-                    </div>
-                    {historyLoading && !sessionsByClass[row.id] ? (
-                      <div style={{ opacity: 0.7, fontSize: 13 }}>Loading…</div>
-                    ) : (sessionsByClass[row.id]?.length ?? 0) === 0 ? (
-                      <div style={{ opacity: 0.7, fontSize: 13, lineHeight: 1.5 }}>
-                        No saved sessions yet. Open the room and use “💾 Save to history”.
-                      </div>
-                    ) : (
-                      <ul style={{ display: "flex", flexDirection: "column", gap: 4, margin: 0, padding: 0 }}>
-                        {sessionsByClass[row.id]!.map((s) => (
-                          <li key={s.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, listStyle: "none" }}>
-                            <span style={{ fontSize: 13 }}>
-                              <strong>{s.topic || "Session"}</strong>
-                              <span style={{ opacity: 0.6, marginLeft: 8 }}>{fmtDate(s.started_at)}</span>
-                            </span>
-                            <button className="ml-dark-btn ml-dark-btn-glass" onClick={() => reopenSession(row, s)}>
-                              Reopen
-                            </button>
-                          </li>
-                        ))}
-                      </ul>
-                    )}
-                  </div>
-                );
-              })()}
             </>
           )}
         </div>

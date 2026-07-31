@@ -2216,17 +2216,129 @@ body {
 .ml-dash-card-del { margin-left: auto; font-size: 15px !important; line-height: 1; padding: 3px 8px !important; }
 .ml-dash-card-del:hover { background: #DC2626 !important; color: #fff !important; border-color: #DC2626 !important; }
 
-.ml-dash-history {
-  margin-top: 12px; padding: 12px 14px; border-radius: 12px;
-  background: var(--bg-card);
-  border: 1px solid var(--accent-indigo);
-  box-shadow: var(--shadow-sm);
+/* The little face on each class card — same derived colour as the student's
+   own page, so a student is recognisable before you read the name. */
+.ml-dash-card-face {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 30px; height: 30px; border-radius: 9px; margin-bottom: 4px;
+  font-size: 14px; font-weight: 700; line-height: 1; letter-spacing: 0;
 }
-.ml-dash-history-head {
-  display: flex; align-items: center; gap: 10px;
-  font-size: 13.5px; color: var(--text-primary); margin-bottom: 8px;
+
+/* ═══════════════════════════════════════════════════════════════
+   ONE STUDENT'S DASHBOARD  (/student-dashboard/:roomCode)
+   NOTE: this sits inside .ml-dark-home, whose name is a leftover — a
+   later override makes that shell LIGHT. Everything here must therefore
+   use the light design tokens. Styling it dark makes the whole page
+   vanish into the background (that exact bug shipped once already).
+   ═══════════════════════════════════════════════════════════════ */
+.ml-sd { width: 100%; max-width: 900px; text-align: left; }
+.ml-sd-back {
+  display: inline-block; margin-bottom: 14px;
+  font-size: 13px; font-weight: 600; color: var(--text-secondary); text-decoration: none;
 }
-.ml-dash-history-head button { margin-left: auto; }
+.ml-sd-back:hover { color: var(--accent-indigo); }
+
+.ml-sd-head {
+  display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+  padding: 18px 20px; border-radius: 14px;
+  background: var(--bg-card); border: 1px solid var(--border-default); box-shadow: var(--shadow-sm);
+}
+.ml-sd-avatar {
+  display: flex; align-items: center; justify-content: center;
+  width: 62px; height: 62px; border-radius: 16px; flex-shrink: 0;
+  font-weight: 700; letter-spacing: -0.02em;
+}
+.ml-sd-head-text { flex: 1; min-width: 180px; }
+.ml-sd-name {
+  font-size: 26px; font-weight: 750; letter-spacing: -0.02em;
+  color: var(--text-primary); margin: 0 0 6px;
+}
+.ml-sd-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.ml-sd-chip {
+  font-size: 11.5px; font-weight: 600; padding: 3px 9px; border-radius: 999px;
+  background: var(--accent-indigo-light, rgba(79,70,229,0.10));
+  color: var(--accent-indigo); border: 1px solid rgba(79,70,229,0.18);
+}
+.ml-sd-chip-soft {
+  background: var(--bg-surface); color: var(--text-secondary); border-color: var(--border-subtle);
+}
+.ml-sd-head-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
+.ml-sd-error {
+  margin: 12px 0 0; padding: 10px 12px; border-radius: 10px; font-size: 13px; line-height: 1.5;
+  background: #FEF2F2; color: #991B1B; border: 1px solid #FECACA;
+}
+.ml-sd-saved { margin: 12px 0 0; font-size: 13px; color: #15803D; }
+
+.ml-sd-cols {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 14px; margin-top: 14px;
+}
+.ml-sd-card {
+  padding: 16px 18px; border-radius: 14px;
+  background: var(--bg-card); border: 1px solid var(--border-default); box-shadow: var(--shadow-sm);
+}
+.ml-sd-card-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 12px;
+}
+.ml-sd-card-head h2 {
+  font-size: 14px; font-weight: 700; letter-spacing: 0.02em; text-transform: uppercase;
+  color: var(--text-secondary); margin: 0;
+}
+.ml-sd-count {
+  font-size: 12px; font-weight: 700; padding: 2px 9px; border-radius: 999px;
+  background: var(--bg-surface); color: var(--text-secondary);
+}
+
+.ml-sd-facts { margin: 0; display: flex; flex-direction: column; gap: 12px; }
+.ml-sd-fact dt {
+  font-size: 11.5px; font-weight: 650; letter-spacing: 0.02em; text-transform: uppercase;
+  color: var(--text-secondary); margin-bottom: 3px;
+}
+.ml-sd-fact dd { margin: 0; font-size: 14.5px; color: var(--text-primary); line-height: 1.5; }
+.ml-sd-blank { color: var(--text-secondary); font-size: 13.5px; }
+.ml-sd-goals { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 3px; }
+.ml-sd-goals li { font-size: 14.5px; color: var(--text-primary); line-height: 1.45; }
+
+.ml-sd-form { display: flex; flex-direction: column; gap: 12px; }
+.ml-sd-form label { display: flex; flex-direction: column; gap: 5px; }
+.ml-sd-form label > span, .ml-sd-form-label {
+  font-size: 11.5px; font-weight: 650; letter-spacing: 0.02em; text-transform: uppercase;
+  color: var(--text-secondary);
+}
+.ml-sd-form textarea.ml-dark-input { height: auto; padding: 10px 12px; line-height: 1.5; resize: vertical; }
+.ml-sd-avatar-picker { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.ml-sd-avatar-opt {
+  width: 38px; height: 38px; border-radius: 10px; cursor: pointer; font-size: 18px;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: var(--bg-card); border: 1px solid var(--border-default); color: var(--text-secondary);
+  font-weight: 700;
+}
+.ml-sd-avatar-opt:hover { border-color: var(--border-strong); }
+.ml-sd-avatar-opt.is-on { border-color: var(--accent-indigo); box-shadow: 0 0 0 3px rgba(79,70,229,0.14); }
+
+.ml-sd-covered {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 0 0 12px;
+}
+.ml-sd-covered-label {
+  font-size: 11.5px; font-weight: 650; letter-spacing: 0.02em; text-transform: uppercase;
+  color: var(--text-secondary); margin-right: 2px;
+}
+.ml-sd-sessions { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.ml-sd-sessions li {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 9px 0; border-top: 1px solid var(--border-subtle);
+}
+.ml-sd-sessions li:first-child { border-top: 0; }
+.ml-sd-session-text { display: flex; flex-direction: column; gap: 2px; font-size: 14px; color: var(--text-primary); }
+.ml-sd-session-date { font-size: 12px; color: var(--text-secondary); }
+.ml-sd-empty { display: flex; flex-direction: column; align-items: center; gap: 14px; max-width: 460px; }
+
+@media (max-width: 620px) {
+  .ml-sd-head { flex-direction: column; align-items: flex-start; }
+  .ml-sd-head-actions { width: 100%; }
+  .ml-sd-head-actions .ml-dark-btn { flex: 1; }
+}
 
 /* ── Quick Deploy ── */
 .ml-dark-deploy-cta {
@@ -2875,7 +2987,7 @@ hr,
 .ml-mode-picker-hint {
   margin-top: 28px;
   font-size: 12.5px;
-  color: var(--text-muted);
+  color: var(--text-secondary);
 }
 
 /* Static-card variant: container that doesn't itself act as a button.
@@ -3277,17 +3389,17 @@ html, body, #root { background: var(--bg-primary); }
   box-shadow: var(--shadow-card);
   backdrop-filter: none;
 }
-.ml-dark-saved-head { color: var(--text-muted); }
+.ml-dark-saved-head { color: var(--text-secondary); }
 .ml-dark-saved-count { background: rgba(79, 70, 229, 0.10); color: var(--accent-indigo); }
 .ml-dark-templates .ml-dark-saved-count { background: rgba(124, 58, 237, 0.10); color: var(--accent-violet); }
 .ml-dark-saved-item { background: transparent; }
 .ml-dark-saved-item:hover { background: var(--bg-surface); }
 .ml-dark-templates .ml-dark-saved-item:hover { background: rgba(124, 58, 237, 0.07); }
 .ml-dark-saved-open, .ml-dark-saved-label { color: var(--text-primary); }
-.ml-dark-saved-meta { color: var(--text-muted); }
-.ml-dark-saved-remove { color: var(--text-muted); }
+.ml-dark-saved-meta { color: var(--text-secondary); }
+.ml-dark-saved-remove { color: var(--text-secondary); }
 .ml-dark-saved-remove:hover { color: var(--accent-rose); background: rgba(220, 38, 38, 0.07); }
-.ml-dark-saved-more { color: var(--text-muted); }
+.ml-dark-saved-more { color: var(--text-secondary); }
 
 /* Capability cards */
 .ml-dark-feature {
@@ -3306,11 +3418,11 @@ html, body, #root { background: var(--bg-primary); }
   color: var(--text-primary);
   backdrop-filter: none;
 }
-.ml-dark-input::placeholder { color: var(--text-muted); }
+.ml-dark-input::placeholder { color: var(--text-secondary); }
 .ml-dark-input:focus { border-color: var(--accent-indigo); background: #fff; box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.14); }
 
 /* Footer + recent pills */
-.ml-dark-footer span, .ml-dark-recent-label { color: var(--text-muted); }
+.ml-dark-footer span, .ml-dark-recent-label { color: var(--text-secondary); }
 .ml-dark-recent-pill {
   background: #fff;
   border: 1px solid var(--border-default);
