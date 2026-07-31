@@ -82,7 +82,9 @@ async function run() {
   const late = await joinStudent(room, 'Rohan');
   const sv = late._sessionState?.sharedVideo;
   assert(sv?.videoId === VID, 'late joiner is handed the clip that\'s playing', JSON.stringify(sv));
-  assert(sv && sv.time >= 121 && sv.time < 126,
+  // Wide upper bound on purpose: the claim is "wound forward, not restarted",
+  // and a tight window just turns a slow machine into a false alarm.
+  assert(sv && sv.time >= 121 && sv.time < 140,
     `and starts near where the teacher is, not at 0:00 (got ${sv ? sv.time.toFixed(1) : 'nothing'}s)`);
   assert(sv?.playing === true, 'and knows it is playing');
 

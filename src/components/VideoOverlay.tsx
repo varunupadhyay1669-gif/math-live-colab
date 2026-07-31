@@ -45,6 +45,9 @@ export default function VideoOverlay({ socket, roomId, isTeacher, promptOpen = f
   const [needsSound, setNeedsSound] = useState(false);
   const [fallback, setFallback] = useState(false);   // API blocked → plain embed
   const [loading, setLoading] = useState(false);
+  // Teacher only: is the student's copy actually keeping up?
+  const [follow, setFollow] = useState<'waiting' | 'ok' | 'adrift' | 'silent'>('waiting');
+  const [peerName, setPeerName] = useState('Your student');
 
   const panelRef = useRef<HTMLDivElement>(null);
   const hostRef = useRef<HTMLDivElement>(null);
@@ -53,6 +56,7 @@ export default function VideoOverlay({ socket, roomId, isTeacher, promptOpen = f
   const startRef = useRef(0);
   // A position update that arrived before this student's player existed.
   const pendingRef = useRef<{ time: number; playing: boolean } | null>(null);
+  const ackRef = useRef<{ at: number; time: number; playing: boolean } | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => { startRef.current = video?.start ?? 0; }, [video]);
@@ -167,20 +171,52 @@ export default function VideoOverlay({ socket, roomId, isTeacher, promptOpen = f
     };
   }, [videoId, isTeacher, socket, roomId]);
 
-  // ─── Teacher: keep the room posted on where we are ───
+  // ─── Teacher: keep the room posted on where we are, and watch for the
+  //     student's reply so a video that isn't following says so ───
   useEffect(() => {
     if (!isTeacher || !socket || !videoId) return;
+    ackRef.current = null;
+    setFollow('waiting');
+    const onAck = ({ time, playing, name }: { time: number; playing: boolean; name?: string }) => {
+      ackRef.current = { at: Date.now(), time, playing };
+      if (name) setPeerName(name);
+    };
+    socket.on('video_ack', onAck);
+
+    const t = setInterval(() => {
+      const p = playerRef.current;
+      if (!p?.getCurrentTime) return;
+      let here = { time: 0, playing: false };
+      try {
+        here = { time: p.getCurrentTime() || 0, playing: p.getPlayerState?.() === YT_STATE.PLAYING };
+        socket.emit('video_state', { roomId, ...here });
+      } catch { /* socket closing */ }
+
+      const a = ackRef.current;
+      if (!a) setFollow('waiting');
+      else if (Date.now() - a.at > 6000) setFollow('silent');
+      // 3s of slack: a student is always a beat behind, and a brief buffer
+      // shouldn't be reported as a problem.
+      else if (a.playing !== here.playing || Math.abs(a.time - here.time) > 3) setFollow('adrift');
+      else setFollow('ok');
+    }, 1000);
+    return () => { clearInterval(t); socket.off('video_ack', onAck); };
+  }, [isTeacher, socket, roomId, videoId]);
+
+  // ─── Student: report back where our copy really is ───
+  useEffect(() => {
+    if (isTeacher || !socket || !videoId) return;
     const t = setInterval(() => {
       const p = playerRef.current;
       if (!p?.getCurrentTime) return;
       try {
-        socket.emit('video_state', {
+        socket.emit('video_ack', {
           roomId,
           time: p.getCurrentTime() || 0,
           playing: p.getPlayerState?.() === YT_STATE.PLAYING,
         });
       } catch { /* socket closing */ }
-    }, 1000);
+    }, 2000);
     return () => clearInterval(t);
   }, [isTeacher, socket, roomId, videoId]);
 
@@ -192,12 +228,18 @@ export default function VideoOverlay({ socket, roomId, isTeacher, promptOpen = f
       if (!p?.getCurrentTime) { pendingRef.current = { time, playing }; return; }
       try {
         const state = p.getPlayerState?.();
-        // Mid-buffer the reported position is meaningless; correcting now just
-        // starts another buffer. Wait for the next tick.
-        if (state === YT_STATE.BUFFERING) return;
-        if (Math.abs((p.getCurrentTime() || 0) - time) > DRIFT_TOLERANCE) p.seekTo(time, true);
-        if (playing && state !== YT_STATE.PLAYING) p.playVideo();
-        if (!playing && state === YT_STATE.PLAYING) p.pauseVideo();
+        const buffering = state === YT_STATE.BUFFERING;
+        // Mid-buffer the reported position is meaningless — chasing it just
+        // starts another buffer — so skip the SEEK while buffering.
+        if (!buffering && Math.abs((p.getCurrentTime() || 0) - time) > DRIFT_TOLERANCE) {
+          p.seekTo(time, true);
+        }
+        // Play/pause is always safe to apply, buffering or not. Skipping it
+        // during buffering meant a student on a slow connection could sit in
+        // near-permanent buffering and play straight through the teacher's
+        // pause, which is exactly when following matters most.
+        if (playing && !buffering && state !== YT_STATE.PLAYING) p.playVideo();
+        if (!playing && (state === YT_STATE.PLAYING || buffering)) p.pauseVideo();
       } catch { /* player torn down between checks */ }
     };
     socket.on('video_state', onState);
@@ -365,6 +407,21 @@ export default function VideoOverlay({ socket, roomId, isTeacher, promptOpen = f
             <span className="text-sm font-medium">Video</span>
             {/* Tucked into a corner there's only room for the controls. */}
             {!isTeacher && size > 0 && <span className="text-[11px]" style={{ color: 'rgba(255,255,255,0.55)' }}>following your teacher</span>}
+            {/* Whether the student's copy is actually keeping up — the answer
+                to "I paused and nothing happened on their screen". */}
+            {isTeacher && size > 0 && !fallback && (
+              <span className="text-[11px] flex items-center gap-1.5"
+                style={{ color: follow === 'ok' ? 'rgba(134,239,172,0.95)' : follow === 'waiting' ? 'rgba(255,255,255,0.5)' : 'rgba(253,186,116,0.95)' }}>
+                <span style={{
+                  width: 6, height: 6, borderRadius: 999, display: 'inline-block',
+                  background: follow === 'ok' ? '#4ade80' : follow === 'waiting' ? 'rgba(255,255,255,0.4)' : '#fb923c',
+                }} />
+                {follow === 'ok' ? `${peerName} is following`
+                  : follow === 'waiting' ? 'waiting for your student'
+                  : follow === 'adrift' ? `${peerName} is out of step`
+                  : `${peerName} isn't following`}
+              </span>
+            )}
             <div className="flex-1" />
             {needsSound && size > 0 && (
               <button onClick={unmute} onPointerDown={(e) => e.stopPropagation()}
@@ -427,9 +484,16 @@ export default function VideoOverlay({ socket, roomId, isTeacher, promptOpen = f
               🔊 Tap for sound
             </button>
           )}
+          {/* Without the player API there is no way to read or drive playback,
+              so this copy is showing on its own. That has to be stated loudly
+              on the teacher's screen — otherwise they pause, nothing happens
+              for the student, and there is no clue why. */}
           {fallback && (
-            <div className="px-3 py-1.5 text-[11px]" style={{ color: 'rgba(255,255,255,0.55)' }}>
-              Playing on its own — this network blocked the sync, so use the video's own controls.
+            <div className="px-3 py-2 text-[11.5px] font-medium"
+              style={{ background: '#7c2d12', color: '#fed7aa' }}>
+              {isTeacher
+                ? '⚠ Not synced — your student\'s copy will not follow your play, pause or skip. Tell them when to press play, or reload to try again.'
+                : 'Playing on its own — this network blocked the sync, so use the video\'s own controls.'}
             </div>
           )}
         </div>

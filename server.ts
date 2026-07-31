@@ -2672,7 +2672,11 @@ Build a widget that teaches: ${safePrompt}`;
     // just means the next one corrects it.
     socket.on('video_state', ({ roomId, time, playing }: { roomId: string; time: number; playing: boolean }) => {
       if (typeof roomId !== 'string') return;
-      if (!checkRateLimit(socket.id, true)) return;
+      // NOT loss-tolerant. This carries play/pause, and the teacher is usually
+      // moving the mouse (→ a burst of cursor events) at the exact moment they
+      // click pause. Dropping it at the soft cap loses the transition precisely
+      // when it matters; the hard cap still bounds abuse.
+      if (!checkRateLimit(socket.id, false)) return;
       const room = rooms.get(roomId);
       if (!requireTeacher(room, socket.id)) return;
       if (!room.sharedVideo) return;
@@ -2680,6 +2684,23 @@ Build a widget that teaches: ${safePrompt}`;
       room.sharedVideo.playing = !!playing;
       room.sharedVideo.updatedAt = Date.now();
       socket.to(roomId).emit('video_state', { time: room.sharedVideo.time, playing: room.sharedVideo.playing });
+    });
+    // The other direction: a student reporting where their copy actually is.
+    // Without this the teacher pauses, nothing happens on the student's screen,
+    // and there is no way for either of them to tell — which is exactly how
+    // this went unnoticed. Relayed to the teacher only.
+    socket.on('video_ack', ({ roomId, time, playing }: { roomId: string; time: number; playing: boolean }) => {
+      if (typeof roomId !== 'string') return;
+      if (!checkRateLimit(socket.id, true)) return;
+      const room = rooms.get(roomId);
+      if (!isMember(room, socket.id) || !room.teacherSocketId) return;
+      if (socket.id === room.teacherSocketId) return;   // teachers don't ack themselves
+      const user = room.users.get(socket.id);
+      io.to(room.teacherSocketId).emit('video_ack', {
+        time: Math.max(0, Number(time) || 0),
+        playing: !!playing,
+        name: user?.name || 'Your student',
+      });
     });
 
     // ─── VIDEO CALL SIGNALLING (face-to-face inside the lesson) ───

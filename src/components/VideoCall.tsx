@@ -59,6 +59,11 @@ export default function VideoCall({ socket, roomId, polite, selfLabel = 'You' }:
   const remoteVideoRef = useRef<HTMLVideoElement>(null);
   const makingOfferRef = useRef(false);
   const ignoreOfferRef = useRef(false);
+  // The signalling effect subscribes once and must not re-subscribe on every
+  // state change, so it reads "am I on a call" and "how do I hang up" through
+  // refs rather than closing over values that would go stale.
+  const activeRef = useRef(false);
+  const stopCallRef = useRef<((tellPeer?: boolean) => void) | null>(null);
   const dragRef = useRef<{ dx: number; dy: number } | null>(null);
   // Kept so 'off' can restore the untouched camera, and so teardown can stop
   // the segmentation loop instead of leaving it spinning.
@@ -88,9 +93,12 @@ export default function VideoCall({ socket, roomId, polite, selfLabel = 'You' }:
       const s = pc.connectionState;
       if (s === 'connected') setConnected(true);
       if (s === 'failed') {
-        // Almost always a restrictive network with no relay available.
-        setError("Couldn't connect — one of you may be on a restricted network.");
+        // Almost always a restrictive network with no relay available. End it
+        // rather than leaving the camera running against a dead connection —
+        // 'disconnected' is the transient one, 'failed' is not recoverable here.
         setConnected(false);
+        stopCallRef.current?.(false);
+        setError("Couldn't connect — one of you may be on a restricted network.");
       }
       if (s === 'disconnected' || s === 'closed') setConnected(false);
     };
@@ -187,7 +195,16 @@ export default function VideoCall({ socket, roomId, polite, selfLabel = 'You' }:
     const onPresence = ({ active: a, name }: { active: boolean; name?: string }) => {
       setPeerReady(!!a);
       if (name) setPeerName(name);
-      if (!a) setConnected(false);
+      if (!a) {
+        setConnected(false);
+        // They hung up. Hang up here too, or this side sits there with the
+        // camera still running and the other person's last frame frozen on
+        // screen — it looks like a live call to someone who is alone.
+        if (activeRef.current) {
+          stopCallRef.current?.(false);
+          setError(`${name || 'The other person'} ended the call.`);
+        }
+      }
     };
     socket.on('rtc_signal', onSignal);
     socket.on('rtc_presence', onPresence);
@@ -339,6 +356,20 @@ export default function VideoCall({ socket, roomId, polite, selfLabel = 'You' }:
     return () => clearInterval(t);
   }, [socket, active, roomId]);
 
+  useEffect(() => { activeRef.current = active; }, [active]);
+  useEffect(() => { stopCallRef.current = stopCall; }, [stopCall]);
+
+  // Closing the tab or navigating away is a hang-up, and the peer has to be
+  // told — otherwise they keep filming an empty room. `pagehide` fires on close,
+  // reload and back-navigation, and (unlike an unmount cleanup) never fires
+  // spuriously in React's development double-mount.
+  useEffect(() => {
+    if (!socket || !active) return;
+    const bye = () => { try { socket.emit('rtc_presence', { roomId, active: false }); } catch { /* socket already gone */ } };
+    window.addEventListener('pagehide', bye);
+    return () => window.removeEventListener('pagehide', bye);
+  }, [socket, active, roomId]);
+
   useEffect(() => () => stopCall(false), [stopCall]);
 
   const toggleMic = () => {
@@ -392,7 +423,10 @@ export default function VideoCall({ socket, roomId, polite, selfLabel = 'You' }:
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.3" strokeLinecap="round" strokeLinejoin="round">
           <path d="M23 7l-7 5 7 5V7z" /><rect x="1" y="5" width="15" height="14" rx="2" />
         </svg>
-        {peerReady ? `Join ${peerName || 'the call'}` : 'Start video'}
+        {/* Deliberately "call", never "video" — the toolbar's Video button
+            shows a YouTube clip, and two buttons both saying "video" had the
+            teacher hanging up on their student when they meant to stop a clip. */}
+        {peerReady ? `Join ${peerName ? `${peerName}'s call` : 'the call'}` : 'Start call'}
         {error && <span style={{ fontWeight: 500, opacity: 0.9 }}>· {error}</span>}
       </button>
     );
