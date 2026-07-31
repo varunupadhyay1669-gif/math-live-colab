@@ -37,7 +37,10 @@ export default function VideoOverlay({ socket, roomId, isTeacher, promptOpen = f
   const [video, setVideo] = useState<Shared | null>(null);
   const [link, setLink] = useState("");
   const [linkError, setLinkError] = useState<string | null>(null);
-  const [big, setBig] = useState(false);
+  // 0 tucked away in a corner, 1 normal, 2 as big as the window allows.
+  // A student can't close the clip — only the teacher can — so they must at
+  // least be able to shrink it off their worksheet.
+  const [size, setSize] = useState(1);
   const [pos, setPos] = useState<{ x: number; y: number } | null>(null);
   const [needsSound, setNeedsSound] = useState(false);
   const [fallback, setFallback] = useState(false);   // API blocked → plain embed
@@ -230,7 +233,7 @@ export default function VideoOverlay({ socket, roomId, isTeacher, promptOpen = f
     reclamp();
     window.addEventListener('resize', reclamp);
     return () => window.removeEventListener('resize', reclamp);
-  }, [clamp, big, video]);
+  }, [clamp, size, video]);
 
   const onDragStart = useCallback((e: ReactPointerEvent) => {
     if (!pos) return;
@@ -246,10 +249,11 @@ export default function VideoOverlay({ socket, roomId, isTeacher, promptOpen = f
 
   // Growing it from a low position would push the picture off the bottom, so
   // pull it up as it grows. Shrinking leaves it wherever they put it.
-  const toggleBig = useCallback(() => {
-    if (!big) setPos((p) => p && ({ x: p.x, y: Math.min(p.y, 72) }));
-    setBig(!big);
-  }, [big]);
+  const resize = useCallback((delta: number) => {
+    const next = Math.min(2, Math.max(0, size + delta));
+    if (next > size) setPos((p) => p && ({ x: p.x, y: Math.min(p.y, 72) }));
+    setSize(next);
+  }, [size]);
 
   const openVideo = useCallback(() => {
     const parsed = parseYouTube(link);
@@ -338,9 +342,11 @@ export default function VideoOverlay({ socket, roomId, isTeacher, promptOpen = f
       {video && pos && (
         <div ref={panelRef} style={{
           position: 'fixed', left: pos.x, top: pos.y, zIndex: 80,
-          // The last term keeps a 16:9 picture inside the window's height too,
-          // so "bigger" never means "the bottom half is off the screen".
-          width: big ? 'min(96vw, 1180px, calc((100vh - 130px) * 16 / 9))' : 'min(94vw, 720px)',
+          // The largest size also measures against the window's height, so
+          // "bigger" never means "the bottom half is off the screen".
+          width: size === 0 ? 'min(70vw, 280px)'
+            : size === 1 ? 'min(94vw, 720px)'
+            : 'min(96vw, 1180px, calc((100vh - 130px) * 16 / 9))',
           background: '#0b0b0f',
           borderRadius: 'var(--radius-xl)',
           border: '1px solid rgba(255,255,255,0.12)',
@@ -357,20 +363,29 @@ export default function VideoOverlay({ socket, roomId, isTeacher, promptOpen = f
             style={{ cursor: 'grab', background: 'rgba(255,255,255,0.06)', color: 'rgba(255,255,255,0.9)' }}
           >
             <span className="text-sm font-medium">Video</span>
-            {!isTeacher && <span className="text-[11px]" style={{ color: 'rgba(255,255,255,0.55)' }}>following your teacher</span>}
+            {/* Tucked into a corner there's only room for the controls. */}
+            {!isTeacher && size > 0 && <span className="text-[11px]" style={{ color: 'rgba(255,255,255,0.55)' }}>following your teacher</span>}
             <div className="flex-1" />
-            {needsSound && (
+            {needsSound && size > 0 && (
               <button onClick={unmute} onPointerDown={(e) => e.stopPropagation()}
                 className="px-2.5 py-1 text-xs rounded-md font-medium text-white"
                 style={{ background: 'var(--accent-indigo)' }}>
                 🔊 Tap for sound
               </button>
             )}
-            <button onClick={toggleBig} onPointerDown={(e) => e.stopPropagation()}
+            <button onClick={() => resize(-1)} onPointerDown={(e) => e.stopPropagation()}
+              disabled={size === 0}
               className="px-2 py-1 text-xs rounded-md"
-              style={{ color: 'rgba(255,255,255,0.8)', background: 'rgba(255,255,255,0.08)' }}
-              title={big ? 'Smaller' : 'Bigger'}>
-              {big ? '⤡' : '⤢'}
+              style={{ color: 'rgba(255,255,255,0.8)', background: 'rgba(255,255,255,0.08)', opacity: size === 0 ? 0.35 : 1 }}
+              title={size === 1 ? 'Tuck it into the corner' : 'Smaller'}>
+              −
+            </button>
+            <button onClick={() => resize(1)} onPointerDown={(e) => e.stopPropagation()}
+              disabled={size === 2}
+              className="px-2 py-1 text-xs rounded-md"
+              style={{ color: 'rgba(255,255,255,0.8)', background: 'rgba(255,255,255,0.08)', opacity: size === 2 ? 0.35 : 1 }}
+              title="Bigger">
+              +
             </button>
             {isTeacher && (
               <button onClick={closeVideo} onPointerDown={(e) => e.stopPropagation()}
