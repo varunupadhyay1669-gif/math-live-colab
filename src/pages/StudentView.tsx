@@ -12,6 +12,7 @@ import { LESSON_IFRAME_SANDBOX, LESSON_IFRAME_ALLOW } from "../lib/iframeAttrs";
 // ── Components ──
 import ChatPanel from "../components/ChatPanel";
 import VideoCall from "../components/VideoCall";
+import VideoOverlay from "../components/VideoOverlay";
 import StudentReactions from "../components/StudentReactions";
 import PausedOverlay from "../components/PausedOverlay";
 import TimerDisplay from "../components/TimerDisplay";
@@ -1823,6 +1824,10 @@ export default function StudentView() {
       {/* Face-to-face video. The student is the POLITE side: on a simultaneous
           call it yields to the teacher's offer rather than both stalling. */}
       <VideoCall socket={socket} roomId={roomId!} polite selfLabel="You" />
+
+      {/* A clip the teacher is showing. It opens, plays, pauses and closes on
+          their say-so — the student can only move it around and turn sound on. */}
+      <VideoOverlay socket={socket} roomId={roomId!} isTeacher={false} />
 
       {/* ══════ NOTIFICATION TOAST ══════ */}
       {notification && (

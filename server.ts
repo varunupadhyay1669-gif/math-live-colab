@@ -53,6 +53,10 @@ interface RoomData {
   mirrorAttrs: string | null;
   mirrorHead: string | null;
   mirrorHash: string | null;
+  // Shared YouTube clip playing over the lesson, if any. Held here (not just
+  // broadcast) so a student joining or reloading mid-clip lands on the same
+  // video at roughly the teacher's position instead of seeing nothing.
+  sharedVideo: { videoId: string; time: number; playing: boolean; updatedAt: number } | null;
   revision: number;
   whiteboard: {
     objects: any[];
@@ -200,6 +204,9 @@ interface SessionStatePayload {
   // true counter lets clients detect the restart (server seq BEHIND their
   // filter) and adopt it. See stress12 R1.
   interactionSeq: number;
+  // A YouTube clip the teacher is currently showing over the lesson, with the
+  // position already wound forward to now, so a late joiner starts in step.
+  sharedVideo: { videoId: string; time: number; playing: boolean } | null;
 }
 
 async function startServer() {
@@ -354,6 +361,7 @@ async function startServer() {
       mirrorAttrs: null,
       mirrorHead: null,
       mirrorHash: null,
+      sharedVideo: null,
       revision: 0,
       whiteboard: { objects: [], strokes: [], shapes: [], view: null, gridMode: 'grid', instruments: [], texts: [] },
       annotations: [],
@@ -1039,6 +1047,18 @@ async function startServer() {
       bookmarks: room.bookmarks.map(b => ({ id: b.id, name: b.name, ts: b.ts })),
       randomSeed: room.randomSeed,
       interactionSeq: room.interactionSeq,
+      // A clip the teacher is showing right now. The stored position is from
+      // the last heartbeat, so wind it forward by the time since — otherwise a
+      // student joining 20s later starts 20s behind everyone else.
+      sharedVideo: room.sharedVideo
+        ? {
+            videoId: room.sharedVideo.videoId,
+            playing: room.sharedVideo.playing,
+            time: room.sharedVideo.playing
+              ? room.sharedVideo.time + Math.max(0, (Date.now() - room.sharedVideo.updatedAt) / 1000)
+              : room.sharedVideo.time,
+          }
+        : null,
     };
   }
 
@@ -2620,6 +2640,46 @@ Build a widget that teaches: ${safePrompt}`;
       if (room.eventLog.length > 0 && !room.eventLogOverflow) {
         io.to(socket.id).emit('interaction_replay', { events: room.eventLog, count: room.eventLog.length });
       }
+    });
+
+    // ─── SHARED YOUTUBE VIDEO (teacher shows a clip over the lesson) ───
+    // Unlike a meeting link, YouTube is designed to be embedded, so we can play
+    // it in-place. The teacher is authoritative: they open, close and drive
+    // playback, and their position is relayed so every student's clip tracks
+    // theirs instead of drifting. Held on the room (not just broadcast) so a
+    // student who joins or reloads mid-clip still lands on the right video at
+    // roughly the right moment.
+    socket.on('video_open', ({ roomId, videoId, start }: { roomId: string; videoId: string; start?: number }) => {
+      if (typeof roomId !== 'string' || typeof videoId !== 'string') return;
+      // Ids are a fixed alphabet; refuse anything else rather than embedding it.
+      if (!/^[A-Za-z0-9_-]{11}$/.test(videoId)) return;
+      const room = rooms.get(roomId);
+      if (!requireTeacher(room, socket.id)) return;
+      const at = Math.max(0, Math.floor(Number(start) || 0));
+      room.sharedVideo = { videoId, time: at, playing: true, updatedAt: Date.now() };
+      updateRoomActivity(roomId);
+      io.to(roomId).emit('video_open', { videoId, start: at });
+    });
+    socket.on('video_close', ({ roomId }: { roomId: string }) => {
+      if (typeof roomId !== 'string') return;
+      const room = rooms.get(roomId);
+      if (!requireTeacher(room, socket.id)) return;
+      room.sharedVideo = null;
+      updateRoomActivity(roomId);
+      io.to(roomId).emit('video_close', {});
+    });
+    // Playback heartbeat: position + play/pause. Loss-tolerant — a dropped tick
+    // just means the next one corrects it.
+    socket.on('video_state', ({ roomId, time, playing }: { roomId: string; time: number; playing: boolean }) => {
+      if (typeof roomId !== 'string') return;
+      if (!checkRateLimit(socket.id, true)) return;
+      const room = rooms.get(roomId);
+      if (!requireTeacher(room, socket.id)) return;
+      if (!room.sharedVideo) return;
+      room.sharedVideo.time = Math.max(0, Number(time) || 0);
+      room.sharedVideo.playing = !!playing;
+      room.sharedVideo.updatedAt = Date.now();
+      socket.to(roomId).emit('video_state', { time: room.sharedVideo.time, playing: room.sharedVideo.playing });
     });
 
     // ─── VIDEO CALL SIGNALLING (face-to-face inside the lesson) ───

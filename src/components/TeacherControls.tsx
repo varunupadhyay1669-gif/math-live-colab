@@ -50,6 +50,10 @@ interface TeacherControlsProps {
   explanationName: string | null;
   onUploadExplanation: () => void; // opens the file picker
   onExitExplanation: () => void;   // clears the temp content and returns to main
+  // Shared YouTube clip
+  videoActive: boolean;
+  onShowVideo: () => void;         // opens the paste-a-link dialog
+  onStopVideo: () => void;         // closes it on everyone's screen
   // Annotation eraser (HTML-overlay drawings)
   eraserMode: 'off' | 'stroke' | 'pixel';
   onSetEraserMode: (mode: 'off' | 'stroke' | 'pixel') => void;
@@ -79,6 +83,7 @@ export default function TeacherControls({
   onHardReset, leaderboardCount, onToggleLeaderboard,
   onToggleWhiteboard, whiteboardMode,
   explanationActive, explanationName, onUploadExplanation, onExitExplanation,
+  videoActive, onShowVideo, onStopVideo,
   eraserMode, onSetEraserMode,
   shapeTool, onSetShapeTool,
   followStudentClicks, onToggleFollowStudentClicks,
@@ -381,6 +386,22 @@ export default function TeacherControls({
             <span className="tb-label-text">{explanationActive ? 'Exit explanation' : 'Explanation'}</span>
           </button>
         )}
+
+        {/* Show a YouTube clip over whatever is on screen. Lives here rather
+            than beside the lesson pills because it works over the whiteboard
+            just as well as over an HTML lesson. */}
+        <button
+          onClick={videoActive ? onStopVideo : onShowVideo}
+          className={`tb-btn-video ${videoActive ? 'is-active' : ''}`}
+          data-tip={videoActive ? 'Stop showing the video' : 'Show a YouTube video over the lesson'}
+          aria-pressed={videoActive}
+        >
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <rect x="2.5" y="5" width="19" height="14" rx="4" />
+            <path d="M10.5 9.5l5 2.5-5 2.5z" fill="currentColor" stroke="none" />
+          </svg>
+          <span className="tb-label-text">{videoActive ? 'Stop video' : 'Video'}</span>
+        </button>
 
         {/* ── Follow Student Clicks ── */}
         <button

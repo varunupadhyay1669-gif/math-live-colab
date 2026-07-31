@@ -2685,6 +2685,40 @@ html, body, #root {
   .tb-btn-explanation { padding: 0 11px; }
 }
 
+/* ── Shared video surface-switch (third sister to whiteboard/explanation) ──
+   Rose tint, so at a glance the three read as three different things you can
+   put on the class's screen. Turns solid while a clip is actually showing. */
+.tb-btn-video {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 36px;
+  padding: 0 13px;
+  border-radius: 10px;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: -0.005em;
+  color: #E11D48;
+  background: rgba(225, 29, 72, 0.08);
+  border: 1px solid rgba(225, 29, 72, 0.18);
+  cursor: pointer;
+  transition: background 140ms var(--ml-easing), border-color 140ms var(--ml-easing), color 140ms var(--ml-easing);
+}
+.tb-btn-video:hover {
+  background: rgba(225, 29, 72, 0.13);
+  border-color: rgba(225, 29, 72, 0.26);
+}
+.tb-btn-video.is-active {
+  background: #E11D48;
+  border-color: #E11D48;
+  color: #FFFFFF;
+}
+.tb-btn-video.is-active:hover { background: #BE123C; border-color: #BE123C; }
+@media (max-width: 760px) {
+  .tb-btn-video span.tb-label-text { display: none; }
+  .tb-btn-video { padding: 0 11px; }
+}
+
 /* ── Reduce visual noise: lighter divider colors everywhere ── */
 hr,
 .divider {

@@ -17,6 +17,7 @@ import SaveBoardBanner from "../components/SaveBoardBanner";
 import TeacherControls from "../components/TeacherControls";
 import ChatPanel from "../components/ChatPanel";
 import VideoCall from "../components/VideoCall";
+import VideoOverlay from "../components/VideoOverlay";
 import FeedbackToasts from "../components/FeedbackToasts";
 import PausedOverlay from "../components/PausedOverlay";
 import TimerDisplay from "../components/TimerDisplay";
@@ -257,6 +258,10 @@ export default function Room() {
   // ── Gamification ──
   const [leaderboard, setLeaderboard] = useState<Array<{ studentName: string; xp: number; streak: number }>>([]);
   const [showLeaderboard, setShowLeaderboard] = useState(false);
+
+  // ── Shared YouTube clip (floats over whatever is on screen) ──
+  const [videoPromptOpen, setVideoPromptOpen] = useState(false);
+  const [videoActive, setVideoActive] = useState(false);
 
   // ── Whiteboard ──
   const [whiteboardMode, setWhiteboardMode] = useState(false);
@@ -2742,6 +2747,9 @@ export default function Room() {
               explanationName={tempContent?.name ?? null}
               onUploadExplanation={() => setShowExplainModal(true)}
               onExitExplanation={clearTempContent}
+              videoActive={videoActive}
+              onShowVideo={() => setVideoPromptOpen(true)}
+              onStopVideo={() => socket?.emit('video_close', { roomId })}
               eraserMode={eraserMode}
               onSetEraserMode={setEraserMode}
               shapeTool={shapeTool}
@@ -3200,6 +3208,15 @@ export default function Room() {
           same instant, the teacher's offer wins and the student yields, so the
           two never deadlock. */}
       <VideoCall socket={socket} roomId={roomId!} polite={false} selfLabel="You" />
+
+      {/* A YouTube clip over the top of everything — the teacher's playback is
+          the one the room follows. */}
+      <VideoOverlay
+        socket={socket} roomId={roomId!} isTeacher
+        promptOpen={videoPromptOpen}
+        onPromptClose={() => setVideoPromptOpen(false)}
+        onActiveChange={setVideoActive}
+      />
 
       {/* ═══ NOTIFICATION ═══ */}
       {notification && (
