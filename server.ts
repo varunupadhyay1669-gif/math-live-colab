@@ -40,8 +40,14 @@ interface RoomData {
   gateAwarded: Set<string>;
   // Monotonic interaction sequence for ordering guarantees
   interactionSeq: number;
-  // Temporary explanation content (persists so late-joining students see it)
+  // Temporary explanation content (persists so late-joining students see it).
+  // Mirrors whichever entry in `explanations` is active, so students and the
+  // hydration path never need to know the list exists.
   tempContent: { html: string; name: string } | null;
+  // The teacher's kept explanations. Closing one returns to the lesson but
+  // leaves it here to reopen; only an explicit delete discards it.
+  explanations: Array<{ id: string; name: string; html: string }>;
+  activeExplanationId: string | null;
   liveSnapshotHtml: string | null;
   // LIVE MIRROR: the teacher's authoritative iframe DOM (latest snapshot),
   // relayed to students and cached so a late-joiner renders instantly.
@@ -166,6 +172,9 @@ interface SessionStatePayload {
   currentStep: number;
   gates: Record<number, { question: string; options: string[]; correctIndex: number }>;
   tempContent: { html: string; name: string } | null;
+  /** The teacher's kept explanations, names only. */
+  explanations: Array<{ id: string; name: string }>;
+  activeExplanationId: string | null;
   whiteboard: {
     objects: any[];
     strokes: any[];
@@ -356,6 +365,8 @@ async function startServer() {
       gateAwarded: new Set(),
       interactionSeq: 0,
       tempContent: null,
+      explanations: [],
+      activeExplanationId: null,
       liveSnapshotHtml: null,
       mirrorBody: null,
       mirrorAttrs: null,
@@ -739,6 +750,7 @@ async function startServer() {
     'whiteboard_remove_text', 'whiteboard_clear', 'whiteboard_reset',
     'whiteboard_delete_stroke', 'whiteboard_delete_strokes', 'whiteboard_mode_toggle',
     'show_temp_content', 'clear_temp_content',
+    'explanation_show', 'explanation_delete', 'explanation_clear',
     'set_step', 'add_gate', 'gate_answer', 'claim_room', 'hard_reset', 'send_chat',
     'grant_control', 'bookmark_create', 'bookmark_restore', 'bookmark_delete',
   ]);
@@ -887,6 +899,9 @@ async function startServer() {
   const MAX_USERNAME_LENGTH = 50;
   const MAX_ROOM_ID_LENGTH = 20;
   const MAX_FILE_SIZE = 2 * 1024 * 1024; // 2MB per file
+  // Explanations are kept in memory for the life of the room, so the list is
+  // bounded: 8 × 2MB is a sane ceiling for one lesson's worth of explainers.
+  const MAX_EXPLANATIONS = 8;
   const MAX_QUIZ_QUESTION_LENGTH = 500;
   const MAX_FILES_PER_ROOM = 50;
 
@@ -1031,6 +1046,10 @@ async function startServer() {
       currentStep: room.currentStep,
       gates: room.gates,
       tempContent: room.tempContent,
+      // Names only — the teacher's tab strip needs to survive a reload without
+      // shipping every explainer's body on every hydration.
+      explanations: room.explanations.map(e => ({ id: e.id, name: e.name })),
+      activeExplanationId: room.activeExplanationId,
       whiteboard: room.whiteboard,
       // AUTONOMOUS: HTML-overlay annotations replayed on join so a
       // late-joining student sees the same markup the teacher's been
@@ -2403,7 +2422,31 @@ Build a widget that teaches: ${safePrompt}`;
       socket.to(roomId).emit('whiteboard_scroll', { scrollX, scrollY });
     });
 
-    // ─── TEMPORARY EXPLANATION CONTENT ───
+    // ─── EXPLANATIONS (extra HTML shown over the lesson) ───
+    // These used to be a single slot: showing a second one replaced the first,
+    // and closing one threw it away — the teacher had to re-upload a file they
+    // had already sent. They are now a KEPT LIST the teacher opens and closes
+    // like tabs. Closing hides; deleting is the only thing that discards.
+    //
+    // Students are unchanged: whichever explanation is active is still relayed
+    // as `temp_content`, and `room.tempContent` still mirrors it for hydration.
+    function broadcastExplanations(roomId: string, room: RoomData) {
+      // The list without bodies — a tab strip needs names, not megabytes.
+      io.to(roomId).emit('explanations_state', {
+        list: room.explanations.map(e => ({ id: e.id, name: e.name })),
+        activeId: room.activeExplanationId,
+      });
+    }
+    /** Point the room at one explanation (or none) and tell everyone. */
+    function activateExplanation(roomId: string, room: RoomData, id: string | null) {
+      const found = id ? room.explanations.find(e => e.id === id) : null;
+      room.activeExplanationId = found ? found.id : null;
+      room.tempContent = found ? { html: found.html, name: found.name } : null;
+      if (found) io.to(roomId).emit('temp_content', { html: found.html, name: found.name, id: found.id });
+      else io.to(roomId).emit('clear_temp_content');
+      broadcastExplanations(roomId, room);
+    }
+
     socket.on('show_temp_content', ({ roomId, html, name }: { roomId: string; html: string; name: string }) => {
       const room = rooms.get(roomId);
       if (!requireTeacher(room, socket.id)) return;
@@ -2414,18 +2457,53 @@ Build a widget that teaches: ${safePrompt}`;
         socket.emit('upload_error', { message: `Explanation too large (${(html.length / 1024 / 1024).toFixed(1)}MB, max 2MB)` });
         return;
       }
+      if (room.explanations.length >= MAX_EXPLANATIONS) {
+        socket.emit('upload_error', { message: `You can keep ${MAX_EXPLANATIONS} explanations at a time — delete one first.` });
+        return;
+      }
       const safeName = sanitizeString(name, 100) || 'Explanation';
-      room.tempContent = { html, name: safeName };
-      // Broadcast temporary explanation content to all users in room
-      io.to(roomId).emit('temp_content', { html, name: safeName });
+      // Re-adding the same body just reopens the tab you already have, rather
+      // than stacking near-identical copies every time a file is re-sent.
+      const existing = room.explanations.find(e => e.html === html);
+      if (existing) { activateExplanation(roomId, room, existing.id); return; }
+      const entry = { id: `exp-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`, name: safeName, html };
+      room.explanations.push(entry);
+      updateRoomActivity(roomId);
+      activateExplanation(roomId, room, entry.id);
     });
 
+    // Reopen one that's already in the list — the whole point of keeping them.
+    socket.on('explanation_show', ({ roomId, id }: { roomId: string; id: string }) => {
+      const room = rooms.get(roomId);
+      if (!requireTeacher(room, socket.id)) return;
+      if (typeof id !== 'string' || !room.explanations.some(e => e.id === id)) return;
+      activateExplanation(roomId, room, id);
+    });
+
+    // Close = back to the main lesson, explanation KEPT.
     socket.on('clear_temp_content', ({ roomId }: { roomId: string }) => {
       const room = rooms.get(roomId);
       if (!requireTeacher(room, socket.id)) return;
-      if (room) room.tempContent = null;
-      // Clear temporary content and return to main content
-      io.to(roomId).emit('clear_temp_content');
+      activateExplanation(roomId, room, null);
+    });
+
+    socket.on('explanation_delete', ({ roomId, id }: { roomId: string; id: string }) => {
+      const room = rooms.get(roomId);
+      if (!requireTeacher(room, socket.id)) return;
+      if (typeof id !== 'string') return;
+      const before = room.explanations.length;
+      room.explanations = room.explanations.filter(e => e.id !== id);
+      if (room.explanations.length === before) return;
+      // Deleting the one on screen must also take it off everyone's screen.
+      if (room.activeExplanationId === id) activateExplanation(roomId, room, null);
+      else broadcastExplanations(roomId, room);
+    });
+
+    socket.on('explanation_clear', ({ roomId }: { roomId: string }) => {
+      const room = rooms.get(roomId);
+      if (!requireTeacher(room, socket.id)) return;
+      room.explanations = [];
+      activateExplanation(roomId, room, null);
     });
 
     // ─── LASER POINTER ───

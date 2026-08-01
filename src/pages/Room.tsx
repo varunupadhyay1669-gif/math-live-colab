@@ -230,6 +230,10 @@ export default function Room() {
   // ── Temporary Explanation Content ──
   const [tempContent, setTempContent] = useState<{ html: string; name: string } | null>(null);
   const [showTempContent, setShowTempContent] = useState(false);
+  // Explanations are KEPT, not thrown away on close. This is the tab strip's
+  // list (names only) plus which one is on screen.
+  const [explanations, setExplanations] = useState<Array<{ id: string; name: string }>>([]);
+  const [activeExplanationId, setActiveExplanationId] = useState<string | null>(null);
   const tempFileInputRef = useRef<HTMLInputElement>(null);
 
   // Memoize blob URL to prevent iframe from reloading on every render
@@ -505,6 +509,9 @@ export default function Room() {
       setTempContent(null);
       setShowTempContent(false);
     }
+    // The kept list survives a reload — that's the whole point of keeping it.
+    if (Array.isArray(state.explanations)) setExplanations(state.explanations);
+    if ('activeExplanationId' in state) setActiveExplanationId(state.activeExplanationId ?? null);
     if (state.whiteboard) setWhiteboardState(state.whiteboard);
     if (Array.isArray(state.annotations)) setAnnotations(state.annotations);
     // Whiteboard mode is server-persisted; restore on reconnect so the
@@ -801,14 +808,22 @@ export default function Room() {
     });
 
     // ── Temporary Explanation Content ──
-    newSocket.on("temp_content", ({ html, name }: { html: string; name: string }) => {
+    newSocket.on("temp_content", ({ html, name, id }: { html: string; name: string; id?: string }) => {
       setTempContent({ html, name });
+      setActiveExplanationId(id ?? null);
       setShowTempContent(true);
       showNotif(`📚 Showing explanation: ${name}`);
     });
     newSocket.on("clear_temp_content", () => {
       setShowTempContent(false);
+      setActiveExplanationId(null);
       showNotif('↩️ Back to main content');
+    });
+    // The kept list behind the tab strip (names only — bodies stay server-side
+    // until one is actually shown).
+    newSocket.on("explanations_state", ({ list, activeId }: { list: Array<{ id: string; name: string }>; activeId: string | null }) => {
+      setExplanations(Array.isArray(list) ? list : []);
+      setActiveExplanationId(activeId ?? null);
     });
 
     newSocket.on("interaction", (event: any) => {
@@ -2127,11 +2142,30 @@ export default function Room() {
     e.target.value = '';
   };
 
+  // Close ≠ discard. The explanation stays in the strip so it can be reopened
+  // without hunting for the file again — the thing that used to force a
+  // re-upload every single time.
   const clearTempContent = () => {
     if (!socket) return;
     socket.emit('clear_temp_content', { roomId });
     setShowTempContent(false);
+    setActiveExplanationId(null);
     showNotif('↩️ Back to main content');
+  };
+
+  const openExplanation = (id: string) => socket?.emit('explanation_show', { roomId, id });
+
+  const deleteExplanation = (id: string) => {
+    if (!socket) return;
+    socket.emit('explanation_delete', { roomId, id });
+    showNotif('🗑️ Explanation removed');
+  };
+
+  const clearExplanations = () => {
+    if (!socket || explanations.length === 0) return;
+    if (!window.confirm(`Remove all ${explanations.length} explanations? This can't be undone.`)) return;
+    socket.emit('explanation_clear', { roomId });
+    showNotif('🗑️ All explanations removed');
   };
 
   const handleSetStep = (step: number) => {
@@ -2881,6 +2915,46 @@ export default function Room() {
                 </div>
               )}
 
+              {/* ── Explanation tabs ──
+                  Every explanation the teacher has added this lesson, kept.
+                  Closing one used to throw it away, so coming back to it meant
+                  finding and uploading the same file again. Now: click to
+                  reopen, × to delete, "＋ Add" for a new one. Hidden on the
+                  whiteboard, which is its own surface. */}
+              {!whiteboardMode && explanations.length > 0 && (
+                <div className="absolute bottom-2 left-2 right-2 z-20 flex items-center gap-1.5 overflow-x-auto scrollbar-hide">
+                  <span className="ml-exp-tabs-label">Explanations</span>
+                  {explanations.map((e) => {
+                    const on = showTempContent && activeExplanationId === e.id;
+                    return (
+                      <span key={e.id} className={`ml-exp-tab${on ? ' is-on' : ''}`}>
+                        <button
+                          className="ml-exp-tab-open"
+                          onClick={() => (on ? clearTempContent() : openExplanation(e.id))}
+                          title={on ? `${e.name} — click to go back to the lesson` : `Show ${e.name} again`}
+                        >
+                          {e.name}
+                        </button>
+                        <button
+                          className="ml-exp-tab-del"
+                          onClick={() => deleteExplanation(e.id)}
+                          aria-label={`Delete ${e.name}`}
+                          title="Delete this explanation"
+                        >×</button>
+                      </span>
+                    );
+                  })}
+                  <button className="ml-exp-tab-add" onClick={() => setShowExplainModal(true)} title="Add another explanation">
+                    ＋ Add
+                  </button>
+                  {explanations.length > 1 && (
+                    <button className="ml-exp-tab-clear" onClick={clearExplanations} title="Remove every explanation">
+                      Clear all
+                    </button>
+                  )}
+                </div>
+              )}
+
               {/* AUTONOMOUS: When the whiteboard is open, surface a quick
                   "Back to HTML" pill (top-left) so the teacher can return
                   to the simulation without scrolling the toolbar. Only
@@ -3161,6 +3235,10 @@ export default function Room() {
                   eraserWidth={Math.max(penWidth * 4, 32)}
                   shapeTool={shapeTool}
                   initialAnnotations={annotations}
+                  // Ink belongs to the thing it was drawn on. Without this,
+                  // notes made on an explanation stayed on screen over the
+                  // lesson after closing it.
+                  surface={showTempContent && activeExplanationId ? `exp:${activeExplanationId}` : 'main'}
                 />
               )}
 

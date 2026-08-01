@@ -2216,6 +2216,43 @@ body {
 .ml-dash-card-del { margin-left: auto; font-size: 15px !important; line-height: 1; padding: 3px 8px !important; }
 .ml-dash-card-del:hover { background: #DC2626 !important; color: #fff !important; border-color: #DC2626 !important; }
 
+/* ── Explanation tabs (over the lesson, bottom-left) ──
+   Dark chips so they read as chrome over whatever HTML is behind them,
+   which could be any colour at all. */
+.ml-exp-tabs-label {
+  flex-shrink: 0; font-size: 10.5px; font-weight: 700; letter-spacing: 0.06em;
+  text-transform: uppercase; color: rgba(255, 255, 255, 0.72);
+  background: rgba(15, 23, 42, 0.88); padding: 4px 8px; border-radius: 7px;
+}
+.ml-exp-tab {
+  display: inline-flex; align-items: center; flex-shrink: 0;
+  background: rgba(15, 23, 42, 0.88); border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 8px; overflow: hidden; max-width: 210px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+}
+.ml-exp-tab.is-on { background: var(--accent-indigo); border-color: var(--accent-indigo); }
+.ml-exp-tab-open {
+  border: 0; background: none; cursor: pointer; color: #fff;
+  font-family: inherit; font-size: 11.5px; font-weight: 600;
+  padding: 5px 4px 5px 10px; max-width: 172px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.ml-exp-tab-del {
+  border: 0; background: none; cursor: pointer; line-height: 1;
+  color: rgba(255, 255, 255, 0.6); font-size: 14px; padding: 4px 8px 5px 4px;
+}
+.ml-exp-tab-del:hover { color: #fff; background: #DC2626; }
+.ml-exp-tab-add, .ml-exp-tab-clear {
+  flex-shrink: 0; cursor: pointer; border-radius: 8px;
+  font-family: inherit; font-size: 11.5px; font-weight: 600; padding: 6px 10px;
+  background: rgba(255, 255, 255, 0.95); color: var(--accent-indigo);
+  border: 1px solid rgba(79, 70, 229, 0.25);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+}
+.ml-exp-tab-add:hover { background: #fff; }
+.ml-exp-tab-clear { color: #B91C1C; border-color: rgba(185, 28, 28, 0.25); }
+.ml-exp-tab-clear:hover { background: #FEF2F2; }
+
 /* The little face on each class card — same derived colour as the student's
    own page, so a student is recognisable before you read the name. */
 .ml-dash-card-face {

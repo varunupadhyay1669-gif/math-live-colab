@@ -40,6 +40,14 @@ interface AnnotationLayerProps {
   // events. Each item is the server-side `{ senderId, stroke }` shape;
   // we only read `stroke` for rendering.
   initialAnnotations?: Array<{ senderId: string; stroke: any }>;
+  // ── Which surface this ink belongs to
+  // 'main' for the lesson, `exp:<id>` for an explanation. There is ONE canvas
+  // shared by every surface, so without this, ink drawn on an explanation
+  // stayed on screen over the lesson after closing it (measured: 11,467 stray
+  // pixels) and vice versa. Strokes carry their surface, and each surface only
+  // renders — and only accepts — its own. Strokes saved before this existed
+  // have no surface and are treated as the lesson's.
+  surface?: string;
 }
 
 type ShapeKind = 'shape-line' | 'shape-rect' | 'shape-circle' | 'shape-arrow';
@@ -76,6 +84,19 @@ interface StrokeData {
 
 const newStrokeId = () => `s-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
+/**
+ * Does this stroke belong on the surface currently being shown?
+ *
+ * One canvas is shared by the lesson and every explanation, so this is the only
+ * thing stopping ink drawn on one from appearing over another. Exported so the
+ * rule is unit-testable rather than three inline comparisons that have to agree.
+ *
+ * Strokes saved before surfaces existed carry none, and belong to the lesson.
+ */
+export function belongsToSurface(stroke: { surface?: string } | null | undefined, surface: string): boolean {
+  return ((stroke && stroke.surface) || 'main') === (surface || 'main');
+}
+
 // AUTONOMOUS: Recognisable eraser cursor (pink/cream rubber-block shape).
 // The previous `cell` cursor read as a crosshair/+, completely unrelated to
 // erasing. This SVG cursor is the same silhouette as the toolbar icon, so
@@ -108,6 +129,7 @@ export default function AnnotationLayer({
   eraserMode = 'off', eraserWidth = 18,
   shapeTool = 'off',
   initialAnnotations,
+  surface = 'main',
 }: AnnotationLayerProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const currentStrokeRef = useRef<Array<{ x: number; y: number }>>([]);
@@ -430,6 +452,9 @@ export default function AnnotationLayer({
     strokesRef.current = initialAnnotations
       .map(a => a?.stroke)
       .filter(Boolean)
+      // Only this surface's ink. Anything saved before surfaces existed has
+      // none and belongs to the lesson.
+      .filter(s => belongsToSurface(s, surface))
       .map(s => ({
         id: s.id ?? newStrokeId(),
         points: s.points || [],
@@ -447,12 +472,35 @@ export default function AnnotationLayer({
     // each pen tweak and clobbered strokesRef back to the last server snapshot,
     // wiping everything drawn/received since. The rAF render loop (which does
     // depend on renderStrokes) repaints with the fresh pen state.
+    // `surface` IS a dependency: switching to an explanation and back has to
+    // repaint from that surface's own ink, not keep the previous surface's.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [initialAnnotations]);
+  }, [initialAnnotations, surface]);
+
+  // Switching surface with no snapshot to re-seed from (the common case
+  // mid-lesson) still has to wipe the canvas — otherwise the ink from the
+  // surface you just left is left hanging over the one you arrived at.
+  const firstSurfaceRef = useRef(true);
+  useEffect(() => {
+    if (firstSurfaceRef.current) { firstSurfaceRef.current = false; return; }
+    strokesRef.current = (initialAnnotations || [])
+      .map(a => a?.stroke)
+      .filter(Boolean)
+      .filter(s => belongsToSurface(s, surface))
+      .map(s => ({
+        id: s.id ?? newStrokeId(), points: s.points || [], color: s.color, width: s.width,
+        transient: s.transient, kind: s.kind, time: s.time ?? Date.now(),
+        scrollX: s.scrollX, scrollY: s.scrollY,
+      }));
+    renderStrokes();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [surface]);
 
   useEffect(() => {
     if (!socket) return;
-    const handleStroke = (data: { id?: string; points: Array<{ x: number; y: number }>; color: string; width: number; transient?: boolean; kind?: StrokeKind; scrollX?: number; scrollY?: number }) => {
+    const handleStroke = (data: { id?: string; points: Array<{ x: number; y: number }>; color: string; width: number; transient?: boolean; kind?: StrokeKind; scrollX?: number; scrollY?: number; surface?: string }) => {
+      // Someone drawing on a different surface must not paint on ours.
+      if (!belongsToSurface(data, surface)) return;
       strokesRef.current.push({
         id: data.id ?? newStrokeId(),
         points: data.points,
@@ -482,7 +530,7 @@ export default function AnnotationLayer({
       socket.off('draw_delete_stroke', handleDelete);
       socket.off('draw_clear', handleClear);
     };
-  }, [socket, renderStrokes]);
+  }, [socket, renderStrokes, surface]);
 
   // Per-stroke eraser hit-test. Returns the id of the stroke under the
   // cursor (within tolerance), or null. Operates in canvas-pixel space so
@@ -688,7 +736,7 @@ export default function AnnotationLayer({
           strokesRef.current.push(stroke);
           myUndoRef.current.push(stroke);
           myRedoRef.current = [];
-          socket.emit('draw_stroke', { roomId, id, points: [a, b], color: penColor, width: penWidth, kind, scrollX, scrollY });
+          socket.emit('draw_stroke', { roomId, id, points: [a, b], color: penColor, width: penWidth, kind, scrollX, scrollY, surface });
         }
       }
       currentStrokeRef.current = [];
@@ -704,7 +752,7 @@ export default function AnnotationLayer({
         strokesRef.current.push(stroke);
         myUndoRef.current.push(stroke);
         myRedoRef.current = [];
-        socket.emit('draw_stroke', { roomId, id, points, color: '#000', width: eraserWidth, kind: 'eraser-pixel', scrollX, scrollY });
+        socket.emit('draw_stroke', { roomId, id, points, color: '#000', width: eraserWidth, kind: 'eraser-pixel', scrollX, scrollY, surface });
       }
       currentStrokeRef.current = [];
       isErasingRef.current = false;
@@ -729,7 +777,7 @@ export default function AnnotationLayer({
         myUndoRef.current.push(stroke);
         myRedoRef.current = [];
       }
-      socket.emit('draw_stroke', { roomId, id, points, color: penColor, width: penWidth, transient: isTransientRef.current, kind: 'pen', scrollX, scrollY });
+      socket.emit('draw_stroke', { roomId, id, points, color: penColor, width: penWidth, transient: isTransientRef.current, kind: 'pen', scrollX, scrollY, surface });
     }
     currentStrokeRef.current = [];
   };
@@ -750,7 +798,7 @@ export default function AnnotationLayer({
     strokesRef.current.push(stroke);
     if (socket) socket.emit('draw_stroke', {
       roomId, id: stroke.id, points: stroke.points, color: stroke.color, width: stroke.width,
-      kind: stroke.kind, scrollX: stroke.scrollX, scrollY: stroke.scrollY,
+      kind: stroke.kind, scrollX: stroke.scrollX, scrollY: stroke.scrollY, surface,
     });
     myUndoRef.current.push(stroke);
     renderStrokes();
