@@ -1181,6 +1181,32 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
       setCurrentStroke(points);
     }, []);
 
+    // A shared-view update that arrived while this user was drawing, parked
+    // until their pen lifts (see handleSetView).
+    const pendingViewRef = useRef<BoardView | null>(null);
+    // The board transform this stroke started under. Every point of a stroke is
+    // mapped through the SAME transform, so nothing that changes the view
+    // mid-stroke — a remote sync, a pinch, an auto-scroll — can bend the line
+    // that is already being drawn.
+    const strokeViewRef = useRef<BoardView | null>(null);
+
+    /** screenToBoard against an explicit transform rather than the live one. */
+    const screenToBoardWith = useCallback((v: BoardView | null, clientX: number, clientY: number) => {
+      const rect = canvasRef.current?.getBoundingClientRect();
+      if (!rect || !v) return { x: 0, y: 0 };
+      return {
+        x: (clientX - rect.left - v.boardOffsetX) / v.boardScale,
+        y: (clientY - rect.top - v.boardOffsetY) / v.boardScale,
+      };
+    }, []);
+
+    /** Pen lifted: release any view update we held back while drawing. */
+    const flushPendingView = useCallback(() => {
+      strokeViewRef.current = null;
+      const pending = pendingViewRef.current;
+      if (pending) { pendingViewRef.current = null; setView(pending); }
+    }, []);
+
     const emitView = useCallback((nextView: BoardView) => {
       if (!socket) return;
       // Mutual-sync model. The server only relays this if the LOCAL user has
@@ -2839,7 +2865,19 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
         imageCacheRef.current.delete(data.objectId);
         setSelectedObjectId(prev => prev === data.objectId ? null : prev);
       };
-      const handleSetView = (data: { view: BoardView }) => setView(data.view);
+      // NEVER move the board out from under someone who is mid-stroke.
+      //
+      // Points are captured in BOARD coordinates via screenToBoard, which
+      // divides through the CURRENT view. A shared-view update landing between
+      // two pointermoves therefore re-maps the same finger position to a
+      // different board point, and the stroke jumps. With the teacher panning
+      // while a student writes, it jumps on every frame — which draws a dense
+      // zig-zag band instead of a line, and puts the ink somewhere neither of
+      // them expects. Hold the update and apply it the moment the pen lifts.
+      const handleSetView = (data: { view: BoardView }) => {
+        if (dragRef.current?.mode === 'draw') { pendingViewRef.current = data.view; return; }
+        setView(data.view);
+      };
       const handleStroke = (data: { stroke: DrawStroke }) => {
         const stroke = { ...data.stroke, id: data.stroke.id || newId('stroke'), tool: coerceStrokeTool(data.stroke.tool) };
         setStrokes(prev => prev.some(existing => existing.id === stroke.id) ? prev : [...prev, stroke]);
@@ -3031,6 +3069,7 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
         setSelectedStrokeIndex(null);
         setSelectedShapeId(null);
         dragRef.current = { mode: 'draw', pointerId: e.pointerId, startClientX: e.clientX, startClientY: e.clientY, startOffsetX: view.boardOffsetX, startOffsetY: view.boardOffsetY };
+        strokeViewRef.current = view;   // freeze the transform for this stroke
         setLiveStroke([point]);
         return;
       }
@@ -3178,6 +3217,7 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
       setSelectedStrokeIndex(null);
       setSelectedShapeId(null);
       dragRef.current = { mode: 'draw', pointerId: e.pointerId, startClientX: e.clientX, startClientY: e.clientY, startOffsetX: view.boardOffsetX, startOffsetY: view.boardOffsetY };
+      strokeViewRef.current = view;   // freeze the transform for this stroke
       setLiveStroke([point]);
     };
 
@@ -3295,13 +3335,17 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
         setTexts(prev => prev.map(t => t.id === drag.textId ? { ...t, x: startX + dx, y: startY + dy } : t));
         return;
       }
-      if (drag.mode === 'draw') setLiveStroke([...currentStrokeRef.current, screenToBoard(e.clientX, e.clientY)]);
+      // Mapped through the transform this stroke STARTED with, so a view
+      // change mid-stroke cannot bend the line already being drawn.
+      if (drag.mode === 'draw') setLiveStroke([...currentStrokeRef.current, screenToBoardWith(strokeViewRef.current || view, e.clientX, e.clientY)]);
     };
 
     const handlePointerUp = (e: React.PointerEvent<HTMLCanvasElement>) => {
       const drag = dragRef.current;
       if (!drag || drag.pointerId !== e.pointerId) return;
       try { e.currentTarget.releasePointerCapture(e.pointerId); } catch {}
+      // Pen up: let through any shared-view update we held back mid-stroke.
+      if (drag.mode === 'draw') flushPendingView();
       if (drag.mode === 'draw' && currentStrokeRef.current.length > 1) {
         const strokeTool: DrawStroke['tool'] =
           (tool === 'eraser' && eraserMode === 'pixel') ? 'eraser-pixel' :
@@ -3516,6 +3560,7 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
         }
       }
       setLiveStroke([]);
+      flushPendingView();
       erasedDuringDragRef.current = new Set();
       dragRef.current = null;
     };
@@ -3622,6 +3667,7 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
           dragRef.current = null;
           currentStrokeRef.current = [];
           setLiveStroke([]);
+          flushPendingView();
           pinchActive = true;
           lastDist = distance(e.touches);
           const m = midpoint(e.touches);
@@ -4053,6 +4099,7 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
       // Always clear in-flight state regardless of which mode.
       dragRef.current = null;
       setLiveStroke([]);
+      flushPendingView();
     }, [isActive]); // eslint-disable-line react-hooks/exhaustive-deps
 
     if (!isActive) return null;
