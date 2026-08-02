@@ -78,7 +78,19 @@ export default function StudentView() {
   // ── Core State ──
   const [socket, setSocket] = useState<Socket | null>(null);
   const [connected, setConnected] = useState(false);
-  const [iframeUrl, setIframeUrl] = useState("");
+  // The lesson document handed to the iframe via srcdoc (see the build effect
+  // below for why this is not a blob: URL). Truthy = there is a lesson to show.
+  const [lessonDoc, setLessonDoc] = useState("");
+  // Has the teacher's screen actually been painted into the shell yet?
+  // A follower shell has the lesson's own scripts stripped, so a lesson that
+  // builds its page in JS shows NOTHING until the first mirrored frame lands.
+  // Blank white with no explanation is indistinguishable from "broken" — which
+  // is exactly how it was reported from an iPad.
+  const [mirrorPainted, setMirrorPainted] = useState(false);
+  // "You tapped, but it's locked" — shown when a view-only student tries to
+  // touch the lesson, with a button that actually asks the teacher.
+  const [lockedNudge, setLockedNudge] = useState(false);
+  const [askedAt, setAskedAt] = useState(0);
   const [currentHtml, setCurrentHtml] = useState("");
   // Server-issued deterministic RNG seed for the current lesson - injected
   // into the sim so Math.random() matches the teacher's exactly.
@@ -178,8 +190,9 @@ export default function StudentView() {
   const [tempContent, setTempContent] = useState<{ html: string; name: string } | null>(null);
   const [showTempContent, setShowTempContent] = useState(false);
 
-  // Memoize blob URL to prevent iframe from reloading on every render
-  const tempContentUrl = useMemo(() => {
+  // Built once per explanation and handed over as srcdoc — same reasoning as
+  // the lesson document: no object URL means no revoke to race the load.
+  const tempContentDoc = useMemo(() => {
     if (!tempContent) return null;
     const scripts = seededSyncScript(randomSeed) + stepLockScript;
     let content = tempContent.html;
@@ -188,15 +201,8 @@ export default function StudentView() {
     } else {
       content = scripts + content;
     }
-    const blob = new Blob([content], { type: 'text/html' });
-    return URL.createObjectURL(blob);
+    return content;
   }, [tempContent?.html, tempContent?.name, randomSeed]);
-
-  useEffect(() => {
-    return () => {
-      if (tempContentUrl) URL.revokeObjectURL(tempContentUrl);
-    };
-  }, [tempContentUrl]);
 
   // ── Student Interaction Mode ──
   const [interactionAllowed, setInteractionAllowed] = useState(false);
@@ -431,7 +437,8 @@ export default function StudentView() {
 
   // ── Build iframe URL ──
   useEffect(() => {
-    if (!currentHtml) { setIframeUrl(""); return; }
+    if (!currentHtml) { setLessonDoc(""); setMirrorPainted(false); return; }
+    setMirrorPainted(false);   // a rebuilt shell is blank again until repainted
     // Mark iframe as not ready while we rebuild it
     iframeReadyRef.current = false;
     // LIVE MIRROR: build a follower shell — the lesson's own <script>s are
@@ -449,10 +456,18 @@ export default function StudentView() {
     } else {
       content = scripts + content;
     }
-    const blob = new Blob([content], { type: "text/html" });
-    const url = URL.createObjectURL(blob);
-    setIframeUrl(url);
-    return () => URL.revokeObjectURL(url);
+    // Handed to the iframe as `srcdoc`, NOT a blob: URL.
+    //
+    // A blob URL has to be revoked, and this effect re-runs whenever the
+    // lesson or the seed changes — which happens twice in quick succession on
+    // a normal join (html lands, then the seed). On a fast desktop the first
+    // document is already loaded when its URL is revoked, so nothing shows;
+    // on a slower device the load is still in flight and revoking blanks the
+    // frame permanently. That is exactly the reported symptom on an iPad:
+    // whiteboard fine, ink over the lesson fine, lesson itself white.
+    // srcdoc has no lifetime to get wrong, and WebKit treats it as a plain
+    // same-origin document.
+    setLessonDoc(content);
     // Keyed on randomSeed too: a new lesson baseline reseeds, and the iframe
     // must rebuild so the sim picks up the matching seed from question one.
   }, [currentHtml, randomSeed]);
@@ -608,6 +623,7 @@ export default function StudentView() {
     // student renders exactly what the teacher's real lesson produced.
     newSocket.on("mirror_dom", ({ body, scrollX, scrollY, attrs, head, h }: { body: string; scrollX?: number; scrollY?: number; attrs?: string; head?: string | null; h?: string }) => {
       if (typeof body !== 'string') return;
+      setMirrorPainted(true);
       postToIframe({ type: 'MIRROR_APPLY', body, scrollX, scrollY, attrs, head, h });
     });
     // Fingerprint of the teacher's current screen. The follower compares it with
@@ -1202,7 +1218,7 @@ export default function StudentView() {
     syncEpochRef.current += 1;
     // Reset iframe readiness when content source changes — the new iframe needs to fire onLoad
     iframeReadyRef.current = false;
-  }, [iframeUrl, showTempContent, whiteboardMode]);
+  }, [lessonDoc, showTempContent, whiteboardMode]);
 
 
   // ── Push interaction mode to iframe ──
@@ -1215,7 +1231,7 @@ export default function StudentView() {
     // LIVE MIRROR: same gate controls whether the follower may forward its input
     // to the teacher's authoritative lesson (drive) or is a pure view-only mirror.
     postToIframe({ type: 'SET_MIRROR_INTERACT', allowed: canInteract });
-  }, [canInteract, iframeUrl, postToIframe]);
+  }, [canInteract, lessonDoc, postToIframe]);
 
   // ── Scroll lock ──
   // A view-only student in a "Linked" room stays where the teacher put them —
@@ -1228,7 +1244,7 @@ export default function StudentView() {
   useEffect(() => { scrollLockedRef.current = scrollLocked; }, [scrollLocked]);
   useEffect(() => {
     postToIframe({ type: 'SET_MIRROR_SCROLLLOCK', locked: scrollLocked });
-  }, [scrollLocked, iframeUrl, postToIframe]);
+  }, [scrollLocked, lessonDoc, postToIframe]);
 
   // ── Challenge Timer Countdown ──
   useEffect(() => {
@@ -1250,14 +1266,14 @@ export default function StudentView() {
   // ── Push scroll sync state to iframe ──
   useEffect(() => {
     postToIframe({ type: 'SET_SCROLL_SYNC', enabled: scrollSyncEnabled });
-  }, [scrollSyncEnabled, iframeUrl, postToIframe]);
+  }, [scrollSyncEnabled, lessonDoc, postToIframe]);
 
   // ── Step sync to iframe ──
   useEffect(() => {
     if (currentStep < 999) {
       postToIframe({ type: 'SET_STEP', step: currentStep });
     }
-  }, [currentStep, iframeUrl, postToIframe]);
+  }, [currentStep, lessonDoc, postToIframe]);
 
   // ── Handlers ──
   const submitQuizAnswer = () => {
@@ -1517,11 +1533,11 @@ export default function StudentView() {
             </div>
           )}
 
-          {showTempContent && tempContent && tempContentUrl ? (
+          {showTempContent && tempContent && tempContentDoc ? (
             // Temporary explanation content overlay — uses same ref so scroll sync works
             <iframe
               ref={iframeRef}
-              src={tempContentUrl}
+              srcDoc={tempContentDoc}
               className="w-full h-full border-none"
               style={{ background: '#ffffff' }}
               onLoad={handleIframeLoad}
@@ -1532,11 +1548,11 @@ export default function StudentView() {
           ) : whiteboardMode ? (
             // Whiteboard rendered above (always mounted; isActive controls visibility)
             null
-          ) : iframeUrl ? (
+          ) : lessonDoc ? (
             <>
               <iframe
                 ref={iframeRef}
-                src={iframeUrl}
+                srcDoc={lessonDoc}
                 className="w-full h-full border-none"
                 style={{ background: '#ffffff' }}
                 onLoad={handleIframeLoad}
@@ -1544,6 +1560,19 @@ export default function StudentView() {
                 allow={LESSON_IFRAME_ALLOW}
                 allowFullScreen
               />
+              {/* Say so instead of showing a white rectangle. The shell has the
+                  lesson's scripts stripped, so anything the lesson would have
+                  drawn in JS isn't there until the teacher's first frame lands. */}
+              {MIRROR_MODE && !mirrorPainted && (
+                <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 pointer-events-none"
+                  style={{ background: '#ffffff', color: 'var(--text-secondary)' }}>
+                  <div className="text-2xl" aria-hidden="true">⏳</div>
+                  <div className="text-sm font-medium">Loading your teacher's screen…</div>
+                  <div className="text-xs" style={{ maxWidth: 300, textAlign: 'center', lineHeight: 1.5 }}>
+                    If this stays here, ask your teacher to press <strong>Force sync</strong>.
+                  </div>
+                </div>
+              )}
               {/* Mirror overlay - shown ONLY in view-only (not interactive, not
                   control). It BLOCKS clicks/taps so a view-only student purely
                   mirrors the teacher, but FORWARDS wheel/touch so they can still
@@ -1567,6 +1596,14 @@ export default function StudentView() {
                     overlayTouchYRef.current = y;
                   }}
                   onMouseDown={(e) => { if (!e.altKey) e.preventDefault(); }}
+                  onPointerDown={(e) => {
+                    // Tapping a locked lesson used to do NOTHING — no button
+                    // moved, no message, nothing. The student assumes it's
+                    // broken and the teacher never learns they forgot to
+                    // unlock. Now the tap says so, and offers to ask.
+                    if (e.altKey) return;
+                    setLockedNudge(true);
+                  }}
                   onClick={(e) => {
                     // The overlay swallows clicks to the sim, but a student can
                     // still Alt+click to ping "look here" - show it locally and
@@ -1631,7 +1668,7 @@ export default function StudentView() {
               The toolbar lets the student opt in to drawing; until
               they activate a tool, taps still pass through to the
               simulation. */}
-          {!whiteboardMode && !showTempContent && iframeUrl && canAnnotate && (
+          {!whiteboardMode && !showTempContent && lessonDoc && canAnnotate && (
             <div
               role="toolbar"
               aria-label="Annotation tools"
@@ -1792,7 +1829,7 @@ export default function StudentView() {
           {/* Student Reactions Bar */}
           <StudentReactions
             socket={socket} roomId={roomId!} studentName={studentName}
-            isPaused={isPaused} visible={!!iframeUrl}
+            isPaused={isPaused} visible={!!lessonDoc}
           />
 
           {/* Floating Reactions */}
@@ -1828,6 +1865,51 @@ export default function StudentView() {
       {/* A clip the teacher is showing. It opens, plays, pauses and closes on
           their say-so — the student can only move it around and turn sound on. */}
       <VideoOverlay socket={socket} roomId={roomId!} isTeacher={false} />
+
+      {/* ── "It's locked" nudge ──
+          A view-only tap used to be swallowed in silence, so the student sits
+          there tapping a dead screen and the teacher never finds out they
+          forgot to unlock. Now the tap explains itself and can ask for them.
+          Disappears the moment interaction is actually allowed. */}
+      {lockedNudge && !canInteract && (
+        <div className="fixed inset-0 z-[85] flex items-end justify-center p-4 pb-24 sm:items-center sm:pb-4"
+          style={{ background: 'rgba(0,0,0,0.28)' }}
+          onClick={() => setLockedNudge(false)}>
+          <div className="w-full max-w-sm animate-bounce-in" onClick={(e) => e.stopPropagation()}
+            style={{ background: 'var(--bg-card)', borderRadius: 'var(--radius-xl)', border: '1px solid var(--border-subtle)', boxShadow: 'var(--shadow-xl)', padding: 20 }}>
+            <div className="text-3xl mb-2" aria-hidden="true">🔒</div>
+            <div className="text-base font-semibold" style={{ color: 'var(--text-primary)' }}>
+              You're watching, not driving
+            </div>
+            <div className="text-sm mt-1.5" style={{ color: 'var(--text-secondary)', lineHeight: 1.55 }}>
+              Your teacher hasn't handed over the controls yet, so tapping won't
+              do anything. Want me to ask them?
+            </div>
+            <div className="flex gap-2 mt-4">
+              <button
+                onClick={() => setLockedNudge(false)}
+                className="flex-1 px-4 py-2.5 text-sm rounded-lg font-medium"
+                style={{ color: 'var(--text-secondary)', border: '1px solid var(--border-default)' }}>
+                Not now
+              </button>
+              <button
+                onClick={() => {
+                  // Rate-limited so a bored student can't machine-gun the
+                  // teacher's screen mid-explanation.
+                  if (Date.now() - askedAt < 20000) { setLockedNudge(false); showNotification('✋ Already asked — hang on.'); return; }
+                  socket?.emit('request_interaction', { roomId });
+                  setAskedAt(Date.now());
+                  setLockedNudge(false);
+                  showNotification('✋ Asked your teacher to unlock it');
+                }}
+                className="flex-1 px-4 py-2.5 text-sm rounded-lg font-medium text-white"
+                style={{ background: 'var(--accent-indigo)' }}>
+                Ask my teacher
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ══════ NOTIFICATION TOAST ══════ */}
       {notification && (

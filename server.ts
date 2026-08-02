@@ -2506,6 +2506,24 @@ Build a widget that teaches: ${safePrompt}`;
       activateExplanation(roomId, room, null);
     });
 
+    // ─── "PLEASE UNLOCK IT" (student → teacher) ───
+    // A view-only student tapping the lesson gets nothing back, and the teacher
+    // — who simply forgot to allow interaction — has no way to find out. This
+    // carries the ask to the teacher with a one-click Allow on the other end.
+    socket.on('request_interaction', ({ roomId }: { roomId: string }) => {
+      if (typeof roomId !== 'string') return;
+      if (!checkRateLimit(socket.id, true)) return;
+      const room = rooms.get(roomId);
+      if (!isMember(room, socket.id) || !room.teacherSocketId) return;
+      const user = room.users.get(socket.id);
+      if (user?.role === 'teacher') return;              // teachers grant, not ask
+      if (room.studentInteractionAllowed) return;        // already unlocked
+      io.to(room.teacherSocketId).emit('interaction_requested', {
+        studentName: user?.name || 'A student',
+        at: Date.now(),
+      });
+    });
+
     // ─── LASER POINTER ───
     socket.on('laser_pointer', ({ roomId, x, y, active }: { roomId: string; x: number; y: number; active: boolean }) => {
       const room = rooms.get(roomId);

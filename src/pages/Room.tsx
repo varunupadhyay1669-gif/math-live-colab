@@ -263,6 +263,9 @@ export default function Room() {
   const [leaderboard, setLeaderboard] = useState<Array<{ studentName: string; xp: number; streak: number }>>([]);
   const [showLeaderboard, setShowLeaderboard] = useState(false);
 
+  // A student tapped a locked lesson and asked to be let in.
+  const [interactionAsk, setInteractionAsk] = useState<{ studentName: string; at: number } | null>(null);
+
   // ── Shared YouTube clip (floats over whatever is on screen) ──
   const [videoPromptOpen, setVideoPromptOpen] = useState(false);
   const [videoActive, setVideoActive] = useState(false);
@@ -821,6 +824,11 @@ export default function Room() {
     });
     // The kept list behind the tab strip (names only — bodies stay server-side
     // until one is actually shown).
+    // A view-only student tapped the lesson and asked to be let in.
+    newSocket.on("interaction_requested", ({ studentName, at }: { studentName: string; at: number }) => {
+      setInteractionAsk({ studentName: studentName || 'A student', at: at || Date.now() });
+      sounds.raiseHand();   // it IS a hand going up, just about the controls
+    });
     newSocket.on("explanations_state", ({ list, activeId }: { list: Array<{ id: string; name: string }>; activeId: string | null }) => {
       setExplanations(Array.isArray(list) ? list : []);
       setActiveExplanationId(activeId ?? null);
@@ -2048,6 +2056,16 @@ export default function Room() {
     setStudentInteractionAllowed(newAllowed);
     socket.emit("toggle_student_interaction", { roomId, allowed: newAllowed });
     showNotif(newAllowed ? '🖐️ Students can now interact with the simulation' : '👁️ Students are now view-only');
+  };
+
+  // Grant it outright, from the "X is asking" prompt. Separate from the toggle
+  // so answering the ask can never accidentally LOCK a room that's already open.
+  const allowStudentInteraction = () => {
+    if (!socket) return;
+    setStudentInteractionAllowed(true);
+    socket.emit("toggle_student_interaction", { roomId, allowed: true });
+    setInteractionAsk(null);
+    showNotif('🖐️ Students can now interact with the simulation');
   };
 
   const resetView = () => {
@@ -3295,6 +3313,32 @@ export default function Room() {
         onPromptClose={() => setVideoPromptOpen(false)}
         onActiveChange={setVideoActive}
       />
+
+      {/* ── "Anika is asking to interact" ──
+          The other half of the student's locked-tap nudge. Sits high and
+          centre with the fix one click away, because the whole point is that
+          the teacher has forgotten and doesn't know it. Auto-hides itself once
+          interaction is on, so it can't linger after the fact. */}
+      {interactionAsk && !studentInteractionAllowed && (
+        <div className="fixed top-16 left-1/2 -translate-x-1/2 z-[86] animate-slide-down" style={{ maxWidth: '92vw' }}>
+          <div className="flex items-center gap-3 px-4 py-3 rounded-xl"
+            style={{ background: 'var(--bg-card)', border: '1px solid var(--accent-indigo)', boxShadow: 'var(--shadow-xl)' }}>
+            <span className="text-xl" aria-hidden="true">✋</span>
+            <span className="text-sm" style={{ color: 'var(--text-primary)' }}>
+              <strong>{interactionAsk.studentName}</strong> is trying to use the lesson — it's still view-only.
+            </span>
+            <button onClick={allowStudentInteraction}
+              className="px-3 py-1.5 text-xs rounded-lg font-semibold text-white shrink-0"
+              style={{ background: 'var(--accent-indigo)' }}>
+              Let them in
+            </button>
+            <button onClick={() => setInteractionAsk(null)}
+              className="px-2 py-1 text-xs rounded-lg shrink-0"
+              style={{ color: 'var(--text-secondary)' }}
+              aria-label="Dismiss">✕</button>
+          </div>
+        </div>
+      )}
 
       {/* ═══ NOTIFICATION ═══ */}
       {notification && (
