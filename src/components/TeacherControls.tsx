@@ -56,6 +56,8 @@ interface TeacherControlsProps {
   onStopVideo: () => void;         // closes it on everyone's screen
   // Class pack — the whole lesson as one file for a language model
   onDownloadPack: () => void;
+  onOpenNotes: () => void;
+  notesCount: number;   // homework attachments, so the button can say there are some
   narrationOn: boolean;
   onToggleNarration: () => void;
   packBusy: boolean;
@@ -90,7 +92,7 @@ export default function TeacherControls({
   onToggleWhiteboard, whiteboardMode,
   explanationActive, explanationName, onUploadExplanation, onExitExplanation,
   videoActive, onShowVideo, onStopVideo,
-  onDownloadPack, onToggleNarration, narrationOn, packBusy, packCount,
+  onDownloadPack, onOpenNotes, notesCount, onToggleNarration, narrationOn, packBusy, packCount,
   eraserMode, onSetEraserMode,
   shapeTool, onSetShapeTool,
   followStudentClicks, onToggleFollowStudentClicks,
@@ -424,6 +426,20 @@ export default function TeacherControls({
             <path d="M5 10a7 7 0 0014 0" /><path d="M12 17v5" />
           </svg>
           <span className="tb-label-text">{narrationOn ? 'Listening' : 'Narrate'}</span>
+        </button>
+
+        {/* What only the tutor knows: the lesson's aim, and last week's homework. */}
+        <button
+          onClick={onOpenNotes}
+          className="tb-btn-notes"
+          data-tip="Lesson aim, note after, and last week's homework - all go into the class pack"
+        >
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path d="M4 4h11l5 5v11a1 1 0 01-1 1H4a1 1 0 01-1-1V5a1 1 0 011-1z" />
+            <path d="M14 4v6h6" /><path d="M8 14h7" /><path d="M8 17h5" />
+          </svg>
+          <span className="tb-label-text">Notes</span>
+          {notesCount > 0 && <span className="tb-pack-count">{notesCount}</span>}
         </button>
 
         {/* The whole lesson as one file, for pasting into a language model. */}

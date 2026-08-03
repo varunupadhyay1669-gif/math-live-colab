@@ -18,9 +18,9 @@ import TeacherControls from "../components/TeacherControls";
 import ChatPanel from "../components/ChatPanel";
 import VideoCall from "../components/VideoCall";
 import VideoOverlay from "../components/VideoOverlay";
-import { ClassPack } from "../lib/classPack";
+import { ClassPack, type HomeworkItem } from "../lib/classPack";
 import { savePack, loadPack, packKey, prunePacks } from "../lib/packStore";
-import { captureLesson } from "../lib/lessonShot";
+import { captureLesson, shrinkImage } from "../lib/lessonShot";
 import { buildPackJson, buildPackArchive, slugId, type RawSnapshot } from "../lib/packExport";
 import { newStrokesSince, strokeBounds, boardRectToScreen, padRect, cropCanvas } from "../lib/inkDelta";
 import { outlineExplainer, explainerTitle } from "../lib/explainerOutline";
@@ -298,6 +298,10 @@ export default function Room() {
   // Bumped on every iframe load so the capture listeners re-attach to the
   // document that is actually on screen.
   const [iframeDocNonce, setIframeDocNonce] = useState(0);
+  const [showHomework, setShowHomework] = useState(false);
+  const [homeworkItems, setHomeworkItems] = useState<HomeworkItem[]>([]);
+  const homeworkInputRef = useRef<HTMLInputElement>(null);
+  const homeworkKindRef = useRef<HomeworkItem['kind']>('submission');
   const [intentBefore, setIntentBefore] = useState('');
   const [noteAfter, setNoteAfter] = useState('');
   // Narration: transcribe what's said, on both sides, into the pack's timeline.
@@ -2555,6 +2559,39 @@ export default function Room() {
     return () => { try { doc.removeEventListener('click', onClick, true); } catch { /* gone */ } };
   }, [whiteboardMode, showTempContent, tempContent, previewHtml, iframeDocNonce]);
 
+  /**
+   * Attach last lesson's worksheet, or the student's attempt at it.
+   *
+   * Photos are downscaled before they go anywhere near the pack: a phone
+   * snapshot of a worksheet is several megabytes, and a dozen of those would
+   * make the archive unusable while adding nothing a reader can see.
+   */
+  const attachHomework = async (file: File, kind: HomeworkItem['kind']) => {
+    if (!file) return;
+    if (file.size > 25 * 1024 * 1024) { showNotif('⚠️ That file is very large (max 25MB)'); return; }
+    try {
+      const isImage = /^image\//.test(file.type);
+      let item: HomeworkItem;
+      if (isImage) {
+        const shrunk = await shrinkImage(file, 1600);
+        item = { kind, name: file.name, mime: 'image/jpeg', dataUrl: shrunk.dataUrl, width: shrunk.width, height: shrunk.height, addedAt: Date.now() };
+      } else {
+        const b64 = await new Promise<string>((res, rej) => {
+          const r = new FileReader();
+          r.onload = () => res(String(r.result || ''));
+          r.onerror = () => rej(r.error);
+          r.readAsDataURL(file);
+        });
+        item = { kind, name: file.name, mime: file.type || 'application/octet-stream', bytesBase64: b64, addedAt: Date.now() };
+      }
+      packRef.current.addHomework(item);
+      setHomeworkItems([...packRef.current.allHomework]);
+      showNotif(kind === 'submission' ? `📎 Attached her attempt: ${file.name}` : `📎 Attached last worksheet: ${file.name}`);
+    } catch (e) {
+      showNotif(`⚠️ Could not attach that file (${e instanceof Error ? e.message : 'unknown'})`);
+    }
+  };
+
   const downloadClassPack = async () => {
     if (packBusy) return;
     setPackBusy(true);
@@ -2623,6 +2660,7 @@ export default function Room() {
           })),
         outlines: packOutlinesRef.current,
         interactives,
+        homework: pack.allHomework.map(h => ({ kind: h.kind, name: h.name, mime: h.mime, dataUrl: h.dataUrl, bytesBase64: h.bytesBase64 })),
         duplicatesSuppressed: pack.suppressedCount,
         failures: [] as Array<{ what: string; why: string }>,
       };
@@ -3278,6 +3316,8 @@ export default function Room() {
               onShowVideo={() => setVideoPromptOpen(true)}
               onStopVideo={() => socket?.emit('video_close', { roomId })}
               onDownloadPack={downloadClassPack}
+              onOpenNotes={() => setShowHomework(true)}
+              notesCount={homeworkItems.length}
               narrationOn={narrationOn}
               onToggleNarration={toggleNarration}
               packBusy={packBusy}
@@ -3817,6 +3857,93 @@ export default function Room() {
               className="px-2 py-1 text-xs rounded-lg shrink-0"
               style={{ color: 'var(--text-secondary)' }}
               aria-label="Dismiss">✕</button>
+          </div>
+        </div>
+      )}
+
+      {/* ── Lesson notes and homework ──
+          Everything the class pack needs that only the tutor knows: what this
+          lesson was for, what came of it, last time's worksheet and her attempt
+          at it. All optional; all of it makes the next worksheet better. */}
+      <input
+        ref={homeworkInputRef}
+        type="file"
+        accept="image/*,application/pdf"
+        className="hidden"
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          if (file) void attachHomework(file, homeworkKindRef.current);
+          e.target.value = '';
+        }}
+      />
+      {showHomework && (
+        <div className="fixed inset-0 z-[92] flex items-start justify-center p-4 pt-16 overflow-y-auto"
+          style={{ background: 'rgba(0,0,0,0.3)', backdropFilter: 'blur(4px)' }}
+          onClick={() => setShowHomework(false)}>
+          <div className="w-full max-w-lg animate-bounce-in" onClick={(e) => e.stopPropagation()}
+            style={{ background: 'var(--bg-card)', borderRadius: 'var(--radius-xl)', border: '1px solid var(--border-subtle)', boxShadow: 'var(--shadow-xl)' }}>
+            <div className="px-5 pt-5 pb-1 flex items-center justify-between">
+              <div className="text-base font-semibold" style={{ color: 'var(--text-primary)' }}>Lesson notes &amp; homework</div>
+              <button onClick={() => setShowHomework(false)} className="px-2 py-1 text-sm rounded-lg"
+                style={{ color: 'var(--text-secondary)' }} aria-label="Close">✕</button>
+            </div>
+            <div className="p-5 pt-3 flex flex-col gap-4">
+              <label className="flex flex-col gap-1.5">
+                <span className="text-xs font-semibold uppercase tracking-wide" style={{ color: 'var(--text-secondary)' }}>What this lesson is for</span>
+                <textarea rows={2} value={intentBefore} onChange={(e) => setIntentBefore(e.target.value)}
+                  placeholder="aiming to finish sets; homework should lean on interval notation"
+                  className="w-full px-3 py-2 text-sm rounded-lg outline-none"
+                  style={{ background: 'var(--bg-card)', color: 'var(--text-primary)', border: '1px solid var(--border-default)', lineHeight: 1.5 }} />
+              </label>
+              <label className="flex flex-col gap-1.5">
+                <span className="text-xs font-semibold uppercase tracking-wide" style={{ color: 'var(--text-secondary)' }}>Note after the lesson</span>
+                <textarea rows={2} value={noteAfter} onChange={(e) => setNoteAfter(e.target.value)}
+                  placeholder="still flipping the inequality when dividing by a negative"
+                  className="w-full px-3 py-2 text-sm rounded-lg outline-none"
+                  style={{ background: 'var(--bg-card)', color: 'var(--text-primary)', border: '1px solid var(--border-default)', lineHeight: 1.5 }} />
+              </label>
+
+              <div>
+                <span className="text-xs font-semibold uppercase tracking-wide" style={{ color: 'var(--text-secondary)' }}>Homework</span>
+                <p className="text-xs mt-1" style={{ color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+                  Attach the worksheet you set last time and her attempt at it, and the pack
+                  can be built knowing how the last one went instead of starting blind.
+                </p>
+                <div className="flex gap-2 mt-2.5">
+                  <button
+                    onClick={() => { homeworkKindRef.current = 'previous_worksheet'; homeworkInputRef.current?.click(); }}
+                    className="flex-1 px-3 py-2 text-xs rounded-lg font-medium"
+                    style={{ color: 'var(--text-primary)', border: '1px solid var(--border-default)' }}>
+                    ＋ Last worksheet
+                  </button>
+                  <button
+                    onClick={() => { homeworkKindRef.current = 'submission'; homeworkInputRef.current?.click(); }}
+                    className="flex-1 px-3 py-2 text-xs rounded-lg font-medium text-white"
+                    style={{ background: 'var(--accent-indigo)' }}>
+                    ＋ Her attempt
+                  </button>
+                </div>
+                {homeworkItems.length > 0 && (
+                  <ul className="mt-3 flex flex-col gap-1.5">
+                    {homeworkItems.map((h) => (
+                      <li key={`${h.kind}-${h.name}-${h.addedAt}`}
+                        className="flex items-center gap-2 text-xs px-2.5 py-2 rounded-lg"
+                        style={{ background: 'var(--bg-surface)', color: 'var(--text-primary)' }}>
+                        <span aria-hidden="true">{h.kind === 'submission' ? '✍️' : '📄'}</span>
+                        <span className="flex-1 truncate">{h.name}</span>
+                        <span style={{ color: 'var(--text-secondary)' }}>
+                          {h.kind === 'submission' ? 'her attempt' : 'last worksheet'}
+                        </span>
+                        <button
+                          onClick={() => { packRef.current.removeHomework(h.name, h.kind); setHomeworkItems([...packRef.current.allHomework]); }}
+                          aria-label={`Remove ${h.name}`}
+                          style={{ color: 'var(--text-secondary)' }}>✕</button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            </div>
           </div>
         </div>
       )}

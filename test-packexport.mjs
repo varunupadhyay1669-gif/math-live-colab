@@ -260,6 +260,39 @@ assert(ClassPack.fromState({ v: 1, startedAt: 1, snapshots: 'x', narration: [] }
 assert(packKey('kanishka', Date.parse('2026-08-03T20:00:00Z')).startsWith('kanishka:2026-08-0'), 'the key is room plus day', packKey('kanishka', Date.parse('2026-08-03T20:00:00Z')));
 assert(packKey('a', 1) !== packKey('b', 1), 'two rooms never share a record');
 
+console.log('E17: homework closes the loop between lessons (P1-5)');
+const hwPack = buildPackJson(fixture({
+  homework: [
+    { kind: 'previous_worksheet', name: 'Kanishka_session2_worksheet.pdf', mime: 'application/pdf', bytesBase64: 'data:application/pdf;base64,JVBER' },
+    { kind: 'submission', name: 'her-attempt.jpg', mime: 'image/jpeg', dataUrl: IMG },
+  ],
+}));
+assert(validatePack(hwPack).length === 0, 'a pack with homework still validates', validatePack(hwPack).slice(0, 2).join(' | '));
+assert(hwPack.homework.previous_pack === 'Kanishka_session2_worksheet.pdf', 'the worksheet set last time is named');
+assert(hwPack.homework.submitted === true, 'and the pack knows she submitted something');
+assert(hwPack.homework.submissions.length === 1, 'with a path to it', JSON.stringify(hwPack.homework.submissions));
+assert(hwPack.homework.submissions[0].endsWith('.jpg'), 'a photo keeps an image extension', hwPack.homework.submissions[0]);
+const hwMaterials = hwPack.materials.filter(m => m.type === 'homework');
+assert(hwMaterials.length === 2, 'both also appear as materials, for a consumer that only reads materials[]', String(hwMaterials.length));
+assert(hwMaterials.find(m => m.source === 'student_submission')?.image?.endsWith('.jpg'), 'her attempt carries an image path');
+assert(hwMaterials.find(m => m.source === 'previous_worksheet')?.source_ref?.endsWith('.pdf'), 'a PDF worksheet keeps its extension');
+const noHw = buildPackJson(fixture());
+assert(noHw.homework.submitted === false && noHw.homework.previous_pack === null, 'a lesson with no homework says so plainly');
+assert(noHw.materials.every(m => m.type !== 'homework'), 'and adds nothing to materials');
+
+console.log('E18: homework survives a reload with the rest of the lesson');
+const hwLive = new ClassPack();
+hwLive.addHomework({ kind: 'submission', name: 'attempt.jpg', mime: 'image/jpeg', dataUrl: IMG, width: 100, height: 80, addedAt: 1 });
+hwLive.addHomework({ kind: 'previous_worksheet', name: 'ws1.pdf', mime: 'application/pdf', bytesBase64: 'data:application/pdf;base64,JVBER', addedAt: 2 });
+hwLive.addHomework({ kind: 'previous_worksheet', name: 'ws2.pdf', mime: 'application/pdf', bytesBase64: 'data:application/pdf;base64,JVBER', addedAt: 3 });
+assert(hwLive.allHomework.filter(h => h.kind === 'previous_worksheet').length === 1, 'attaching a second worksheet replaces the first, rather than stacking');
+assert(hwLive.allHomework.find(h => h.kind === 'previous_worksheet').name === 'ws2.pdf', 'keeping the newer one');
+const hwBack = ClassPack.fromState(JSON.parse(JSON.stringify(hwLive.toState())));
+assert(hwBack.allHomework.length === 2, 'attachments come back after a reload', String(hwBack.allHomework.length));
+assert(hwBack.allHomework.find(h => h.kind === 'submission').dataUrl === IMG, 'with the image intact');
+hwBack.removeHomework('attempt.jpg', 'submission');
+assert(hwBack.allHomework.length === 1, 'and can be removed again');
+
 console.log(`\nPACK EXPORT RESULT: ${pass} passed, ${fail} failed`);
 if (fails.length) { console.log('FAILURES:'); fails.forEach(f => console.log('  - ' + f)); }
 process.exit(fail === 0 ? 0 : 1);

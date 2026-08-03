@@ -29,6 +29,14 @@ export interface RawSnapshot {
   scrollY: number;
 }
 
+export interface RawHomework {
+  kind: 'previous_worksheet' | 'submission';
+  name: string;
+  mime: string;
+  dataUrl?: string;
+  bytesBase64?: string;
+}
+
 export interface RawMaterial {
   id: string;
   type: PackMaterial['type'];
@@ -59,6 +67,7 @@ export interface PackInputs {
   materials: RawMaterial[];
   outlines: PackExplainerOutline[];
   interactives: PackInteractive[];
+  homework?: RawHomework[];
   duplicatesSuppressed: number;
   failures: Array<{ what: string; why: string }>;
   /** Injected so re-exporting the same session is byte-identical apart from this. */
@@ -185,6 +194,23 @@ export function buildPackJson(inputs: PackInputs): ClassPackJson {
     source_ref: m.sourceHtml ? `materials/mat_${i + 1}.html` : null,
   }));
 
+  const homeworkItems = inputs.homework ?? [];
+  // Also listed as materials: a consumer scanning materials[] for "things shown
+  // in this lesson" should find her attempt without knowing about homework{}.
+  homeworkItems.forEach((h, i) => {
+    materials.push({
+      id: `hw_${i + 1}`,
+      type: 'homework',
+      image: h.dataUrl ? `materials/hw_${i + 1}.jpg` : null,
+      source: h.kind === 'submission' ? 'student_submission' : 'previous_worksheet',
+      shown_from: 0,
+      shown_to: null,
+      ocr_text: null,
+      detected_question_numbers: [],
+      source_ref: h.bytesBase64 ? `materials/hw_${i + 1}${extensionFor(h.mime)}` : null,
+    });
+  });
+
   const capture_report: PackCaptureReport = {
     board_snapshots_kept: snapshots.length,
     duplicates_suppressed: inputs.duplicatesSuppressed,
@@ -233,7 +259,14 @@ export function buildPackJson(inputs: PackInputs): ClassPackJson {
     materials,
     explainer_outlines: inputs.outlines,
     interactives: inputs.interactives,
-    homework: { previous_pack: null, submitted: false, submissions: [] },
+    homework: {
+      previous_pack: homeworkItems.find(h => h.kind === 'previous_worksheet')?.name ?? null,
+      submitted: homeworkItems.some(h => h.kind === 'submission'),
+      submissions: homeworkItems
+        .map((h, i) => ({ h, i }))
+        .filter(x => x.h.kind === 'submission')
+        .map(x => x.h.dataUrl ? `materials/hw_${x.i + 1}.jpg` : `materials/hw_${x.i + 1}${extensionFor(x.h.mime)}`),
+    },
     capture_report,
   };
 }
@@ -270,8 +303,23 @@ export function buildPackArchive(pdf: Uint8Array, json: ClassPackJson, inputs: P
     }
   });
 
+  (inputs.homework ?? []).forEach((h, i) => {
+    const base = `materials/hw_${i + 1}`;
+    try {
+      if (h.dataUrl) entries.push({ name: `${base}.jpg`, data: dataUrlToBytes(h.dataUrl) });
+      else if (h.bytesBase64) entries.push({ name: `${base}${extensionFor(h.mime)}`, data: dataUrlToBytes(h.bytesBase64) });
+    } catch { /* an unreadable attachment should not sink the archive */ }
+  });
+
   entries.push({ name: 'README.txt', data: text(readme(baseName)) });
   return buildZip(entries);
+}
+
+function extensionFor(mime: string): string {
+  if (/pdf/i.test(mime)) return '.pdf';
+  if (/png/i.test(mime)) return '.png';
+  if (/jpe?g/i.test(mime)) return '.jpg';
+  return '.bin';
 }
 
 function readme(baseName: string): string {

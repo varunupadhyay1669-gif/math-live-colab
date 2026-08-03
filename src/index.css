@@ -2241,6 +2241,21 @@ body {
   .tb-btn-mic { padding: 0 11px; }
 }
 
+/* ── Lesson notes & homework ── */
+.tb-btn-notes {
+  display: inline-flex; align-items: center; gap: 7px;
+  height: 36px; padding: 0 13px; border-radius: 10px;
+  font-size: 13px; font-weight: 600; letter-spacing: -0.005em;
+  color: var(--text-secondary); background: var(--bg-card);
+  border: 1px solid var(--border-default); cursor: pointer;
+  transition: background 140ms var(--ml-easing), border-color 140ms var(--ml-easing);
+}
+.tb-btn-notes:hover { border-color: var(--border-strong); background: var(--bg-surface); }
+@media (max-width: 760px) {
+  .tb-btn-notes span.tb-label-text { display: none; }
+  .tb-btn-notes { padding: 0 11px; }
+}
+
 /* ── Class pack (save the lesson as one file for an AI) ── */
 .tb-btn-pack {
   display: inline-flex; align-items: center; gap: 7px;

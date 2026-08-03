@@ -103,3 +103,27 @@ export async function captureLesson(
     return null;   // never let a screenshot break a lesson
   }
 }
+
+/**
+ * Downscale a photo before it enters a class pack.
+ *
+ * A phone picture of a worksheet is several megabytes at a resolution nobody
+ * reads at. Capping the long edge keeps the page legible while keeping the
+ * archive small enough to actually upload.
+ */
+export async function shrinkImage(file: File, maxEdge = 1600, quality = 0.78):
+  Promise<{ dataUrl: string; width: number; height: number }> {
+  const bitmap = await createImageBitmap(file);
+  const scale = Math.min(1, maxEdge / Math.max(bitmap.width, bitmap.height));
+  const w = Math.max(1, Math.round(bitmap.width * scale));
+  const h = Math.max(1, Math.round(bitmap.height * scale));
+  const canvas = document.createElement('canvas');
+  canvas.width = w; canvas.height = h;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) throw new Error('no canvas context');
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, w, h);
+  ctx.drawImage(bitmap, 0, 0, w, h);
+  bitmap.close?.();
+  return { dataUrl: canvas.toDataURL('image/jpeg', quality), width: w, height: h };
+}

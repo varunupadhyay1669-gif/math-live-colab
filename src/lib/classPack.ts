@@ -55,6 +55,27 @@ export interface Moment {
   text: string;
 }
 
+/**
+ * The worksheet sent after the last lesson, and what she sent back.
+ *
+ * Without these, every new worksheet is written blind to how the last one went:
+ * the model cannot see which questions she got wrong, so it re-tests the wrong
+ * things. Attached by the tutor, because there is no student login to upload
+ * through and adding one for this would be a service, not a feature.
+ */
+export interface HomeworkItem {
+  kind: 'previous_worksheet' | 'submission';
+  name: string;
+  mime: string;
+  /** Images ride along as data URLs so they can be shown in the PDF. */
+  dataUrl?: string;
+  width?: number;
+  height?: number;
+  /** Anything not an image (a PDF) travels in the archive only. */
+  bytesBase64?: string;
+  addedAt: number;
+}
+
 /** A snapshot of the lesson's live DOM — what was actually on screen. */
 export interface LessonState {
   t: number;
@@ -86,6 +107,7 @@ export interface PackState {
   lastHash: string;
   lastSignature: string;
   lastLessonText: string;
+  homework?: HomeworkItem[];
 }
 
 export class ClassPack {
@@ -100,6 +122,7 @@ export class ClassPack {
   private narration: NarrationLine[] = [];
   private lessonStates: LessonState[] = [];
   private lastLessonText = '';
+  private homework: HomeworkItem[] = [];
 
   meta: { room: string; teacher: string; student?: string; topic?: string;
           intentBefore?: string; noteAfter?: string } = { room: '', teacher: '' };
@@ -235,6 +258,24 @@ export class ClassPack {
     return true;
   }
 
+  addHomework(item: HomeworkItem) {
+    // Only one "previous worksheet" makes sense; attaching another replaces it.
+    if (item.kind === 'previous_worksheet') {
+      this.homework = this.homework.filter(h => h.kind !== 'previous_worksheet');
+    }
+    if (this.homework.length >= 12) this.homework.shift();
+    this.homework.push(item);
+    this.note(item.kind === 'submission'
+      ? `Attached the student's homework: ${item.name}`
+      : `Attached last lesson's worksheet: ${item.name}`);
+  }
+
+  removeHomework(name: string, kind: HomeworkItem['kind']) {
+    this.homework = this.homework.filter(h => !(h.name === name && h.kind === kind));
+  }
+
+  get allHomework(): HomeworkItem[] { return this.homework; }
+
   /** Read-only views for the exporter. */
   get allSnapshots(): Snapshot[] { return this.snapshots; }
   get allNarration(): NarrationLine[] { return this.narration; }
@@ -275,6 +316,7 @@ export class ClassPack {
       lastHash: this.lastHash,
       lastSignature: this.lastSignature,
       lastLessonText: this.lastLessonText,
+      homework: this.homework,
     };
   }
 
@@ -299,6 +341,7 @@ export class ClassPack {
     pack.lastHash = st.lastHash || '';
     pack.lastSignature = st.lastSignature || '';
     pack.lastLessonText = st.lastLessonText || '';
+    pack.homework = Array.isArray(st.homework) ? st.homework : [];
     return pack;
   }
 
@@ -394,6 +437,28 @@ export class ClassPack {
       pages.forEach((chunk, i) => b.addTextPage(i === 0 ? [...head, ...chunk] : [
         { text: `${a.name} (continued)`, size: 9, bold: true }, ...chunk,
       ]));
+    }
+
+    // ── Homework: last time's worksheet and what came back ──
+    if (this.homework.length) {
+      b.addTextPage([
+        { text: 'Homework', size: 16, bold: true },
+        { text: 'Attached by the tutor, so the next worksheet can build on the last one.', size: 9, gap: 2 },
+        { text: '', gap: 8 },
+        ...this.homework.flatMap(h => PdfBuilder.wrap(
+          `${h.kind === 'submission' ? 'Her attempt' : 'Worksheet sent last time'}: ${h.name}`, 10,
+        ).map(text => ({ text, size: 10 } as TextLine))),
+      ]);
+      for (const h of this.homework) {
+        if (!h.dataUrl || !h.width || !h.height) continue;
+        try {
+          b.addImagePage(
+            { jpeg: dataUrlToBytes(h.dataUrl), width: h.width, height: h.height },
+            h.kind === 'submission' ? `Her attempt — ${h.name}` : `Last worksheet — ${h.name}`,
+            h.kind === 'submission' ? 'What the student sent back.' : 'What was set after the previous lesson.',
+          );
+        } catch { /* skip an unreadable attachment */ }
+      }
     }
 
     // ── The board, in order ──
