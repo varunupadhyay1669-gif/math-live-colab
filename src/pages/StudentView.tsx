@@ -13,7 +13,7 @@ import { LESSON_IFRAME_SANDBOX, LESSON_IFRAME_ALLOW } from "../lib/iframeAttrs";
 import ChatPanel from "../components/ChatPanel";
 import VideoCall from "../components/VideoCall";
 import VideoOverlay from "../components/VideoOverlay";
-import { Narrator, narrationSupported } from "../lib/narration";
+import { Narrator, narrationSupported, getNarrationChoice, setNarrationChoice } from "../lib/narration";
 import StudentReactions from "../components/StudentReactions";
 import PausedOverlay from "../components/PausedOverlay";
 import TimerDisplay from "../components/TimerDisplay";
@@ -98,6 +98,23 @@ export default function StudentView() {
   const [narrationOn, setNarrationOn] = useState(false);
   const narratorRef = useRef<Narrator | null>(null);
   const narrationStartRef = useRef(0);
+  const socketRef = useRef<typeof socket>(null);
+  useEffect(() => { socketRef.current = socket; }, [socket]);
+
+  /** Open the microphone and relay lines. Only ever called after a yes. */
+  const beginNarrating = useCallback(() => {
+    if (narratorRef.current) return true;
+    const n = new Narrator((text) => {
+      socketRef.current?.emit('narration_line', {
+        roomId, text, t: Date.now() - narrationStartRef.current,
+      });
+    });
+    if (!n.start()) return false;
+    narratorRef.current = n;
+    setNarrationOn(true);
+    setNarrationAsk(false);
+    return true;
+  }, [roomId]);
   const [currentHtml, setCurrentHtml] = useState("");
   // Server-issued deterministic RNG seed for the current lesson - injected
   // into the sim so Math.random() matches the teacher's exactly.
@@ -649,6 +666,12 @@ export default function StudentView() {
       // arrival would put every student line near zero and scramble the order
       // of the merged transcript.
       narrationStartRef.current = Date.now() - Math.max(0, Number(elapsed) || 0);
+      // Already decided for this room? Honour it silently. Asking a student the
+      // same question at the start of every single lesson is how they end up
+      // tapping "no" out of habit.
+      const previous = getNarrationChoice(roomId || '');
+      if (previous === 'no') return;
+      if (previous === 'yes') { beginNarrating(); return; }
       setNarrationAsk(true);
     });
     newSocket.on("mirror_ping", ({ h }: { h?: string }) => {
@@ -1906,19 +1929,14 @@ export default function StudentView() {
               recording of your voice. You can stop it whenever you like.
             </div>
             <div className="flex gap-2 mt-4">
-              <button onClick={() => setNarrationAsk(false)}
+              <button onClick={() => { setNarrationChoice(roomId || '', 'no'); setNarrationAsk(false); }}
                 className="flex-1 px-4 py-2.5 text-sm rounded-lg font-medium"
                 style={{ color: 'var(--text-secondary)', border: '1px solid var(--border-default)' }}>
                 No thanks
               </button>
               <button onClick={() => {
-                  const n = new Narrator((text) => {
-                    socket?.emit('narration_line', { roomId, text, t: Date.now() - narrationStartRef.current });
-                  });
-                  if (!n.start()) { setNarrationAsk(false); showNotification('Could not start — check microphone permission.'); return; }
-                  narratorRef.current = n;
-                  setNarrationOn(true);
-                  setNarrationAsk(false);
+                  if (!beginNarrating()) { setNarrationAsk(false); showNotification('Could not start — check microphone permission.'); return; }
+                  setNarrationChoice(roomId || '', 'yes');
                   showNotification('🎙️ Writing down what is said');
                 }}
                 className="flex-1 px-4 py-2.5 text-sm rounded-lg font-medium text-white"
@@ -1933,7 +1951,7 @@ export default function StudentView() {
       {/* While it is on, say so plainly and keep the off switch in reach. */}
       {narrationOn && (
         <button
-          onClick={() => { narratorRef.current?.stop(); narratorRef.current = null; setNarrationOn(false); showNotification('🎙️ Stopped'); }}
+          onClick={() => { narratorRef.current?.stop(); narratorRef.current = null; setNarrationOn(false); setNarrationChoice(roomId || '', 'no'); showNotification('🎙️ Stopped'); }}
           className="fixed bottom-3 left-3 z-[84] flex items-center gap-2 px-3 py-2 rounded-full text-xs font-semibold"
           style={{ background: '#7F1D1D', color: '#FEE2E2', boxShadow: 'var(--shadow-lg)' }}
           title="Stop writing down what is said">

@@ -51,21 +51,43 @@ export class Narrator {
   private restartTimer: ReturnType<typeof setTimeout> | null = null;
   /** Set while a restart is pending so a burst of `onend` can't stack timers. */
   private restarting = false;
+  /** Last time the engine proved it was alive (a result, or a clean end). */
+  private lastAlive = 0;
+  private watchdog: ReturnType<typeof setInterval> | null = null;
+  private lang = 'en-GB';
+  /** Set only when the user (or their browser) refused the microphone. */
+  denied = false;
 
   constructor(onLine: Listener) { this.onLine = onLine; }
 
   get running() { return this.wantRunning; }
+  /** ms since the engine last showed a sign of life. */
+  get quietFor() { return this.lastAlive ? Date.now() - this.lastAlive : 0; }
 
   start(lang = 'en-GB'): boolean {
     const Rec = getRecogniser();
     if (!Rec) return false;
     if (this.wantRunning) return true;
+    this.lang = lang;
     this.wantRunning = true;
+    this.lastAlive = Date.now();
+    // Nothing about a lesson should depend on the engine behaving. Browsers
+    // end continuous recognition on their own, drop it on a network blip, and
+    // occasionally stop firing without ever calling onend — all silently. A
+    // teacher mid-explanation will not notice, and the context is simply gone.
+    // So: check every 15s that it is still alive, and rebuild it if not.
+    if (!this.watchdog) {
+      this.watchdog = setInterval(() => {
+        if (!this.wantRunning || this.denied) return;
+        if (this.quietFor > 45_000) this.revive();
+      }, 15_000);
+    }
     const rec = new Rec();
     rec.continuous = true;
     rec.interimResults = false;      // only settled text — interim lines churn badly
     rec.lang = lang;
     rec.onresult = (e: any) => {
+      this.lastAlive = Date.now();
       for (let i = e.resultIndex; i < e.results.length; i++) {
         const r = e.results[i];
         if (!r || !r.isFinal) continue;
@@ -74,20 +96,28 @@ export class Narrator {
       }
     };
     rec.onerror = (e: any) => {
-      // 'no-speech' and 'aborted' are routine in a quiet classroom; only a
-      // permission refusal is worth giving up over.
-      if (e?.error === 'not-allowed' || e?.error === 'service-not-allowed') this.stop();
+      // 'no-speech' and 'aborted' are routine in a quiet classroom, and
+      // 'network' happens on any wobble — none of them should end the lesson's
+      // record. Only an actual refusal of the microphone is final, because
+      // retrying that would just nag.
+      if (e?.error === 'not-allowed' || e?.error === 'service-not-allowed') {
+        this.denied = true;
+        this.stop();
+        return;
+      }
+      this.lastAlive = Date.now();   // it spoke to us, so it is still there
     };
     // Browsers end a continuous session on their own every minute or so. Keep
     // it alive, but never synchronously — an immediate restart inside onend
     // throws InvalidStateError.
     rec.onend = () => {
+      this.lastAlive = Date.now();
       if (!this.wantRunning || this.restarting) return;
       this.restarting = true;
       this.restartTimer = setTimeout(() => {
         this.restarting = false;
         if (!this.wantRunning) return;
-        try { rec.start(); } catch { /* already going, or gone */ }
+        try { rec.start(); } catch { this.revive(); }
       }, 400);
     };
     this.rec = rec;
@@ -95,10 +125,25 @@ export class Narrator {
     return true;
   }
 
+  /** Throw away a wedged engine and build a fresh one. */
+  private revive() {
+    if (!this.wantRunning || this.denied) return;
+    const old = this.rec;
+    this.rec = null;
+    // Detach first: a dying instance can still fire onend and start a race
+    // between the old restart timer and this rebuild.
+    if (old) { old.onend = null; old.onresult = null; old.onerror = null; try { old.abort(); } catch { /* gone */ } }
+    if (this.restartTimer) { clearTimeout(this.restartTimer); this.restartTimer = null; }
+    this.restarting = false;
+    this.wantRunning = false;      // so start() doesn't early-return
+    this.start(this.lang);
+  }
+
   stop() {
     this.wantRunning = false;
     this.restarting = false;
     if (this.restartTimer) { clearTimeout(this.restartTimer); this.restartTimer = null; }
+    if (this.watchdog) { clearInterval(this.watchdog); this.watchdog = null; }
     try { this.rec?.stop(); } catch { /* not started */ }
     this.rec = null;
   }
@@ -124,4 +169,31 @@ export function mergeTranscript(lines: NarrationLine[], joinWithinMs = 12_000): 
     }
   }
   return out;
+}
+
+// ── Remembering the decision ──
+// Asking again every lesson is how a feature ends up switched off forever. A
+// choice is remembered per room: the teacher's preference, and the student's
+// consent. Either can be changed at any time from the on-air indicator.
+
+const KEY = 'mathslive:narration';
+
+function readPrefs(): Record<string, string> {
+  try { return JSON.parse(localStorage.getItem(KEY) || '{}'); } catch { return {}; }
+}
+
+export function getNarrationChoice(roomId: string): 'yes' | 'no' | null {
+  const v = readPrefs()[roomId || ''];
+  return v === 'yes' || v === 'no' ? v : null;
+}
+
+export function setNarrationChoice(roomId: string, choice: 'yes' | 'no') {
+  try {
+    const prefs = readPrefs();
+    prefs[roomId || ''] = choice;
+    // Keep it small: a tutor with hundreds of rooms should not carry them all.
+    const keys = Object.keys(prefs);
+    if (keys.length > 100) delete prefs[keys[0]];
+    localStorage.setItem(KEY, JSON.stringify(prefs));
+  } catch { /* private mode — we simply ask again next time */ }
 }

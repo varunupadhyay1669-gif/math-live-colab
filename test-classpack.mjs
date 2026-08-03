@@ -165,6 +165,56 @@ p3.addNarration('Varun', 'we did this all verbally today');
 assert(p3.isEmpty === false, 'speech alone counts as content');
 assert(textOf(await bytesOf(p3.buildPdf())).includes('we did this all verbally today'), 'and reaches the file');
 
+console.log('C12: the recogniser keeps itself alive without anyone watching it');
+const { Narrator, getNarrationChoice, setNarrationChoice } = await import('./src/lib/narration.ts');
+// A stand-in that behaves like the browser's: it ends on its own, errors on a
+// network wobble, and can go silent without ever calling onend.
+let built = 0, started = 0;
+class FlakyRec {
+  constructor() { built++; FlakyRec.last = this; this.onresult = null; this.onerror = null; this.onend = null; }
+  start() { started++; this.alive = true; }
+  stop() { this.alive = false; this.onend && this.onend(); }
+  abort() { this.alive = false; }
+  say(t) { this.onresult && this.onresult({ resultIndex: 0, results: [{ isFinal: true, 0: { transcript: t } }] }); }
+}
+globalThis.window = globalThis.window || {};
+globalThis.localStorage = globalThis.localStorage || (() => {
+  const m = new Map();
+  return { getItem: k => (m.has(k) ? m.get(k) : null), setItem: (k, v) => m.set(k, String(v)), removeItem: k => m.delete(k) };
+})();
+window.SpeechRecognition = FlakyRec;
+
+const heard = [];
+const n = new Narrator(t => heard.push(t));
+assert(n.start() === true, 'it starts');
+FlakyRec.last.say('hello');
+assert(heard[0] === 'hello', 'and passes speech through');
+
+const beforeNetwork = built;
+FlakyRec.last.onerror({ error: 'network' });
+assert(n.running === true, 'a network wobble does NOT end the lesson record');
+assert(built === beforeNetwork, 'and does not thrash a rebuild');
+
+FlakyRec.last.onerror({ error: 'no-speech' });
+assert(n.running === true, 'nor does a quiet classroom');
+
+const denied = new Narrator(() => {});
+denied.start();
+FlakyRec.last.onerror({ error: 'not-allowed' });
+assert(denied.running === false, 'a refused microphone stops, rather than nagging forever');
+assert(denied.denied === true, 'and is remembered as refused');
+n.stop();
+assert(n.running === false, 'stop means stop');
+
+console.log('C13: a decision is remembered, so nobody is asked every lesson');
+assert(getNarrationChoice('room-a') === null, 'a new room has no decision yet');
+setNarrationChoice('room-a', 'yes');
+assert(getNarrationChoice('room-a') === 'yes', 'a yes is remembered');
+setNarrationChoice('room-a', 'no');
+assert(getNarrationChoice('room-a') === 'no', 'and can be changed to no');
+assert(getNarrationChoice('room-b') === null, 'one room does not decide for another');
+assert(getNarrationChoice('') === null, 'a missing room id is not a decision');
+
 console.log(`\nCLASS PACK RESULT: ${pass} passed, ${fail} failed`);
 if (fails.length) { console.log('FAILURES:'); fails.forEach(f => console.log('  - ' + f)); }
 process.exit(fail === 0 ? 0 : 1);

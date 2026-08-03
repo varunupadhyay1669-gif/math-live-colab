@@ -19,7 +19,7 @@ import ChatPanel from "../components/ChatPanel";
 import VideoCall from "../components/VideoCall";
 import VideoOverlay from "../components/VideoOverlay";
 import { ClassPack } from "../lib/classPack";
-import { Narrator, narrationSupported } from "../lib/narration";
+import { Narrator, narrationSupported, getNarrationChoice, setNarrationChoice } from "../lib/narration";
 import FeedbackToasts from "../components/FeedbackToasts";
 import PausedOverlay from "../components/PausedOverlay";
 import TimerDisplay from "../components/TimerDisplay";
@@ -2241,31 +2241,55 @@ export default function Room() {
     }
   }, []);
 
+  const startNarration = useCallback((announce: boolean) => {
+    if (!narrationSupported() || narratorRef.current) return false;
+    const n = new Narrator((text) => {
+      packRef.current.addNarration(teacherName, text);
+      setPackCounts(packRef.current.counts);
+    });
+    if (!n.start()) return false;
+    narratorRef.current = n;
+    setNarrationOn(true);
+    packRef.current.note('Started capturing what was said');
+    socket?.emit('narration_request', { roomId, on: true, elapsed: Date.now() - packRef.current.startedAt });
+    if (announce) showNotif('🎙️ Capturing speech as text — your student is being asked too');
+    return true;
+  }, [socket, roomId, teacherName]);
+
+  const stopNarration = useCallback((announce: boolean) => {
+    narratorRef.current?.stop();
+    narratorRef.current = null;
+    setNarrationOn(false);
+    packRef.current.note('Stopped capturing speech');
+    socket?.emit('narration_request', { roomId, on: false, elapsed: Date.now() - packRef.current.startedAt });
+    if (announce) showNotif('🎙️ Stopped capturing speech');
+  }, [socket, roomId]);
+
   const toggleNarration = () => {
-    const next = !narrationOn;
-    if (next && !narrationSupported()) {
+    if (!narrationOn && !narrationSupported()) {
       showNotif('🎙️ This browser cannot turn speech into text — try Chrome or Edge.');
       return;
     }
-    setNarrationOn(next);
-    // Tell them how far into the lesson we are, so their lines land on our clock.
-    socket?.emit('narration_request', { roomId, on: next, elapsed: Date.now() - packRef.current.startedAt });
-    if (next) {
-      const n = new Narrator((text) => {
-        packRef.current.addNarration(teacherName, text);
-        setPackCounts(packRef.current.counts);
-      });
-      if (!n.start()) { setNarrationOn(false); showNotif('🎙️ Could not start — check microphone permission.'); return; }
-      narratorRef.current = n;
-      packRef.current.note('Started capturing what was said');
-      showNotif('🎙️ Capturing speech as text — your student is being asked too');
-    } else {
-      narratorRef.current?.stop();
-      narratorRef.current = null;
-      packRef.current.note('Stopped capturing speech');
-      showNotif('🎙️ Stopped capturing speech');
-    }
+    // An explicit press is a decision worth remembering, in both directions.
+    setNarrationChoice(roomId || '', narrationOn ? 'no' : 'yes');
+    if (narrationOn) stopNarration(true);
+    else if (!startNarration(true)) showNotif('🎙️ Could not start — check microphone permission.');
   };
+
+  // ── Start it on its own ──
+  // Reaching for a button mid-explanation is exactly when it gets forgotten,
+  // and a forgotten switch means the lesson's context is simply gone. So the
+  // moment a class is genuinely under way — a student is in the room — this
+  // starts itself, unless the teacher has previously said no for this room.
+  const autoNarrateTriedRef = useRef(false);
+  useEffect(() => {
+    if (autoNarrateTriedRef.current || narrationOn) return;
+    if (!users.some(u => u.role === 'student')) return;      // no class yet
+    if (getNarrationChoice(roomId || '') === 'no') return;   // they turned it off before
+    if (!narrationSupported()) return;
+    autoNarrateTriedRef.current = true;
+    if (startNarration(false)) showNotif('🎙️ Writing down the lesson — press Listening to stop');
+  }, [users, narrationOn, roomId, startNarration]);
 
   // The microphone must not keep listening after this page goes away.
   useEffect(() => () => { narratorRef.current?.stop(); narratorRef.current = null; }, []);
