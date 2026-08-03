@@ -19,6 +19,7 @@ import ChatPanel from "../components/ChatPanel";
 import VideoCall from "../components/VideoCall";
 import VideoOverlay from "../components/VideoOverlay";
 import { ClassPack } from "../lib/classPack";
+import { savePack, loadPack, packKey, prunePacks } from "../lib/packStore";
 import { captureLesson } from "../lib/lessonShot";
 import { buildPackJson, buildPackArchive, slugId, type RawSnapshot } from "../lib/packExport";
 import { newStrokesSince, strokeBounds, boardRectToScreen, padRect, cropCanvas } from "../lib/inkDelta";
@@ -2411,6 +2412,56 @@ export default function Room() {
     }, 1200);
     return () => clearTimeout(timer);
   }, [whiteboardMode, showTempContent, tempContent, previewHtml, iframeDocNonce]);
+
+  // ── Surviving a reload ──
+  // The pack is the lesson's only record while the lesson runs. Losing it to a
+  // refresh at minute 40 is unrecoverable, because the lesson is over. Restore
+  // anything already captured for this room today, then keep saving.
+  const [packRestored, setPackRestored] = useState(false);
+  useEffect(() => {
+    if (!roomId || packRestored) return;
+    let cancelled = false;
+    (async () => {
+      const stored = await loadPack(packKey(roomId, Date.now()));
+      if (cancelled || !stored) { setPackRestored(true); return; }
+      const revived = ClassPack.fromState(stored.state);
+      if (revived) {
+        packRef.current = revived;
+        setPackCounts(revived.counts);
+        showNotif(`📦 Picked up this lesson's record again — ${revived.counts.snapshots} snapshots, ${revived.counts.narration} spoken lines`);
+      }
+      setPackRestored(true);
+      // These hold a student's work; don't let them pile up on a shared machine.
+      void prunePacks();
+    })();
+    return () => { cancelled = true; };
+  }, [roomId, packRestored]);
+
+  // Save on a slow tick and whenever the page is being hidden — the latter is
+  // what actually catches a closing tab, since unload gives no time for async.
+  useEffect(() => {
+    if (!roomId || !packRestored) return;
+    const write = () => {
+      const pack = packRef.current;
+      if (pack.isEmpty) return;
+      void savePack({
+        key: packKey(roomId, pack.startedAt),
+        room: roomId,
+        startedAt: pack.startedAt,
+        savedAt: Date.now(),
+        state: pack.toState(),
+      });
+    };
+    const id = setInterval(write, 20_000);
+    document.addEventListener('visibilitychange', write);
+    window.addEventListener('pagehide', write);
+    return () => {
+      clearInterval(id);
+      document.removeEventListener('visibilitychange', write);
+      window.removeEventListener('pagehide', write);
+      write();
+    };
+  }, [roomId, packRestored]);
 
   // ── P0-3: snapshot when the board actually CHANGES ──
   // A timer produced runs of near-identical frames and missed the moments that

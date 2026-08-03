@@ -120,6 +120,37 @@ export function transcriptWindow(lines: PackTranscriptLine[], tSeconds: number, 
     .map(l => l.id);
 }
 
+/**
+ * P2-3: spans where nobody said anything for a while.
+ *
+ * A reader cannot otherwise tell working-in-silence from a stall, and the two
+ * mean opposite things: a quiet stretch while she works through a problem is
+ * the lesson going well; the same gap while she is stuck is the thing the next
+ * worksheet should target. Only gaps BETWEEN speech count — the quiet before
+ * the first word is someone setting up, not a silence in the lesson.
+ */
+export function silenceSpans(
+  transcript: PackTranscriptLine[],
+  minGapS = 30,
+  endsAtS?: number,
+): PackEvent[] {
+  const out: PackEvent[] = [];
+  for (let i = 1; i < transcript.length; i++) {
+    const gap = transcript[i].t - transcript[i - 1].t;
+    if (gap >= minGapS) {
+      out.push({ t: transcript[i - 1].t, type: 'silence', duration_s: Math.round(gap) });
+    }
+  }
+  // A long quiet run at the very end is real too — she was finishing something.
+  if (endsAtS !== undefined && transcript.length > 0) {
+    const last = transcript[transcript.length - 1].t;
+    if (endsAtS - last >= minGapS) {
+      out.push({ t: last, type: 'silence', duration_s: Math.round(endsAtS - last) });
+    }
+  }
+  return out;
+}
+
 export function buildPackJson(inputs: PackInputs): ClassPackJson {
   const transcript = buildTranscript(inputs);
   const durationS = Math.max(0, Math.round((inputs.endedAt - inputs.startedAt) / 1000));
@@ -193,7 +224,10 @@ export function buildPackJson(inputs: PackInputs): ClassPackJson {
       tutor_note_after: inputs.noteAfter,
     },
     transcript,
-    events: [...inputs.events].sort((a, b) => a.t - b.t),
+    events: [
+      ...inputs.events,
+      ...silenceSpans(transcript, 30, durationS),
+    ].sort((a, b) => a.t - b.t),
     surfaces: inputs.surfaces,
     snapshots,
     materials,

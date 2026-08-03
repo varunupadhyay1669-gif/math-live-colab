@@ -92,6 +92,16 @@
       "type": "control_handed_to_student"
     },
     {
+      "t": 1672,
+      "type": "silence",
+      "duration_s": 228
+    },
+    {
+      "t": 1900,
+      "type": "silence",
+      "duration_s": 640
+    },
+    {
       "t": 1964,
       "type": "surface_changed",
       "surface_id": "exp_1"
@@ -105,6 +115,11 @@
       "t": 2400,
       "type": "silence",
       "duration_s": 42
+    },
+    {
+      "t": 2540,
+      "type": "silence",
+      "duration_s": 340
     }
   ],
   "surfaces": [

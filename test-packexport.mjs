@@ -12,6 +12,9 @@ import { averageHash, hammingDistance, isNearDuplicate, lumaGrid, newStrokesSinc
 import { summariseInteractives, withUnattempted, readCorrectness, optionIndexOf, closestQuestionBlock } from './src/lib/interactives.ts';
 import { outlineExplainer, extractQuestions, extractWorkedExamples, explainerTitle } from './src/lib/explainerOutline.ts';
 import { buildZip, crc32 } from './src/lib/zip.ts';
+import { silenceSpans } from './src/lib/packExport.ts';
+import { ClassPack } from './src/lib/classPack.ts';
+import { packKey } from './src/lib/packStore.ts';
 
 let pass = 0, fail = 0; const fails = [];
 const ok = (n) => { pass++; console.log(`  ✓ ${n}`); };
@@ -218,6 +221,44 @@ assert(pack.capture_report.failures.some(f => f.what === 'ocr'), 'the missing OC
 assert(pack.capture_report.failures.some(f => f.what === 'lesson_screen_recording'), 'and so is a capture that did not run');
 const silent = buildPackJson(fixture({ narration: [] }));
 assert(silent.capture_report.failures.some(f => f.what === 'transcript'), 'an empty transcript explains itself');
+
+console.log('E14: silence spans tell working-in-quiet from a stall (P2-3)');
+const lines = (ts) => ts.map((t, i) => ({ id: `t${i}`, t, speaker: 'x', role: 'tutor', text: 'x', confidence: null, low_confidence: false, alternates: [], surface_id: null }));
+const gaps = silenceSpans(lines([10, 20, 100, 105]), 30);
+assert(gaps.length === 1, 'only the real gap is reported', String(gaps.length));
+assert(gaps[0].t === 20 && gaps[0].duration_s === 80, 'starting when the talking stopped, with its length', JSON.stringify(gaps[0]));
+assert(silenceSpans(lines([10, 20, 30]), 30).length === 0, 'a chatty stretch has no silences');
+assert(silenceSpans(lines([]), 30).length === 0, 'no speech at all yields no spans, not one giant silence');
+assert(silenceSpans(lines([10]), 30, 200).length === 1, 'a long quiet run at the end counts');
+assert(silenceSpans(lines([10]), 30, 20).length === 0, 'but a short tail does not');
+const withSilence = buildPackJson(fixture());
+assert(withSilence.events.some(e => e.type === 'silence'), 'silences reach the exported events');
+assert(withSilence.events.every((e, i, all) => i === 0 || all[i - 1].t <= e.t), 'and the event list stays in time order');
+assert(withSilence.events.some(e => e.type === 'control_handed_to_student'), 'the handover events are still there');
+
+console.log('E15: a pack survives a reload');
+const live = new ClassPack();
+live.meta = { room: 'kanishka', teacher: 'Varun', student: 'Kanishka' };
+live.addNarration('Varun', 'so we subtract two from both sides');
+live.addNarration('Kanishka', 'is it minus eighteen');
+live.addArtifact('explanation', 'Interval notation', '<html>...</html>');
+live.note('Switched to the whiteboard');
+live.offerImage(IMG, 400, 300, 'Whiteboard', { force: true, surfaceId: 'wb_1', reason: 'ink_committed', inkBbox: [1, 2, 3, 4] });
+const revived = ClassPack.fromState(JSON.parse(JSON.stringify(live.toState())));
+assert(revived !== null, 'it comes back');
+assert(revived.startedAt === live.startedAt, 'with the same start time, so timestamps stay meaningful');
+assert(JSON.stringify(revived.counts) === JSON.stringify(live.counts), 'and nothing is missing', JSON.stringify(revived.counts));
+assert(revived.allNarration[1].text === 'is it minus eighteen', 'the student is still quoted');
+assert(revived.allSnapshots[0].inkBbox[2] === 3, 'ink metadata survives the round trip');
+assert(revived.meta.student === 'Kanishka', 'and who the lesson was with');
+
+console.log('E16: a damaged record is refused rather than half-restored');
+assert(ClassPack.fromState(null) === null, 'null is refused');
+assert(ClassPack.fromState({ v: 99, startedAt: 1, snapshots: [], narration: [] }) === null, 'an unknown version is refused');
+assert(ClassPack.fromState({ v: 1, startedAt: 'nope', snapshots: [], narration: [] }) === null, 'a corrupt start time is refused');
+assert(ClassPack.fromState({ v: 1, startedAt: 1, snapshots: 'x', narration: [] }) === null, 'missing snapshots are refused');
+assert(packKey('kanishka', Date.parse('2026-08-03T20:00:00Z')).startsWith('kanishka:2026-08-0'), 'the key is room plus day', packKey('kanishka', Date.parse('2026-08-03T20:00:00Z')));
+assert(packKey('a', 1) !== packKey('b', 1), 'two rooms never share a record');
 
 console.log(`\nPACK EXPORT RESULT: ${pass} passed, ${fail} failed`);
 if (fails.length) { console.log('FAILURES:'); fails.forEach(f => console.log('  - ' + f)); }

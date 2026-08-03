@@ -72,6 +72,22 @@ const MAX_BODY_CHARS = 40_000;     // per artifact, so one huge sim can't domina
 const MAX_NARRATION = 4_000;       // ~a very talkative two-hour lesson
 const MAX_LESSON_STATES = 300;
 
+/** The serialised form of a pack, as written to the store. */
+export interface PackState {
+  v: 1;
+  startedAt: number;
+  meta: ClassPack['meta'];
+  snapshots: Snapshot[];
+  artifacts: Artifact[];
+  moments: Moment[];
+  narration: NarrationLine[];
+  lessonStates: LessonState[];
+  duplicatesSuppressed: number;
+  lastHash: string;
+  lastSignature: string;
+  lastLessonText: string;
+}
+
 export class ClassPack {
   readonly startedAt = Date.now();
   private snapshots: Snapshot[] = [];
@@ -239,6 +255,51 @@ export class ClassPack {
   get isEmpty() {
     return this.snapshots.length === 0 && this.artifacts.length === 0
       && this.moments.length === 0 && this.narration.length === 0;
+  }
+
+  // ── Surviving a reload ──
+  // The pack is the lesson's only record while the lesson is running, so it has
+  // to be recoverable. Serialised as plain data (images stay as data URLs) so
+  // the store never needs to understand the class.
+  toState(): PackState {
+    return {
+      v: 1,
+      startedAt: this.startedAt,
+      meta: this.meta,
+      snapshots: this.snapshots,
+      artifacts: this.artifacts,
+      moments: this.moments,
+      narration: this.narration,
+      lessonStates: this.lessonStates,
+      duplicatesSuppressed: this.duplicatesSuppressed,
+      lastHash: this.lastHash,
+      lastSignature: this.lastSignature,
+      lastLessonText: this.lastLessonText,
+    };
+  }
+
+  /**
+   * Rebuild from stored state. Returns null on anything unrecognisable rather
+   * than half-restoring: a partially-restored pack would silently export a
+   * lesson missing its middle, which is worse than starting clean.
+   */
+  static fromState(state: unknown): ClassPack | null {
+    const st = state as PackState;
+    if (!st || typeof st !== 'object' || st.v !== 1 || typeof st.startedAt !== 'number') return null;
+    if (!Array.isArray(st.snapshots) || !Array.isArray(st.narration)) return null;
+    const pack = new ClassPack();
+    (pack as { startedAt: number }).startedAt = st.startedAt;   // readonly by intent, restored here only
+    pack.meta = st.meta || { room: '', teacher: '' };
+    pack.snapshots = st.snapshots;
+    pack.artifacts = st.artifacts || [];
+    pack.moments = st.moments || [];
+    pack.narration = st.narration;
+    pack.lessonStates = st.lessonStates || [];
+    pack.duplicatesSuppressed = st.duplicatesSuppressed || 0;
+    pack.lastHash = st.lastHash || '';
+    pack.lastSignature = st.lastSignature || '';
+    pack.lastLessonText = st.lastLessonText || '';
+    return pack;
   }
 
   /** Everything, as one PDF. */
