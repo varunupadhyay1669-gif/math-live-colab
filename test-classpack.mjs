@@ -123,6 +123,48 @@ assert(/^class-pack-Anika-Kapoor-\d{4}-\d{2}-\d{2}\.pdf$/.test(p.suggestedFilena
 assert(paginate([1, 2, 3, 4, 5], 2).length === 3, 'long content is split across pages');
 assert(paginate([], 10).length === 1, 'and an empty list still yields one page');
 
+console.log('C9: speech from both sides becomes one readable script');
+const { mergeTranscript } = await import('./src/lib/narration.ts');
+const raw = [
+  { t: 9000, speaker: 'Anika', text: 'is it eight?' },
+  { t: 1000, speaker: 'Varun', text: 'so we take away eight' },
+  { t: 3000, speaker: 'Varun', text: 'and again' },
+  { t: 40000, speaker: 'Varun', text: 'right, next question' },
+];
+const merged = mergeTranscript(raw);
+assert(merged[0].speaker === 'Varun' && merged[0].t === 1000, 'sorted by time, whichever device sent it first');
+assert(merged[0].text === 'so we take away eight and again', 'a run by one speaker joins into a sentence', merged[0].text);
+assert(merged[1].speaker === 'Anika', 'the other speaker starts a new line');
+assert(merged.length === 3, 'a long pause starts a fresh line even for the same speaker', String(merged.length));
+assert(mergeTranscript([]).length === 0, 'no speech is not a crash');
+assert(mergeTranscript(null).length === 0, 'nor is nothing at all');
+assert(mergeTranscript([{ t: 1, speaker: 'A', text: '' }]).length === 0, 'empty utterances are dropped');
+
+console.log('C10: the pack tells one story in time order');
+const p2 = new ClassPack();
+p2.meta = { room: 'r', teacher: 'Varun', student: 'Anika' };
+p2.addNarration('Varun', 'lets look at question two', 5000);
+p2.offerLessonState('Question 2: divide 3128 by 8', 'Lesson');
+p2.addNarration('Anika', 'do I take away eight each time', 9000);
+p2.note('Switched to the whiteboard');
+assert(p2.counts.narration === 2, 'both speakers are captured', JSON.stringify(p2.counts));
+assert(p2.offerLessonState('Question 2: divide 3128 by 8', 'Lesson') === false, 'an unchanged screen is not recorded twice');
+assert(p2.offerLessonState('Question 3: divide 4256 by 7', 'Lesson') === true, 'but a new question is');
+const t2b = textOf(await bytesOf(p2.buildPdf()));
+assert(t2b.includes('What happened, in order'), 'the account is one section, not three lists');
+assert(t2b.includes('lets look at question two'), 'the teacher is quoted');
+assert(t2b.includes('do I take away eight each time'), 'and so is the student');
+assert(t2b.includes('Question 2: divide 3128 by 8'), 'with what was on screen at the time');
+const iVarun = t2b.indexOf('lets look at question two');
+const iAnika = t2b.indexOf('do I take away eight each time');
+assert(iVarun > 0 && iAnika > iVarun, 'and it reads in the order it happened', `${iVarun} vs ${iAnika}`);
+
+console.log('C11: a pack with speech but nothing drawn is still worth having');
+const p3 = new ClassPack();
+p3.addNarration('Varun', 'we did this all verbally today');
+assert(p3.isEmpty === false, 'speech alone counts as content');
+assert(textOf(await bytesOf(p3.buildPdf())).includes('we did this all verbally today'), 'and reaches the file');
+
 console.log(`\nCLASS PACK RESULT: ${pass} passed, ${fail} failed`);
 if (fails.length) { console.log('FAILURES:'); fails.forEach(f => console.log('  - ' + f)); }
 process.exit(fail === 0 ? 0 : 1);

@@ -13,6 +13,7 @@ import { LESSON_IFRAME_SANDBOX, LESSON_IFRAME_ALLOW } from "../lib/iframeAttrs";
 import ChatPanel from "../components/ChatPanel";
 import VideoCall from "../components/VideoCall";
 import VideoOverlay from "../components/VideoOverlay";
+import { Narrator, narrationSupported } from "../lib/narration";
 import StudentReactions from "../components/StudentReactions";
 import PausedOverlay from "../components/PausedOverlay";
 import TimerDisplay from "../components/TimerDisplay";
@@ -91,6 +92,12 @@ export default function StudentView() {
   // touch the lesson, with a button that actually asks the teacher.
   const [lockedNudge, setLockedNudge] = useState(false);
   const [askedAt, setAskedAt] = useState(0);
+  // The teacher has asked the room to capture speech as text. This student is
+  // ASKED before their microphone is ever used, and can stop at any time.
+  const [narrationAsk, setNarrationAsk] = useState(false);
+  const [narrationOn, setNarrationOn] = useState(false);
+  const narratorRef = useRef<Narrator | null>(null);
+  const narrationStartRef = useRef(0);
   const [currentHtml, setCurrentHtml] = useState("");
   // Server-issued deterministic RNG seed for the current lesson - injected
   // into the sim so Math.random() matches the teacher's exactly.
@@ -628,6 +635,22 @@ export default function StudentView() {
     });
     // Fingerprint of the teacher's current screen. The follower compares it with
     // what it actually rendered and asks for a resync if a frame was lost.
+    newSocket.on("narration_request", ({ on, elapsed }: { on: boolean; elapsed?: number }) => {
+      if (!on) {
+        setNarrationAsk(false);
+        setNarrationOn(false);
+        narratorRef.current?.stop();
+        narratorRef.current = null;
+        return;
+      }
+      if (!narrationSupported()) return;   // nothing to offer on this browser
+      // Anchor to the teacher's lesson clock: our lines are stamped as
+      // (their elapsed at this instant) + (time since). Stamping from our own
+      // arrival would put every student line near zero and scramble the order
+      // of the merged transcript.
+      narrationStartRef.current = Date.now() - Math.max(0, Number(elapsed) || 0);
+      setNarrationAsk(true);
+    });
     newSocket.on("mirror_ping", ({ h }: { h?: string }) => {
       if (typeof h !== 'string') return;
       postToIframe({ type: 'MIRROR_PING', h });
@@ -1865,6 +1888,59 @@ export default function StudentView() {
       {/* A clip the teacher is showing. It opens, plays, pauses and closes on
           their say-so — the student can only move it around and turn sound on. */}
       <VideoOverlay socket={socket} roomId={roomId!} isTeacher={false} />
+
+      {/* Consent, not a notification. The teacher can ask; only the student
+          can agree, and their microphone stays shut until they do. */}
+      {narrationAsk && !narrationOn && (
+        <div className="fixed inset-0 z-[88] flex items-end justify-center p-4 pb-24 sm:items-center sm:pb-4"
+          style={{ background: 'rgba(0,0,0,0.32)' }}>
+          <div className="w-full max-w-sm animate-bounce-in"
+            style={{ background: 'var(--bg-card)', borderRadius: 'var(--radius-xl)', border: '1px solid var(--border-subtle)', boxShadow: 'var(--shadow-xl)', padding: 20 }}>
+            <div className="text-3xl mb-2" aria-hidden="true">🎙️</div>
+            <div className="text-base font-semibold" style={{ color: 'var(--text-primary)' }}>
+              Write down what we say?
+            </div>
+            <div className="text-sm mt-1.5" style={{ color: 'var(--text-secondary)', lineHeight: 1.55 }}>
+              Your teacher wants to keep a written note of this lesson. Your device
+              would turn what you say into text and send only the words — never a
+              recording of your voice. You can stop it whenever you like.
+            </div>
+            <div className="flex gap-2 mt-4">
+              <button onClick={() => setNarrationAsk(false)}
+                className="flex-1 px-4 py-2.5 text-sm rounded-lg font-medium"
+                style={{ color: 'var(--text-secondary)', border: '1px solid var(--border-default)' }}>
+                No thanks
+              </button>
+              <button onClick={() => {
+                  const n = new Narrator((text) => {
+                    socket?.emit('narration_line', { roomId, text, t: Date.now() - narrationStartRef.current });
+                  });
+                  if (!n.start()) { setNarrationAsk(false); showNotification('Could not start — check microphone permission.'); return; }
+                  narratorRef.current = n;
+                  setNarrationOn(true);
+                  setNarrationAsk(false);
+                  showNotification('🎙️ Writing down what is said');
+                }}
+                className="flex-1 px-4 py-2.5 text-sm rounded-lg font-medium text-white"
+                style={{ background: 'var(--accent-indigo)' }}>
+                That is fine
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* While it is on, say so plainly and keep the off switch in reach. */}
+      {narrationOn && (
+        <button
+          onClick={() => { narratorRef.current?.stop(); narratorRef.current = null; setNarrationOn(false); showNotification('🎙️ Stopped'); }}
+          className="fixed bottom-3 left-3 z-[84] flex items-center gap-2 px-3 py-2 rounded-full text-xs font-semibold"
+          style={{ background: '#7F1D1D', color: '#FEE2E2', boxShadow: 'var(--shadow-lg)' }}
+          title="Stop writing down what is said">
+          <span style={{ width: 8, height: 8, borderRadius: 999, background: '#F87171', display: 'inline-block' }} />
+          Writing down what we say · Stop
+        </button>
+      )}
 
       {/* ── "It's locked" nudge ──
           A view-only tap used to be swallowed in silence, so the student sits

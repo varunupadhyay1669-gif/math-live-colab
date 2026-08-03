@@ -56,6 +56,8 @@ interface TeacherControlsProps {
   onStopVideo: () => void;         // closes it on everyone's screen
   // Class pack — the whole lesson as one file for a language model
   onDownloadPack: () => void;
+  narrationOn: boolean;
+  onToggleNarration: () => void;
   packBusy: boolean;
   packCount: number;               // snapshots + materials collected so far
   // Annotation eraser (HTML-overlay drawings)
@@ -88,7 +90,7 @@ export default function TeacherControls({
   onToggleWhiteboard, whiteboardMode,
   explanationActive, explanationName, onUploadExplanation, onExitExplanation,
   videoActive, onShowVideo, onStopVideo,
-  onDownloadPack, packBusy, packCount,
+  onDownloadPack, onToggleNarration, narrationOn, packBusy, packCount,
   eraserMode, onSetEraserMode,
   shapeTool, onSetShapeTool,
   followStudentClicks, onToggleFollowStudentClicks,
@@ -406,6 +408,22 @@ export default function TeacherControls({
             <path d="M10.5 9.5l5 2.5-5 2.5z" fill="currentColor" stroke="none" />
           </svg>
           <span className="tb-label-text">{videoActive ? 'Stop video' : 'Video'}</span>
+        </button>
+
+        {/* Capture what's said as text, so the pack has the talking too. */}
+        <button
+          onClick={onToggleNarration}
+          className={`tb-btn-mic ${narrationOn ? 'is-on' : ''}`}
+          aria-pressed={narrationOn}
+          data-tip={narrationOn
+            ? 'Stop writing down what is said'
+            : 'Write down what is said, into the class pack (asks your student first)'}
+        >
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <rect x="9" y="2" width="6" height="11" rx="3" />
+            <path d="M5 10a7 7 0 0014 0" /><path d="M12 17v5" />
+          </svg>
+          <span className="tb-label-text">{narrationOn ? 'Listening' : 'Narrate'}</span>
         </button>
 
         {/* The whole lesson as one file, for pasting into a language model. */}

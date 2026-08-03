@@ -48,6 +48,8 @@ interface RoomData {
   // leaves it here to reopen; only an explicit delete discards it.
   explanations: Array<{ id: string; name: string; html: string }>;
   activeExplanationId: string | null;
+  /** Has the teacher asked the room to transcribe what's said? */
+  narrationOn: boolean;
   liveSnapshotHtml: string | null;
   // LIVE MIRROR: the teacher's authoritative iframe DOM (latest snapshot),
   // relayed to students and cached so a late-joiner renders instantly.
@@ -367,6 +369,7 @@ async function startServer() {
       tempContent: null,
       explanations: [],
       activeExplanationId: null,
+      narrationOn: false,
       liveSnapshotHtml: null,
       mirrorBody: null,
       mirrorAttrs: null,
@@ -2504,6 +2507,36 @@ Build a widget that teaches: ${safePrompt}`;
       if (!requireTeacher(room, socket.id)) return;
       room.explanations = [];
       activateExplanation(roomId, room, null);
+    });
+
+    // ─── NARRATION (what was said, as text) ───
+    // Each device transcribes its OWN microphone and relays short lines. No
+    // audio is ever uploaded — only text the speaker's own browser produced.
+    // The teacher asks the room to start; each student's browser then asks
+    // that student before it listens (see StudentView).
+    socket.on('narration_request', ({ roomId, on, elapsed }: { roomId: string; on: boolean; elapsed?: number }) => {
+      if (typeof roomId !== 'string') return;
+      const room = rooms.get(roomId);
+      if (!requireTeacher(room, socket.id)) return;
+      room.narrationOn = !!on;
+      // `elapsed` is how far into the lesson the TEACHER's pack currently is.
+      // Passing it through puts both sides on one clock: the student stamps
+      // their lines against it instead of against their own arrival, which is
+      // the only way the merged transcript can be in true order.
+      socket.to(roomId).emit('narration_request', { on: !!on, elapsed: Math.max(0, Number(elapsed) || 0) });
+    });
+    socket.on('narration_line', ({ roomId, text, t }: { roomId: string; text: string; t: number }) => {
+      if (typeof roomId !== 'string' || typeof text !== 'string') return;
+      if (!checkRateLimit(socket.id, true)) return;
+      const room = rooms.get(roomId);
+      if (!isMember(room, socket.id) || !room.teacherSocketId) return;
+      if (socket.id === room.teacherSocketId) return;   // the teacher keeps their own
+      const user = room.users.get(socket.id);
+      io.to(room.teacherSocketId).emit('narration_line', {
+        speaker: user?.name || 'Student',
+        text: text.slice(0, 600),
+        t: Math.max(0, Number(t) || 0),
+      });
     });
 
     // ─── "PLEASE UNLOCK IT" (student → teacher) ───

@@ -1,4 +1,5 @@
 import { PdfBuilder, dataUrlToBytes, type TextLine, type PdfImage } from './pdf';
+import { mergeTranscript, type NarrationLine } from './narration';
 
 // ─────────────────────────────────────────────────────────────────────────
 // The class pack — everything that happened in a lesson, in one file you can
@@ -36,12 +37,22 @@ export interface Moment {
   text: string;
 }
 
+/** A snapshot of the lesson's live DOM — what was actually on screen. */
+export interface LessonState {
+  t: number;
+  /** Readable text of the page at that moment (which question was showing). */
+  text: string;
+  label: string;
+}
+
 /** How different two board snapshots must be before another is worth keeping. */
 const MIN_SNAPSHOT_GAP_MS = 20_000;
 const MAX_SNAPSHOTS = 60;          // ~60 pages of board is already a lot
 const MAX_ARTIFACTS = 40;
 const MAX_MOMENTS = 400;
 const MAX_BODY_CHARS = 40_000;     // per artifact, so one huge sim can't dominate
+const MAX_NARRATION = 4_000;       // ~a very talkative two-hour lesson
+const MAX_LESSON_STATES = 300;
 
 export class ClassPack {
   readonly startedAt = Date.now();
@@ -50,6 +61,9 @@ export class ClassPack {
   private moments: Moment[] = [];
   private lastSnapshotAt = 0;
   private lastSignature = '';
+  private narration: NarrationLine[] = [];
+  private lessonStates: LessonState[] = [];
+  private lastLessonText = '';
 
   meta: { room: string; teacher: string; student?: string; topic?: string } = { room: '', teacher: '' };
 
@@ -101,12 +115,41 @@ export class ClassPack {
     return true;
   }
 
+  /** A line somebody said, from either side of the call. */
+  addNarration(speaker: string, text: string, t = this.since()) {
+    const clean = (text || '').trim();
+    if (!clean) return;
+    if (this.narration.length >= MAX_NARRATION) this.narration.shift();
+    this.narration.push({ t, speaker: speaker || 'Someone', text: clean.slice(0, 600) });
+  }
+
+  /**
+   * What the lesson page actually said at this moment — which question was up,
+   * what the sim was showing. Recorded only when it CHANGES, so a page sitting
+   * still costs nothing and a quiz advancing is captured every time.
+   */
+  offerLessonState(text: string, label: string) {
+    const clean = (text || '').replace(/\s+/g, ' ').trim();
+    if (!clean || clean === this.lastLessonText) return false;
+    this.lastLessonText = clean;
+    if (this.lessonStates.length >= MAX_LESSON_STATES) this.lessonStates.shift();
+    this.lessonStates.push({ t: this.since(), text: clean.slice(0, 4000), label });
+    return true;
+  }
+
   get counts() {
-    return { snapshots: this.snapshots.length, artifacts: this.artifacts.length, moments: this.moments.length };
+    return {
+      snapshots: this.snapshots.length,
+      artifacts: this.artifacts.length,
+      moments: this.moments.length,
+      narration: this.narration.length,
+      lessonStates: this.lessonStates.length,
+    };
   }
 
   get isEmpty() {
-    return this.snapshots.length === 0 && this.artifacts.length === 0 && this.moments.length === 0;
+    return this.snapshots.length === 0 && this.artifacts.length === 0
+      && this.moments.length === 0 && this.narration.length === 0;
   }
 
   /** Everything, as one PDF. */
@@ -127,29 +170,53 @@ export class ClassPack {
       ...kv('Length', humanDuration(dur)),
       ...kv('Board snapshots', String(this.snapshots.length)),
       ...kv('Materials used', String(this.artifacts.length)),
+      ...kv('Spoken lines captured', this.narration.length ? String(this.narration.length) : 'none (narration was off)'),
+      ...kv('Lesson screens recorded', String(this.lessonStates.length)),
       { text: '', gap: 10 },
       { text: 'How to read this pack', size: 12, bold: true },
       ...PdfBuilder.wrap(
-        'The timeline below lists what happened, in order, with a timestamp from the start of the ' +
-        'lesson. After it comes the source of every lesson page and explainer that was shown — read ' +
-        'these as the material being taught. Finally, each board snapshot appears as its own page, ' +
-        'captioned with the time it was taken, so the handwritten working can be followed in sequence.',
+        'First comes the lesson as it happened, in order: what was said (with the speaker), what the ' +
+        'lesson page was showing at that moment, and what the teacher did. Then the full source of ' +
+        'every lesson page and explainer that was used - read these as the material being taught. ' +
+        'Finally each board snapshot, captioned with its time, so the handwritten working can be ' +
+        'followed in sequence against the account above.',
         10,
       ).map((text) => ({ text, size: 10 })),
     ];
     b.addTextPage(cover);
 
-    // ── Timeline, paginated ──
-    const timelineLines: TextLine[] = [{ text: 'Timeline', size: 16, bold: true }];
-    if (this.moments.length === 0) {
+    // ── One chronological account ──
+    // Speech, what was on the lesson page, and what the teacher did are all
+    // interleaved by time. Read top to bottom it's the lesson as it happened:
+    // "here's what was on screen, here's what was said about it, then we moved
+    // to the board." Three separate lists would leave the model to guess the
+    // ordering, which is the one thing it cannot recover.
+    const entries: Array<{ t: number; kind: 'said' | 'screen' | 'did'; who?: string; text: string }> = [
+      ...mergeTranscript(this.narration).map(l => ({ t: l.t, kind: 'said' as const, who: l.speaker, text: l.text })),
+      ...this.lessonStates.map(s => ({ t: s.t, kind: 'screen' as const, text: `[${s.label}] ${s.text}` })),
+      ...this.moments.map(m => ({ t: m.t, kind: 'did' as const, text: m.text })),
+    ].sort((a, b) => a.t - b.t);
+
+    const timelineLines: TextLine[] = [
+      { text: 'What happened, in order', size: 16, bold: true },
+      { text: 'Speech is marked with the speaker. [Lesson] lines are what the page showed at that moment.', size: 8.5, gap: 2 },
+      { text: '', gap: 6 },
+    ];
+    if (entries.length === 0) {
       timelineLines.push({ text: 'Nothing was recorded for this session.', size: 10, gap: 6 });
     }
-    for (const m of this.moments) {
-      for (const [i, line] of PdfBuilder.wrap(`${stamp(m.t)}  ${m.text}`, 10).entries()) {
-        timelineLines.push({ text: i === 0 ? line : '        ' + line, size: 10 });
-      }
+    for (const e of entries) {
+      const head = e.kind === 'said' ? `${stamp(e.t)}  ${e.who}:` : `${stamp(e.t)}  ·`;
+      const body = e.kind === 'said' ? e.text : e.text;
+      const wrapped = PdfBuilder.wrap(`${head} ${body}`, e.kind === 'screen' ? 8.5 : 10);
+      wrapped.forEach((line, i) => timelineLines.push({
+        text: i === 0 ? line : '        ' + line,
+        size: e.kind === 'screen' ? 8.5 : 10,
+        bold: e.kind === 'did' && i === 0,
+        gap: i === 0 ? 2 : 0,
+      }));
     }
-    for (const chunk of paginate(timelineLines, 44)) b.addTextPage(chunk);
+    for (const chunk of paginate(timelineLines, 42)) b.addTextPage(chunk);
 
     // ── The material itself, as source ──
     for (const a of this.artifacts) {

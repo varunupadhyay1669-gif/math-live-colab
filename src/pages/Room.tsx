@@ -19,6 +19,7 @@ import ChatPanel from "../components/ChatPanel";
 import VideoCall from "../components/VideoCall";
 import VideoOverlay from "../components/VideoOverlay";
 import { ClassPack } from "../lib/classPack";
+import { Narrator, narrationSupported } from "../lib/narration";
 import FeedbackToasts from "../components/FeedbackToasts";
 import PausedOverlay from "../components/PausedOverlay";
 import TimerDisplay from "../components/TimerDisplay";
@@ -275,6 +276,11 @@ export default function Room() {
   const packRef = useRef<ClassPack>(new ClassPack());
   const [packCounts, setPackCounts] = useState({ snapshots: 0, artifacts: 0, moments: 0 });
   const [packBusy, setPackBusy] = useState(false);
+  // Narration: transcribe what's said, on both sides, into the pack's timeline.
+  // OFF until switched on — it is a recording of a child's voice being turned
+  // into text, so it is never silent or implicit.
+  const [narrationOn, setNarrationOn] = useState(false);
+  const narratorRef = useRef<Narrator | null>(null);
 
   // ── Shared YouTube clip (floats over whatever is on screen) ──
   const [videoPromptOpen, setVideoPromptOpen] = useState(false);
@@ -834,6 +840,11 @@ export default function Room() {
     });
     // The kept list behind the tab strip (names only — bodies stay server-side
     // until one is actually shown).
+    // Lines the student's own device transcribed from their microphone.
+    newSocket.on("narration_line", ({ speaker, text, t }: { speaker: string; text: string; t: number }) => {
+      packRef.current.addNarration(speaker, text, t);
+      setPackCounts(packRef.current.counts);
+    });
     // A view-only student tapped the lesson and asked to be let in.
     newSocket.on("interaction_requested", ({ studentName, at }: { studentName: string; at: number }) => {
       setInteractionAsk({ studentName: studentName || 'A student', at: at || Date.now() });
@@ -2230,6 +2241,50 @@ export default function Room() {
     }
   }, []);
 
+  const toggleNarration = () => {
+    const next = !narrationOn;
+    if (next && !narrationSupported()) {
+      showNotif('🎙️ This browser cannot turn speech into text — try Chrome or Edge.');
+      return;
+    }
+    setNarrationOn(next);
+    // Tell them how far into the lesson we are, so their lines land on our clock.
+    socket?.emit('narration_request', { roomId, on: next, elapsed: Date.now() - packRef.current.startedAt });
+    if (next) {
+      const n = new Narrator((text) => {
+        packRef.current.addNarration(teacherName, text);
+        setPackCounts(packRef.current.counts);
+      });
+      if (!n.start()) { setNarrationOn(false); showNotif('🎙️ Could not start — check microphone permission.'); return; }
+      narratorRef.current = n;
+      packRef.current.note('Started capturing what was said');
+      showNotif('🎙️ Capturing speech as text — your student is being asked too');
+    } else {
+      narratorRef.current?.stop();
+      narratorRef.current = null;
+      packRef.current.note('Stopped capturing speech');
+      showNotif('🎙️ Stopped capturing speech');
+    }
+  };
+
+  // The microphone must not keep listening after this page goes away.
+  useEffect(() => () => { narratorRef.current?.stop(); narratorRef.current = null; }, []);
+
+  // What the lesson page is SHOWING, sampled while it's the active surface.
+  // Recorded only when the text changes, so a quiz advancing is captured and a
+  // page sitting still costs nothing.
+  useEffect(() => {
+    if (whiteboardMode || showTempContent) return;
+    const id = setInterval(() => {
+      try {
+        const doc = iframeRef.current?.contentDocument;
+        const text = doc?.body?.innerText || '';
+        if (text && packRef.current.offerLessonState(text, 'Lesson')) setPackCounts(packRef.current.counts);
+      } catch { /* cross-origin or not loaded yet */ }
+    }, 5_000);
+    return () => clearInterval(id);
+  }, [whiteboardMode, showTempContent]);
+
   const downloadClassPack = async () => {
     if (packBusy) return;
     setPackBusy(true);
@@ -2887,6 +2942,8 @@ export default function Room() {
               onShowVideo={() => setVideoPromptOpen(true)}
               onStopVideo={() => socket?.emit('video_close', { roomId })}
               onDownloadPack={downloadClassPack}
+              narrationOn={narrationOn}
+              onToggleNarration={toggleNarration}
               packBusy={packBusy}
               packCount={packCounts.snapshots + packCounts.artifacts}
               eraserMode={eraserMode}

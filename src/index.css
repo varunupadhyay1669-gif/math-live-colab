@@ -2216,6 +2216,31 @@ body {
 .ml-dash-card-del { margin-left: auto; font-size: 15px !important; line-height: 1; padding: 3px 8px !important; }
 .ml-dash-card-del:hover { background: #DC2626 !important; color: #fff !important; border-color: #DC2626 !important; }
 
+/* ── Narrate (write down what is said, into the class pack) ── */
+.tb-btn-mic {
+  display: inline-flex; align-items: center; gap: 7px;
+  height: 36px; padding: 0 13px; border-radius: 10px;
+  font-size: 13px; font-weight: 600; letter-spacing: -0.005em;
+  color: var(--text-secondary); background: var(--bg-card);
+  border: 1px solid var(--border-default); cursor: pointer;
+  transition: background 140ms var(--ml-easing), border-color 140ms var(--ml-easing), color 140ms var(--ml-easing);
+}
+.tb-btn-mic:hover { border-color: var(--border-strong); }
+/* Unmistakable while live: someone's speech is being written down. */
+.tb-btn-mic.is-on {
+  background: #B91C1C; border-color: #B91C1C; color: #fff;
+  animation: ml-mic-pulse 2s ease-in-out infinite;
+}
+@keyframes ml-mic-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(185, 28, 28, 0.45); }
+  50% { box-shadow: 0 0 0 5px rgba(185, 28, 28, 0); }
+}
+@media (prefers-reduced-motion: reduce) { .tb-btn-mic.is-on { animation: none; } }
+@media (max-width: 760px) {
+  .tb-btn-mic span.tb-label-text { display: none; }
+  .tb-btn-mic { padding: 0 11px; }
+}
+
 /* ── Class pack (save the lesson as one file for an AI) ── */
 .tb-btn-pack {
   display: inline-flex; align-items: center; gap: 7px;
