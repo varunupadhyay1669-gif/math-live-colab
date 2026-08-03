@@ -19,6 +19,7 @@ import ChatPanel from "../components/ChatPanel";
 import VideoCall from "../components/VideoCall";
 import VideoOverlay from "../components/VideoOverlay";
 import { ClassPack } from "../lib/classPack";
+import { captureLesson } from "../lib/lessonShot";
 import { Narrator, narrationSupported, getNarrationChoice, setNarrationChoice } from "../lib/narration";
 import FeedbackToasts from "../components/FeedbackToasts";
 import PausedOverlay from "../components/PausedOverlay";
@@ -2217,19 +2218,41 @@ export default function Room() {
     setPackCounts(packRef.current.counts);
   }, [previewHtml, activeFileId, files]);
 
-  // Snapshot the board on a slow tick. ClassPack itself drops anything taken
-  // too soon or identical to the last one, so this can be dumb and regular.
+  // Snapshot whichever surface is in front, on a slow tick. ClassPack drops
+  // anything taken too soon or identical to the last one, so this can be dumb
+  // and regular. Two surfaces matter: the board, and the HTML lesson WITH the
+  // ink drawn over it — explaining over an HTML page is half of a lesson, and
+  // the pack had no picture of it at all.
+  const shootingRef = useRef(false);
+  // The ink canvas that sits over the lesson iframe, handed out by
+  // AnnotationLayer so a screenshot can include what was drawn on the page.
+  const annotationCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const holdAnnotationCanvas = useCallback((c: HTMLCanvasElement | null) => { annotationCanvasRef.current = c; }, []);
   useEffect(() => {
-    const tick = () => {
-      const canvas = whiteboardRef.current?.getCanvas();
-      if (!canvas || !whiteboardMode) return;
-      if (packRef.current.offerSnapshot(canvas, 'Whiteboard')) {
-        setPackCounts(packRef.current.counts);
+    const tick = async () => {
+      if (whiteboardMode) {
+        const canvas = whiteboardRef.current?.getCanvas();
+        if (canvas && packRef.current.offerSnapshot(canvas, 'Whiteboard')) {
+          setPackCounts(packRef.current.counts);
+        }
+        return;
+      }
+      // Rasterising a page takes real time; never let two overlap.
+      if (shootingRef.current) return;
+      shootingRef.current = true;
+      try {
+        const shot = await captureLesson(iframeRef.current, annotationCanvasRef.current);
+        const label = showTempContent ? (tempContent?.name ? `Explainer — ${tempContent.name}` : 'Explainer') : 'Lesson';
+        if (shot && packRef.current.offerImage(shot.dataUrl, shot.width, shot.height, label)) {
+          setPackCounts(packRef.current.counts);
+        }
+      } finally {
+        shootingRef.current = false;
       }
     };
-    const id = setInterval(tick, 10_000);
+    const id = setInterval(() => { void tick(); }, 10_000);
     return () => clearInterval(id);
-  }, [whiteboardMode]);
+  }, [whiteboardMode, showTempContent, tempContent]);
 
   // Leaving the board is the moment its contents matter most — grab it before
   // the teacher switches away, whatever the tick schedule says.
@@ -2240,6 +2263,16 @@ export default function Room() {
       setPackCounts(packRef.current.counts);
     }
   }, []);
+
+  /** Force a picture of whatever surface is in front, right now. */
+  const captureSurfaceNow = useCallback(async () => {
+    if (whiteboardMode) { captureBoardNow('Whiteboard (final)'); return; }
+    const shot = await captureLesson(iframeRef.current, annotationCanvasRef.current);
+    const label = showTempContent ? (tempContent?.name ? `Explainer — ${tempContent.name}` : 'Explainer') : 'Lesson';
+    if (shot && packRef.current.offerImage(shot.dataUrl, shot.width, shot.height, `${label} (final)`, { force: true })) {
+      setPackCounts(packRef.current.counts);
+    }
+  }, [whiteboardMode, showTempContent, tempContent, captureBoardNow]);
 
   const startNarration = useCallback((announce: boolean) => {
     if (!narrationSupported() || narratorRef.current) return false;
@@ -2313,7 +2346,7 @@ export default function Room() {
     if (packBusy) return;
     setPackBusy(true);
     try {
-      captureBoardNow('Whiteboard (final)');
+      await captureSurfaceNow();
       const pack = packRef.current;
       pack.meta = { room: roomId || '', teacher: teacherName, student: users.find(u => u.role === 'student')?.name };
       const blob = pack.buildPdf();
@@ -3425,6 +3458,7 @@ export default function Room() {
                   // notes made on an explanation stayed on screen over the
                   // lesson after closing it.
                   surface={showTempContent && activeExplanationId ? `exp:${activeExplanationId}` : 'main'}
+                  onCanvasReady={holdAnnotationCanvas}
                 />
               )}
 

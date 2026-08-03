@@ -92,6 +92,24 @@ export class ClassPack {
    * hasn't changed — an unchanged board every 20s would pad the pack with
    * dozens of identical pages and bury the moments that matter.
    */
+  /**
+   * A ready-made image (the lesson page with the ink over it — see lessonShot).
+   * Same recency and change rules as a board snapshot, so a still page costs
+   * nothing and a page being explained is captured as it changes.
+   */
+  offerImage(dataUrl: string, width: number, height: number, label: string, opts: { force?: boolean } = {}): boolean {
+    const now = Date.now();
+    if (!opts.force && now - this.lastSnapshotAt < MIN_SNAPSHOT_GAP_MS) return false;
+    if (!dataUrl || dataUrl.length < 64) return false;
+    const signature = `${dataUrl.length}:${dataUrl.slice(2000, 2200)}`;
+    if (!opts.force && signature === this.lastSignature) return false;
+    this.lastSignature = signature;
+    this.lastSnapshotAt = now;
+    if (this.snapshots.length >= MAX_SNAPSHOTS) this.snapshots.shift();
+    this.snapshots.push({ t: this.since(), dataUrl, width, height, label });
+    return true;
+  }
+
   offerSnapshot(canvas: HTMLCanvasElement, label: string, opts: { force?: boolean } = {}): boolean {
     const now = Date.now();
     if (!opts.force && now - this.lastSnapshotAt < MIN_SNAPSHOT_GAP_MS) return false;

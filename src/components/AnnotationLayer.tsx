@@ -48,6 +48,9 @@ interface AnnotationLayerProps {
   // renders — and only accepts — its own. Strokes saved before this existed
   // have no surface and are treated as the lesson's.
   surface?: string;
+  /** Hands the ink canvas out so the class pack can composite it over a
+   *  screenshot of the lesson page underneath. Read-only use. */
+  onCanvasReady?: (canvas: HTMLCanvasElement | null) => void;
 }
 
 type ShapeKind = 'shape-line' | 'shape-rect' | 'shape-circle' | 'shape-arrow';
@@ -130,6 +133,7 @@ export default function AnnotationLayer({
   shapeTool = 'off',
   initialAnnotations,
   surface = 'main',
+  onCanvasReady,
 }: AnnotationLayerProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const currentStrokeRef = useRef<Array<{ x: number; y: number }>>([]);
@@ -141,6 +145,11 @@ export default function AnnotationLayer({
   const animFrameRef = useRef<number>();
   const localLaserRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
   const laserDotRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    onCanvasReady?.(canvasRef.current);
+    return () => onCanvasReady?.(null);
+  }, [onCanvasReady]);
 
   const eraserActive = interactive && eraserMode !== 'off';
   const shapeActive = interactive && shapeTool !== 'off';
