@@ -1,0 +1,266 @@
+import {
+  SCHEMA_VERSION,
+  type ClassPackJson, type PackEvent, type PackSnapshot, type PackSurface,
+  type PackTranscriptLine, type PackMaterial, type PackExplainerOutline,
+  type PackInteractive, type PackCaptureReport, type PackParticipant,
+} from './packSchema';
+import { buildZip, dataUrlToBytes, type ZipEntry } from './zip';
+import { mergeTranscript, type NarrationLine } from './narration';
+
+// Turning what was collected during a lesson into the machine-readable sidecar.
+//
+// Kept apart from ClassPack (which is a live buffer being written to all lesson)
+// so that this is a pure-ish transform: given the collected arrays, produce the
+// JSON. That is what makes "export the same session twice and get identical
+// bytes" testable, and it is the reason ids are derived from content and order
+// rather than from a counter that happens to be running.
+
+export interface RawSnapshot {
+  t: number;                  // ms from session start
+  dataUrl: string;
+  width: number;
+  height: number;
+  label: string;
+  surfaceId: string;
+  reason: PackSnapshot['reason'];
+  hasNewInk: boolean;
+  inkBbox: [number, number, number, number] | null;
+  inkDeltaDataUrl: string | null;
+  scrollY: number;
+}
+
+export interface RawMaterial {
+  id: string;
+  type: PackMaterial['type'];
+  name: string;
+  shownFrom: number;
+  shownTo: number | null;
+  dataUrl?: string | null;
+  source: string;
+  sourceHtml?: string | null;
+}
+
+export interface PackInputs {
+  sessionId: string;
+  startedAt: number;
+  endedAt: number;
+  room: string;
+  subject: string;
+  lessonNumber: number | null;
+  participants: PackParticipant[];
+  intentBefore: string | null;
+  noteAfter: string | null;
+  narration: NarrationLine[];
+  /** Confidence keyed by "speaker|t|text" so it survives the merge. */
+  confidenceOf?: (line: NarrationLine) => { confidence: number | null; alternates: string[] };
+  events: PackEvent[];
+  surfaces: PackSurface[];
+  snapshots: RawSnapshot[];
+  materials: RawMaterial[];
+  outlines: PackExplainerOutline[];
+  interactives: PackInteractive[];
+  duplicatesSuppressed: number;
+  failures: Array<{ what: string; why: string }>;
+  /** Injected so re-exporting the same session is byte-identical apart from this. */
+  generatedAt?: string;
+}
+
+export const LOW_CONFIDENCE_THRESHOLD = 0.72;
+
+const secs = (ms: number) => Math.round(ms) / 1000;
+const pad4 = (n: number) => String(n).padStart(4, '0');
+
+/** Which surface was on screen at time t, from the surface_changed events. */
+export function surfaceAt(events: PackEvent[], tSeconds: number, fallback: string | null): string | null {
+  let current = fallback;
+  for (const e of events) {
+    if (e.type !== 'surface_changed' || !e.surface_id) continue;
+    if (e.t <= tSeconds) current = e.surface_id;
+    else break;
+  }
+  return current;
+}
+
+/**
+ * Transcript ids are position-based (t0001, t0002…) so they are stable for a
+ * given session and readable in a diff. They are only stable because the
+ * merge that produces them is deterministic — same lines in, same lines out.
+ */
+export function buildTranscript(inputs: PackInputs): PackTranscriptLine[] {
+  const merged = mergeTranscript(inputs.narration);
+  const tutor = inputs.participants.find(p => p.role === 'tutor')?.display_name;
+  return merged.map((line, i) => {
+    const conf = inputs.confidenceOf?.(line) ?? { confidence: null, alternates: [] };
+    const t = secs(line.t);
+    return {
+      id: `t${pad4(i + 1)}`,
+      t,
+      speaker: line.speaker,
+      role: line.speaker === tutor ? 'tutor' : (tutor ? 'student' : 'unknown'),
+      text: line.text,
+      confidence: conf.confidence,
+      low_confidence: conf.confidence !== null && conf.confidence < LOW_CONFIDENCE_THRESHOLD,
+      alternates: conf.alternates || [],
+      surface_id: surfaceAt(inputs.events, t, inputs.surfaces[0]?.id ?? null),
+    };
+  });
+}
+
+/**
+ * Lines spoken around a moment — the window a reader would want beside a frame.
+ *
+ * 30s each way, not less: the exchange around a piece of writing is "here is
+ * what we do" then, half a minute later, the student's answer. A tighter window
+ * captured the tutor's setup and cut off the reply that shows whether she
+ * followed it, which is the half that matters for the next worksheet.
+ */
+export function transcriptWindow(lines: PackTranscriptLine[], tSeconds: number, windowS = 30): string[] {
+  return lines
+    .filter(l => Math.abs(l.t - tSeconds) <= windowS)
+    .map(l => l.id);
+}
+
+export function buildPackJson(inputs: PackInputs): ClassPackJson {
+  const transcript = buildTranscript(inputs);
+  const durationS = Math.max(0, Math.round((inputs.endedAt - inputs.startedAt) / 1000));
+
+  const snapshots: PackSnapshot[] = inputs.snapshots.map((s, i) => {
+    const t = secs(s.t);
+    const id = `snap_${pad4(i + 1)}`;
+    return {
+      id,
+      surface_id: s.surfaceId,
+      t,
+      image: `snapshots/${id}.jpg`,
+      reason: s.reason,
+      has_new_ink: s.hasNewInk,
+      ink_delta_image: s.inkDeltaDataUrl ? `snapshots/${id}_delta.jpg` : null,
+      ink_bbox: s.inkBbox,
+      scroll_y: s.scrollY,
+      ocr_text: null,     // no OCR engine ships with the app — see capture_report
+      transcript_window: transcriptWindow(transcript, t),
+    };
+  });
+
+  const materials: PackMaterial[] = inputs.materials.map((m, i) => ({
+    id: `mat_${i + 1}`,
+    type: m.type,
+    image: m.dataUrl ? `materials/mat_${i + 1}.jpg` : null,
+    source: m.source,
+    shown_from: secs(m.shownFrom),
+    shown_to: m.shownTo === null ? null : secs(m.shownTo),
+    ocr_text: null,
+    detected_question_numbers: [],
+    source_ref: m.sourceHtml ? `materials/mat_${i + 1}.html` : null,
+  }));
+
+  const capture_report: PackCaptureReport = {
+    board_snapshots_kept: snapshots.length,
+    duplicates_suppressed: inputs.duplicatesSuppressed,
+    snapshots_with_new_ink: snapshots.filter(s => s.has_new_ink).length,
+    screens_recorded: materials.filter(m => m.image).length,
+    asr_lines_low_confidence: transcript.filter(l => l.low_confidence).length,
+    failures: [...inputs.failures],
+  };
+  // State the known gaps rather than leaving a reader to wonder whether a zero
+  // meant "nothing happened" or "this never ran".
+  if (!capture_report.failures.some(f => f.what === 'ocr')) {
+    capture_report.failures.push({
+      what: 'ocr',
+      why: 'no OCR engine is bundled; snapshot and material text is not extracted',
+    });
+  }
+  if (transcript.length === 0) {
+    capture_report.failures.push({
+      what: 'transcript',
+      why: 'narration produced no lines (switched off, refused, or unsupported browser)',
+    });
+  }
+
+  return {
+    schema_version: SCHEMA_VERSION,
+    generated_at: inputs.generatedAt ?? new Date().toISOString(),
+    session: {
+      id: inputs.sessionId,
+      started_at: new Date(inputs.startedAt).toISOString(),
+      duration_s: durationS,
+      room: inputs.room,
+      subject: inputs.subject,
+      lesson_number: inputs.lessonNumber,
+      participants: inputs.participants,
+      textbook: null,          // no source for this yet — see the note in the report
+      tutor_intent_before: inputs.intentBefore,
+      tutor_note_after: inputs.noteAfter,
+    },
+    transcript,
+    events: [...inputs.events].sort((a, b) => a.t - b.t),
+    surfaces: inputs.surfaces,
+    snapshots,
+    materials,
+    explainer_outlines: inputs.outlines,
+    interactives: inputs.interactives,
+    homework: { previous_pack: null, submitted: false, submissions: [] },
+    capture_report,
+  };
+}
+
+/**
+ * The whole pack as one archive: the PDF exactly as before, the sidecar, and the
+ * folders it references. A browser has no directory to write into, so the
+ * directory travels as a zip.
+ */
+export function buildPackArchive(pdf: Uint8Array, json: ClassPackJson, inputs: PackInputs, baseName: string): Blob {
+  const entries: ZipEntry[] = [];
+  const text = (s: string) => new TextEncoder().encode(s);
+
+  entries.push({ name: `${baseName}.pdf`, data: pdf });
+  entries.push({ name: `${baseName}.json`, data: text(JSON.stringify(json, null, 2)) });
+
+  json.snapshots.forEach((snap, i) => {
+    const raw = inputs.snapshots[i];
+    if (!raw) return;
+    try { entries.push({ name: snap.image, data: dataUrlToBytes(raw.dataUrl) }); } catch { /* skip a bad frame */ }
+    if (snap.ink_delta_image && raw.inkDeltaDataUrl) {
+      try { entries.push({ name: snap.ink_delta_image, data: dataUrlToBytes(raw.inkDeltaDataUrl) }); } catch { /* noop */ }
+    }
+  });
+
+  json.materials.forEach((mat, i) => {
+    const raw = inputs.materials[i];
+    if (!raw) return;
+    if (mat.image && raw.dataUrl) {
+      try { entries.push({ name: mat.image, data: dataUrlToBytes(raw.dataUrl) }); } catch { /* noop */ }
+    }
+    if (mat.source_ref && raw.sourceHtml) {
+      entries.push({ name: mat.source_ref, data: text(raw.sourceHtml) });
+    }
+  });
+
+  entries.push({ name: 'README.txt', data: text(readme(baseName)) });
+  return buildZip(entries);
+}
+
+function readme(baseName: string): string {
+  return [
+    'MathsLive class pack',
+    '',
+    `${baseName}.pdf   - the lesson, for a person to read.`,
+    `${baseName}.json  - the same lesson for a language model: transcript with`,
+    '                    timings and confidence, every practice question the',
+    '                    student attempted and what she chose, the explainer',
+    '                    content as structure rather than source, and each board',
+    '                    snapshot linked to what was being said at the time.',
+    'snapshots/        - board and lesson frames referenced by the JSON.',
+    '                    *_delta.jpg crops show only what was newly written.',
+    'materials/        - anything shown during the lesson, plus explainer source.',
+    '',
+    'Start with the JSON. Every id in it is stable across re-exports of the',
+    'same session, so two packs can be diffed.',
+    '',
+  ].join('\n');
+}
+
+/** A stable, readable id fragment from a display name. */
+export function slugId(name: string): string {
+  return (name || 'unknown').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 32) || 'unknown';
+}

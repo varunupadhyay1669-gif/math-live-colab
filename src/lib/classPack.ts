@@ -1,5 +1,7 @@
 import { PdfBuilder, dataUrlToBytes, type TextLine, type PdfImage } from './pdf';
 import { mergeTranscript, type NarrationLine } from './narration';
+import { averageHash, lumaGrid, isNearDuplicate } from './inkDelta';
+import type { SnapshotReason } from './packSchema';
 
 // ─────────────────────────────────────────────────────────────────────────
 // The class pack — everything that happened in a lesson, in one file you can
@@ -22,6 +24,22 @@ export interface Snapshot {
   width: number;
   height: number;
   label: string;
+  surfaceId: string;
+  reason: SnapshotReason;
+  hasNewInk: boolean;
+  inkBbox: [number, number, number, number] | null;
+  inkDeltaDataUrl: string | null;
+  scrollY: number;
+}
+
+/** Why a frame is being offered, and what is new in it. */
+export interface SnapshotOpts {
+  force?: boolean;
+  surfaceId?: string;
+  reason?: SnapshotReason;
+  inkBbox?: [number, number, number, number] | null;
+  inkDeltaDataUrl?: string | null;
+  scrollY?: number;
 }
 
 export interface Artifact {
@@ -61,11 +79,14 @@ export class ClassPack {
   private moments: Moment[] = [];
   private lastSnapshotAt = 0;
   private lastSignature = '';
+  private lastHash = '';
+  private duplicatesSuppressed = 0;
   private narration: NarrationLine[] = [];
   private lessonStates: LessonState[] = [];
   private lastLessonText = '';
 
-  meta: { room: string; teacher: string; student?: string; topic?: string } = { room: '', teacher: '' };
+  meta: { room: string; teacher: string; student?: string; topic?: string;
+          intentBefore?: string; noteAfter?: string } = { room: '', teacher: '' };
 
   private since() { return Date.now() - this.startedAt; }
 
@@ -97,20 +118,32 @@ export class ClassPack {
    * Same recency and change rules as a board snapshot, so a still page costs
    * nothing and a page being explained is captured as it changes.
    */
-  offerImage(dataUrl: string, width: number, height: number, label: string, opts: { force?: boolean } = {}): boolean {
+  offerImage(dataUrl: string, width: number, height: number, label: string, opts: SnapshotOpts = {}): boolean {
     const now = Date.now();
     if (!opts.force && now - this.lastSnapshotAt < MIN_SNAPSHOT_GAP_MS) return false;
     if (!dataUrl || dataUrl.length < 64) return false;
+    // A rendered lesson page has no canvas to hash, so fall back to comparing
+    // the encoded bytes. Weaker than the board's perceptual check, but a lesson
+    // page that has not changed re-encodes to the same length far more reliably
+    // than a hand-drawn board does.
     const signature = `${dataUrl.length}:${dataUrl.slice(2000, 2200)}`;
-    if (!opts.force && signature === this.lastSignature) return false;
+    if (!opts.force && signature === this.lastSignature) { this.duplicatesSuppressed++; return false; }
     this.lastSignature = signature;
     this.lastSnapshotAt = now;
     if (this.snapshots.length >= MAX_SNAPSHOTS) this.snapshots.shift();
-    this.snapshots.push({ t: this.since(), dataUrl, width, height, label });
+    this.snapshots.push({
+      t: this.since(), dataUrl, width, height, label,
+      surfaceId: opts.surfaceId || 'lesson_1',
+      reason: opts.reason || 'periodic',
+      hasNewInk: !!opts.inkBbox,
+      inkBbox: opts.inkBbox ?? null,
+      inkDeltaDataUrl: opts.inkDeltaDataUrl ?? null,
+      scrollY: opts.scrollY ?? 0,
+    });
     return true;
   }
 
-  offerSnapshot(canvas: HTMLCanvasElement, label: string, opts: { force?: boolean } = {}): boolean {
+  offerSnapshot(canvas: HTMLCanvasElement, label: string, opts: SnapshotOpts = {}): boolean {
     const now = Date.now();
     if (!opts.force && now - this.lastSnapshotAt < MIN_SNAPSHOT_GAP_MS) return false;
     let dataUrl: string;
@@ -123,15 +156,46 @@ export class ClassPack {
     // NOT reject a genuinely small image: an almost-blank board early in a
     // lesson compresses to very little, and that snapshot is still real.
     if (!dataUrl || dataUrl.length < 64) return false;
-    // Cheap change check: sample the encoded string rather than the pixels.
-    const signature = `${dataUrl.length}:${dataUrl.slice(2000, 2200)}`;
-    if (!opts.force && signature === this.lastSignature) return false;
-    this.lastSignature = signature;
+
+    // Perceptual hash, not a byte comparison. Re-encoding the same board — or
+    // nudging it by a scroll — changes the bytes completely while the picture is
+    // unchanged, which is how runs of four near-identical frames used to survive.
+    const hash = this.hashCanvas(canvas);
+    if (!opts.force && hash && this.lastHash && isNearDuplicate(hash, this.lastHash)) {
+      this.duplicatesSuppressed++;
+      return false;
+    }
+    if (hash) this.lastHash = hash;
     this.lastSnapshotAt = now;
     if (this.snapshots.length >= MAX_SNAPSHOTS) this.snapshots.shift();
-    this.snapshots.push({ t: this.since(), dataUrl, width: canvas.width, height: canvas.height, label });
+    this.snapshots.push({
+      t: this.since(), dataUrl, width: canvas.width, height: canvas.height, label,
+      surfaceId: opts.surfaceId || 'wb_1',
+      reason: opts.reason || 'periodic',
+      hasNewInk: !!opts.inkBbox,
+      inkBbox: opts.inkBbox ?? null,
+      inkDeltaDataUrl: opts.inkDeltaDataUrl ?? null,
+      scrollY: opts.scrollY ?? 0,
+    });
     return true;
   }
+
+  /** Downscale to an 8×8 luma grid and hash it. Cheap enough to run per frame. */
+  private hashCanvas(canvas: HTMLCanvasElement): string {
+    try {
+      const small = document.createElement('canvas');
+      small.width = 32; small.height = 32;
+      const ctx = small.getContext('2d', { willReadFrequently: true });
+      if (!ctx) return '';
+      ctx.drawImage(canvas, 0, 0, 32, 32);
+      const { data } = ctx.getImageData(0, 0, 32, 32);
+      return averageHash(lumaGrid(data, 32, 32));
+    } catch {
+      return '';
+    }
+  }
+
+  get suppressedCount() { return this.duplicatesSuppressed; }
 
   /** A line somebody said, from either side of the call. */
   addNarration(speaker: string, text: string, t = this.since()) {
@@ -154,6 +218,13 @@ export class ClassPack {
     this.lessonStates.push({ t: this.since(), text: clean.slice(0, 4000), label });
     return true;
   }
+
+  /** Read-only views for the exporter. */
+  get allSnapshots(): Snapshot[] { return this.snapshots; }
+  get allNarration(): NarrationLine[] { return this.narration; }
+  get allMoments(): Moment[] { return this.moments; }
+  get allArtifacts(): Artifact[] { return this.artifacts; }
+  get allLessonStates(): LessonState[] { return this.lessonStates; }
 
   get counts() {
     return {
@@ -191,6 +262,15 @@ export class ClassPack {
       ...kv('Spoken lines captured', this.narration.length ? String(this.narration.length) : 'none (narration was off)'),
       ...kv('Lesson screens recorded', String(this.lessonStates.length)),
       { text: '', gap: 10 },
+      ...(this.meta.intentBefore ? [
+        { text: 'What this lesson was for', size: 12, bold: true, gap: 6 } as TextLine,
+        ...PdfBuilder.wrap(this.meta.intentBefore, 10).map((text) => ({ text, size: 10 } as TextLine)),
+      ] : []),
+      ...(this.meta.noteAfter ? [
+        { text: 'Note after the lesson', size: 12, bold: true, gap: 8 } as TextLine,
+        ...PdfBuilder.wrap(this.meta.noteAfter, 10).map((text) => ({ text, size: 10 } as TextLine)),
+      ] : []),
+      { text: '', gap: 8 },
       { text: 'How to read this pack', size: 12, bold: true },
       ...PdfBuilder.wrap(
         'First comes the lesson as it happened, in order: what was said (with the speaker), what the ' +
@@ -244,7 +324,11 @@ export class ClassPack {
         { text: `Shown at ${stamp(a.t)}`, size: 9, gap: 2 },
         { text: '', gap: 6 },
       ];
-      const body = PdfBuilder.wrap(a.body, 7.5).map((text) => ({ text, size: 7.5 }));
+      // The raw document used to go in whole — stylesheet, scripts and all —
+      // so a reader scrolled eighteen pages of CSS to reach two pages of maths.
+      // The readable content goes in the PDF; the source travels in the archive.
+      const readable = this.outlineFor(a.name) ?? stripToText(a.body);
+      const body = PdfBuilder.wrap(readable, 8.5).map((text) => ({ text, size: 8.5 }));
       const pages = paginate(body, 62);
       pages.forEach((chunk, i) => b.addTextPage(i === 0 ? [...head, ...chunk] : [
         { text: `${a.name} (continued)`, size: 9, bold: true }, ...chunk,
@@ -257,11 +341,45 @@ export class ClassPack {
       try {
         image = { jpeg: dataUrlToBytes(s.dataUrl), width: s.width, height: s.height };
       } catch { continue; }
-      b.addImagePage(image, `${s.label} — ${stamp(s.t)}`, `Board as it stood ${stamp(s.t)} into the lesson.`);
+      const headline = s.hasNewInk
+        ? `${s.label} at ${stamp(s.t)} — new writing`
+        : `${s.label} at ${stamp(s.t)}`;
+      const why = s.reason === 'ink_committed' ? 'Captured because something was written.'
+        : s.reason === 'surface_changed' ? 'Captured on switching away from this surface.'
+        : s.reason === 'scrolled' ? 'Captured after scrolling to a new part of the page.'
+        : s.reason === 'interactive_answered' ? 'Captured when a practice question was answered.'
+        : s.reason === 'session_end' ? 'The last thing on screen.'
+        : 'Periodic capture.';
+      b.addImagePage(image, headline, why);
     }
+
+    // ── P2-1: say what was captured and what was not ──
+    b.addTextPage([
+      { text: 'Capture report', size: 16, bold: true },
+      { text: 'What this pack contains, and what it could not.', size: 9, gap: 2 },
+      { text: '', gap: 8 },
+      ...kv('Board and lesson snapshots kept', String(this.snapshots.length)),
+      ...kv('Near-duplicates suppressed', String(this.duplicatesSuppressed)),
+      ...kv('Snapshots with new writing', String(this.snapshots.filter(s => s.hasNewInk).length)),
+      ...kv('Spoken lines captured', String(this.narration.length)),
+      ...kv('Lesson screens recorded', String(this.lessonStates.length)),
+      ...kv('Materials', String(this.artifacts.length)),
+      { text: '', gap: 8 },
+      { text: 'Not captured', size: 12, bold: true },
+      ...PdfBuilder.wrap('Text inside images is not extracted - no OCR engine is bundled with the app.', 10).map(text => ({ text, size: 10 })),
+      ...(this.narration.length === 0
+        ? PdfBuilder.wrap('No speech was captured: narration was off, refused, or this browser cannot transcribe.', 10).map(text => ({ text, size: 10 }))
+        : []),
+      { text: '', gap: 8 },
+      ...PdfBuilder.wrap('A machine-readable version of everything here travels alongside this PDF as a .json file, with the transcript timings, every practice question attempted, and the explainer content as structure.', 10).map(text => ({ text, size: 10 })),
+    ]);
 
     return b.build();
   }
+
+  /** Set by the exporter so the PDF can print an outline instead of source. */
+  outlines: Map<string, string> = new Map();
+  private outlineFor(name: string): string | null { return this.outlines.get(name) ?? null; }
 
   suggestedFilename(): string {
     const who = (this.meta.student || this.meta.room || 'class').replace(/[^A-Za-z0-9_-]+/g, '-').slice(0, 40);
@@ -269,6 +387,28 @@ export class ClassPack {
     const date = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
     return `class-pack-${who}-${date}.pdf`;
   }
+}
+
+/**
+ * Last-resort readable text from an HTML document.
+ *
+ * Used only when the exporter could not produce a real outline (the page was
+ * never rendered, so its DOM was never available). Strips the two things that
+ * made the old packs unreadable — the stylesheet and the scripts — rather than
+ * pasting them in and hoping the reader scrolls past.
+ */
+export function stripToText(html: string): string {
+  return (html || '')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<!--[\s\S]*?-->/g, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 function kv(label: string, value: string): TextLine[] {

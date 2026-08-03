@@ -264,6 +264,10 @@ export interface WhiteboardRef {
   clearDrawings: () => void;
   download: () => void;
   getCanvas: () => HTMLCanvasElement | null;
+  /** Ink as VECTORS, so the exporter can tell what is new since a snapshot. */
+  getStrokes: () => Array<{ id?: string; points: Array<{ x: number; y: number }>; width: number; tool: string }>;
+  /** The transform the board is drawn with, to place a stroke box on screen. */
+  getView: () => { boardScale: number; boardOffsetX: number; boardOffsetY: number };
 }
 
 type BoardTool = 'select' | 'pen' | 'highlighter' | 'eraser' | 'pan' | 'line' | 'rect' | 'circle' | 'arrow' | 'diamond' | 'compass' | 'ruler' | 'protractor' | 'text';
@@ -2693,6 +2697,8 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
     }, [strokes, shapes, texts, objects, gridMode, roomId]);
 
     useImperativeHandle(ref, () => ({
+      getStrokes: () => strokes.map(st => ({ id: st.id, points: st.points, width: st.width, tool: st.tool })),
+      getView: () => ({ boardScale: view.boardScale, boardOffsetX: view.boardOffsetX, boardOffsetY: view.boardOffsetY }),
       setImage: (dataUrl: string) => {
         const img = new Image();
         img.onload = () => addImageObject(dataUrl, img.naturalWidth, img.naturalHeight);
@@ -2713,7 +2719,7 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
       },
       download: () => exportBoardHD(),
       getCanvas: () => canvasRef.current,
-    }), [addImageObject, exportBoardHD, socket, isTeacher, roomId]);
+    }), [addImageObject, exportBoardHD, socket, isTeacher, roomId, strokes, view]);
 
     useEffect(() => {
       if (!initialState) return;

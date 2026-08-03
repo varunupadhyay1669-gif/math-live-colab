@@ -20,6 +20,11 @@ import VideoCall from "../components/VideoCall";
 import VideoOverlay from "../components/VideoOverlay";
 import { ClassPack } from "../lib/classPack";
 import { captureLesson } from "../lib/lessonShot";
+import { buildPackJson, buildPackArchive, slugId, type RawSnapshot } from "../lib/packExport";
+import { newStrokesSince, strokeBounds, boardRectToScreen, padRect, cropCanvas } from "../lib/inkDelta";
+import { outlineExplainer, explainerTitle } from "../lib/explainerOutline";
+import { closestQuestionBlock, optionIndexOf, readCorrectness, summariseInteractives, withUnattempted, type RecordedAttempt } from "../lib/interactives";
+import type { PackEvent, PackSurface, PackExplainerOutline, PackInteractive } from "../lib/packSchema";
 import { Narrator, narrationSupported, getNarrationChoice, setNarrationChoice } from "../lib/narration";
 import FeedbackToasts from "../components/FeedbackToasts";
 import PausedOverlay from "../components/PausedOverlay";
@@ -277,6 +282,23 @@ export default function Room() {
   const packRef = useRef<ClassPack>(new ClassPack());
   const [packCounts, setPackCounts] = useState({ snapshots: 0, artifacts: 0, moments: 0 });
   const [packBusy, setPackBusy] = useState(false);
+  // Everything the JSON sidecar needs that isn't already in ClassPack.
+  const packEventsRef = useRef<PackEvent[]>([]);
+  const packSurfacesRef = useRef<PackSurface[]>([{ id: 'wb_1', type: 'whiteboard', title: null }]);
+  const packOutlinesRef = useRef<PackExplainerOutline[]>([]);
+  const packAttemptsRef = useRef<RecordedAttempt[]>([]);
+  const packInteractivesRef = useRef<PackInteractive[]>([]);
+  const seenStrokeIdsRef = useRef<Set<string>>(new Set());
+  const currentSurfaceRef = useRef<string>('wb_1');
+  // A student's click is REPLAYED inside this iframe, so the DOM event cannot
+  // say who made it. This does: a forwarded input that just landed means the
+  // next interaction belongs to the student.
+  const lastForwardedInputRef = useRef(0);
+  // Bumped on every iframe load so the capture listeners re-attach to the
+  // document that is actually on screen.
+  const [iframeDocNonce, setIframeDocNonce] = useState(0);
+  const [intentBefore, setIntentBefore] = useState('');
+  const [noteAfter, setNoteAfter] = useState('');
   // Narration: transcribe what's said, on both sides, into the pack's timeline.
   // OFF until switched on — it is a recording of a child's voice being turned
   // into text, so it is never silent or implicit.
@@ -1103,6 +1125,7 @@ export default function Room() {
     // Apply it on THIS authoritative iframe; the resulting DOM streams back to
     // everyone. The server already gated this to eligible students.
     newSocket.on("mirror_input", ({ input }: { input: any }) => {
+      lastForwardedInputRef.current = Date.now();
       if (!input || typeof input !== 'object') return;
       postToIframe({ type: 'MIRROR_INPUT', ...input });
     });
@@ -1373,6 +1396,9 @@ export default function Room() {
   // ── Iframe onLoad: flush pending messages ──
   const handleIframeLoad = useCallback(() => {
     iframeReadyRef.current = true;
+    // A fresh document needs its own instrumentation — see the effects keyed
+    // on iframeDocNonce below.
+    setIframeDocNonce(n => n + 1);
     // Are we about to do a full catch-up replay (teacher returned to the lesson
     // from the whiteboard / temp content)? If so the queued events are STALE —
     // they were captured while the iframe was unmounted, they target a screen
@@ -2265,11 +2291,11 @@ export default function Room() {
   }, []);
 
   /** Force a picture of whatever surface is in front, right now. */
-  const captureSurfaceNow = useCallback(async () => {
+  const captureSurfaceNow = useCallback(async (reason: 'session_end' | 'interactive_answered' | 'surface_changed' = 'session_end') => {
     if (whiteboardMode) { captureBoardNow('Whiteboard (final)'); return; }
     const shot = await captureLesson(iframeRef.current, annotationCanvasRef.current);
     const label = showTempContent ? (tempContent?.name ? `Explainer — ${tempContent.name}` : 'Explainer') : 'Lesson';
-    if (shot && packRef.current.offerImage(shot.dataUrl, shot.width, shot.height, `${label} (final)`, { force: true })) {
+    if (shot && packRef.current.offerImage(shot.dataUrl, shot.width, shot.height, label, { force: true, surfaceId: currentSurfaceRef.current, reason })) {
       setPackCounts(packRef.current.counts);
     }
   }, [whiteboardMode, showTempContent, tempContent, captureBoardNow]);
@@ -2342,24 +2368,226 @@ export default function Room() {
     return () => clearInterval(id);
   }, [whiteboardMode, showTempContent]);
 
+  // Keep the surface registry and the change events that let the JSON say what
+  // was on screen when each line was spoken.
+  useEffect(() => {
+    const t = (Date.now() - packRef.current.startedAt) / 1000;
+    let id: string;
+    if (whiteboardMode) id = 'wb_1';
+    else if (showTempContent && activeExplanationId) id = `exp_${activeExplanationId}`;
+    else id = 'lesson_1';
+    if (currentSurfaceRef.current === id) return;
+    currentSurfaceRef.current = id;
+    if (!packSurfacesRef.current.some(sf => sf.id === id)) {
+      packSurfacesRef.current.push({
+        id,
+        type: whiteboardMode ? 'whiteboard' : (showTempContent ? 'explainer' : 'lesson'),
+        title: showTempContent ? (tempContent?.name ?? null) : null,
+      });
+    }
+    packEventsRef.current.push({ t, type: 'surface_changed', surface_id: id });
+  }, [whiteboardMode, showTempContent, activeExplanationId, tempContent]);
+
+  // ── P0-2: read the explainer for what it teaches ──
+  // Done while the page is on screen, because the DOM is the only place the
+  // rendered content exists; the raw document is stylesheet and script.
+  useEffect(() => {
+    if (whiteboardMode) return;
+    const timer = setTimeout(() => {
+      try {
+        const doc = iframeRef.current?.contentDocument;
+        if (!doc || !doc.body) return;
+        const surfaceId = currentSurfaceRef.current;
+        const title = explainerTitle(doc as any, tempContent?.name ?? null);
+        const sections = outlineExplainer(doc as any);
+        if (sections.length === 0) return;
+        const existing = packOutlinesRef.current.findIndex(o => o.surface_id === surfaceId);
+        const outline = { surface_id: surfaceId, title, sections, source_ref: null };
+        if (existing >= 0) packOutlinesRef.current[existing] = outline;
+        else packOutlinesRef.current.push(outline);
+        // Questions she never touched still belong in the record.
+        packInteractivesRef.current = withUnattempted(doc as any, surfaceId, packInteractivesRef.current);
+      } catch { /* cross-origin or not loaded */ }
+    }, 1200);
+    return () => clearTimeout(timer);
+  }, [whiteboardMode, showTempContent, tempContent, previewHtml, iframeDocNonce]);
+
+  // ── P0-3: snapshot when the board actually CHANGES ──
+  // A timer produced runs of near-identical frames and missed the moments that
+  // mattered. Ink is stored as vectors, so "a stroke was committed" is a real
+  // signal, and the same vectors give the box around what is new.
+  const captureBoardIfInkChanged = useCallback((reason: 'ink_committed' | 'surface_changed' | 'session_end') => {
+    const wb = whiteboardRef.current;
+    const canvas = wb?.getCanvas();
+    if (!wb || !canvas) return false;
+    const strokes = wb.getStrokes() || [];
+    const fresh = newStrokesSince(seenStrokeIdsRef.current, strokes);
+    if (fresh.length === 0 && reason === 'ink_committed') return false;
+
+    let bbox: [number, number, number, number] | null = null;
+    let delta: string | null = null;
+    const board = strokeBounds(fresh);
+    if (board) {
+      const screen = boardRectToScreen(board, wb.getView());
+      bbox = padRect(screen, 24, canvas.width, canvas.height);
+      delta = cropCanvas(canvas, bbox);
+    }
+    const took = packRef.current.offerSnapshot(canvas, 'Whiteboard', {
+      force: reason !== 'ink_committed',
+      surfaceId: currentSurfaceRef.current.startsWith('wb') ? currentSurfaceRef.current : 'wb_1',
+      reason,
+      inkBbox: bbox,
+      inkDeltaDataUrl: delta,
+    });
+    if (took) {
+      for (const st of strokes) if (st.id) seenStrokeIdsRef.current.add(st.id);
+      setPackCounts(packRef.current.counts);
+    }
+    return took;
+  }, []);
+
+  // Poll for committed strokes. The whiteboard has no "stroke committed" event
+  // to subscribe to, and adding one would mean threading a callback through a
+  // 4700-line component; comparing the stroke LIST is equivalent and cheaper to
+  // reason about. Frequent and cheap — it only reads an array length.
+  useEffect(() => {
+    if (!whiteboardMode) return;
+    let last = -1;
+    const id = setInterval(() => {
+      const n = whiteboardRef.current?.getStrokes()?.length ?? 0;
+      if (n !== last) {
+        last = n;
+        // Let the stroke settle before grabbing the frame.
+        setTimeout(() => { captureBoardIfInkChanged('ink_committed'); }, 400);
+      }
+    }, 1500);
+    return () => clearInterval(id);
+  }, [whiteboardMode, captureBoardIfInkChanged]);
+
+  // ── P0-1: which option did she actually click? ──
+  // One delegated listener on the same-origin explainer sees both people's
+  // answers, because a student's click is replayed inside this very iframe.
+  useEffect(() => {
+    if (whiteboardMode) return;
+    const doc = iframeRef.current?.contentDocument;
+    if (!doc) return;
+    const onClick = (e: Event) => {
+      try {
+        const target = e.target as unknown as import('../lib/explainerOutline').ElLike;
+        const block = closestQuestionBlock(target);
+        if (!block) return;
+        const qid = block.getAttribute('data-question-id') || block.getAttribute('data-question');
+        const promptEl = block.querySelector('[data-prompt],.prompt,.question-text,h3,h4,p');
+        const { index, options } = optionIndexOf(block, target);
+        if (index === null) return;                       // not an option, just a click inside
+        const declared = block.getAttribute('data-correct');
+        const correctIndex = declared !== null && /^\d+$/.test(declared) ? Number(declared) : null;
+        // Read the verdict AFTER the page's own handler has run.
+        setTimeout(() => {
+          const correct = readCorrectness(target, block);
+          const by: 'tutor' | 'student' = (Date.now() - lastForwardedInputRef.current) < 1500 ? 'student' : 'tutor';
+          packAttemptsRef.current.push({
+            questionId: qid || `q_${(promptEl?.textContent || '').slice(0, 24).replace(/\W+/g, '_') || index}`,
+            prompt: (promptEl?.textContent || '').replace(/\s+/g, ' ').trim(),
+            options, correctIndex, optionIndex: index, correct,
+            widget: block.getAttribute('data-widget') || 'multiple_choice',
+            by, t: (Date.now() - packRef.current.startedAt) / 1000,
+          });
+          packRef.current.note(`${by === 'student' ? 'Student' : 'Tutor'} answered ${qid || 'a question'}`);
+          // An answer is a moment worth a picture.
+          void captureSurfaceNow('interactive_answered');
+          setPackCounts(packRef.current.counts);
+        }, 120);
+      } catch { /* never let instrumentation break a lesson */ }
+    };
+    doc.addEventListener('click', onClick, true);
+    return () => { try { doc.removeEventListener('click', onClick, true); } catch { /* gone */ } };
+  }, [whiteboardMode, showTempContent, tempContent, previewHtml, iframeDocNonce]);
+
   const downloadClassPack = async () => {
     if (packBusy) return;
     setPackBusy(true);
     try {
-      await captureSurfaceNow();
+      await captureSurfaceNow('session_end');
+      captureBoardIfInkChanged('session_end');
       const pack = packRef.current;
-      pack.meta = { room: roomId || '', teacher: teacherName, student: users.find(u => u.role === 'student')?.name };
-      const blob = pack.buildPdf();
-      const url = URL.createObjectURL(blob);
+      const studentName = users.find(u => u.role === 'student')?.name;
+      pack.meta = {
+        room: roomId || '', teacher: teacherName, student: studentName,
+        intentBefore: intentBefore.trim() || undefined,
+        noteAfter: noteAfter.trim() || undefined,
+      };
+      // The PDF prints the explainer's teaching content, not its source.
+      pack.outlines = new Map(
+        packOutlinesRef.current.map(o => [
+          o.title || '',
+          o.sections.map(sec => [sec.heading, ...sec.text,
+            ...sec.worked_examples.flatMap(w => [w.title || 'Worked example', ...w.steps.map(st => '  - ' + st)]),
+            ...sec.questions.flatMap(q => [q.prompt, ...q.options.map((o2, i) => `  ${i === q.correct_option_index ? '*' : '-'} ${o2}`)]),
+          ].join('\n')).join('\n\n'),
+        ]),
+      );
+
+      const pdfBlob = pack.buildPdf();
+      const pdfBytes = new Uint8Array(await pdfBlob.arrayBuffer());
+      const baseName = pack.suggestedFilename().replace(/\.pdf$/, '');
+
+      // P0-1: fold the recorded clicks into one record per question.
+      const interactives = summariseInteractives(
+        packAttemptsRef.current, currentSurfaceRef.current, packInteractivesRef.current,
+      );
+
+      const raw = pack.allSnapshots.map((sn): RawSnapshot => ({
+        t: sn.t, dataUrl: sn.dataUrl, width: sn.width, height: sn.height, label: sn.label,
+        surfaceId: sn.surfaceId, reason: sn.reason, hasNewInk: sn.hasNewInk,
+        inkBbox: sn.inkBbox, inkDeltaDataUrl: sn.inkDeltaDataUrl, scrollY: sn.scrollY,
+      }));
+
+      const inputs = {
+        sessionId: `sess_${roomId}_${new Date(pack.startedAt).toISOString().slice(0, 10)}`,
+        startedAt: pack.startedAt,
+        endedAt: Date.now(),
+        room: roomId || '',
+        subject: 'Math',
+        lessonNumber: null,
+        participants: [
+          { role: 'tutor' as const, id: `u_${slugId(teacherName)}`, display_name: teacherName, timezone: null },
+          ...(studentName ? [{ role: 'student' as const, id: `s_${slugId(studentName)}`, display_name: studentName, timezone: null }] : []),
+        ],
+        intentBefore: intentBefore.trim() || null,
+        noteAfter: noteAfter.trim() || null,
+        narration: pack.allNarration,
+        events: [
+          ...packEventsRef.current,
+          ...pack.allMoments.map(m => ({ t: m.t / 1000, type: 'note' as const, text: m.text })),
+        ],
+        surfaces: packSurfacesRef.current,
+        snapshots: raw,
+        materials: pack.allArtifacts
+          .filter(a => a.kind === 'lesson' || a.kind === 'explanation')
+          .map((a, i) => ({
+            id: `mat_${i + 1}`, type: (a.kind === 'lesson' ? 'lesson_page' : 'explainer') as 'lesson_page' | 'explainer',
+            name: a.name, shownFrom: a.t / 1000, shownTo: null, source: 'in_lesson',
+            sourceHtml: a.body ?? null, dataUrl: null,
+          })),
+        outlines: packOutlinesRef.current,
+        interactives,
+        duplicatesSuppressed: pack.suppressedCount,
+        failures: [] as Array<{ what: string; why: string }>,
+      };
+      const json = buildPackJson(inputs);
+      const zip = buildPackArchive(pdfBytes, json, inputs, baseName);
+
+      const url = URL.createObjectURL(zip);
       const a = document.createElement('a');
       a.href = url;
-      a.download = pack.suggestedFilename();
+      a.download = `${baseName}.zip`;
       document.body.appendChild(a);
       a.click();
       a.remove();
       // Revoke late: Safari can still be reading the blob when the click returns.
       setTimeout(() => URL.revokeObjectURL(url), 30_000);
-      showNotif(`📦 Class pack saved — ${pack.counts.snapshots} board snapshots, ${pack.counts.artifacts} materials`);
+      showNotif(`📦 Class pack saved — ${json.snapshots.length} snapshots, ${json.interactives.length} questions, ${json.transcript.length} spoken lines`);
     } catch (e) {
       showNotif(`⚠️ Could not build the class pack (${e instanceof Error ? e.message : 'unknown'})`);
     } finally {

@@ -1,0 +1,508 @@
+{
+  "schema_version": "1.0",
+  "generated_at": "2026-08-03T21:30:00.000Z",
+  "session": {
+    "id": "sess_kanishka_20260803",
+    "started_at": "2026-08-03T20:39:50.000Z",
+    "duration_s": 2880,
+    "room": "kanishka",
+    "subject": "Math",
+    "lesson_number": 3,
+    "participants": [
+      {
+        "role": "tutor",
+        "id": "u_varun_upadhyay",
+        "display_name": "Varun Upadhyay",
+        "timezone": null
+      },
+      {
+        "role": "student",
+        "id": "s_kanishka_sharma",
+        "display_name": "Kanishka Sharma",
+        "timezone": null
+      }
+    ],
+    "textbook": null,
+    "tutor_intent_before": "aiming to finish sets; homework should lean on interval notation",
+    "tutor_note_after": "still flipping the inequality sign when dividing by a negative - worksheet should drill that"
+  },
+  "transcript": [
+    {
+      "id": "t0001",
+      "t": 1640,
+      "speaker": "Varun Upadhyay",
+      "role": "tutor",
+      "text": "so we solve this right, so we subtracted 2 from both sides",
+      "confidence": 0.93,
+      "low_confidence": false,
+      "alternates": [],
+      "surface_id": "wb_1"
+    },
+    {
+      "id": "t0002",
+      "t": 1667,
+      "speaker": "Kanishka Sharma",
+      "role": "student",
+      "text": "is it x greater than or equal to minus 18",
+      "confidence": 0.93,
+      "low_confidence": false,
+      "alternates": [],
+      "surface_id": "wb_1"
+    },
+    {
+      "id": "t0003",
+      "t": 1672,
+      "speaker": "Varun Upadhyay",
+      "role": "tutor",
+      "text": "careful, you divided by a negative so the sign flips",
+      "confidence": 0.93,
+      "low_confidence": false,
+      "alternates": [],
+      "surface_id": "wb_1"
+    },
+    {
+      "id": "t0004",
+      "t": 1900,
+      "speaker": "Varun Upadhyay",
+      "role": "tutor",
+      "text": "Merry Christmas until notation",
+      "confidence": 0.41,
+      "low_confidence": true,
+      "alternates": [
+        "set builder notation",
+        "set-builder notation"
+      ],
+      "surface_id": "wb_1"
+    },
+    {
+      "id": "t0005",
+      "t": 2540,
+      "speaker": "Kanishka Sharma",
+      "role": "student",
+      "text": "the intersection is minus 2 to 5",
+      "confidence": 0.93,
+      "low_confidence": false,
+      "alternates": [],
+      "surface_id": "wb_1"
+    }
+  ],
+  "events": [
+    {
+      "t": 481,
+      "type": "control_handed_to_student"
+    },
+    {
+      "t": 1964,
+      "type": "surface_changed",
+      "surface_id": "exp_1"
+    },
+    {
+      "t": 2267,
+      "type": "surface_changed",
+      "surface_id": "wb_1"
+    },
+    {
+      "t": 2400,
+      "type": "silence",
+      "duration_s": 42
+    }
+  ],
+  "surfaces": [
+    {
+      "id": "wb_1",
+      "type": "whiteboard",
+      "title": null
+    },
+    {
+      "id": "exp_1",
+      "type": "explainer",
+      "title": "Mastering Sets & Interval Notation"
+    }
+  ],
+  "snapshots": [
+    {
+      "id": "snap_0001",
+      "surface_id": "wb_1",
+      "t": 300,
+      "image": "snapshots/snap_0001.jpg",
+      "reason": "ink_committed",
+      "has_new_ink": true,
+      "ink_delta_image": "snapshots/snap_0001_delta.jpg",
+      "ink_bbox": [
+        180,
+        240,
+        520,
+        300
+      ],
+      "scroll_y": 0,
+      "ocr_text": null,
+      "transcript_window": []
+    },
+    {
+      "id": "snap_0002",
+      "surface_id": "wb_1",
+      "t": 640,
+      "image": "snapshots/snap_0002.jpg",
+      "reason": "ink_committed",
+      "has_new_ink": true,
+      "ink_delta_image": "snapshots/snap_0002_delta.jpg",
+      "ink_bbox": [
+        200,
+        260,
+        560,
+        320
+      ],
+      "scroll_y": 0,
+      "ocr_text": null,
+      "transcript_window": []
+    },
+    {
+      "id": "snap_0003",
+      "surface_id": "wb_1",
+      "t": 980,
+      "image": "snapshots/snap_0003.jpg",
+      "reason": "surface_changed",
+      "has_new_ink": false,
+      "ink_delta_image": null,
+      "ink_bbox": null,
+      "scroll_y": 0,
+      "ocr_text": null,
+      "transcript_window": []
+    },
+    {
+      "id": "snap_0004",
+      "surface_id": "wb_1",
+      "t": 1200,
+      "image": "snapshots/snap_0004.jpg",
+      "reason": "ink_committed",
+      "has_new_ink": true,
+      "ink_delta_image": "snapshots/snap_0004_delta.jpg",
+      "ink_bbox": [
+        210,
+        280,
+        540,
+        340
+      ],
+      "scroll_y": 0,
+      "ocr_text": null,
+      "transcript_window": []
+    },
+    {
+      "id": "snap_0005",
+      "surface_id": "wb_1",
+      "t": 1420,
+      "image": "snapshots/snap_0005.jpg",
+      "reason": "ink_committed",
+      "has_new_ink": true,
+      "ink_delta_image": "snapshots/snap_0005_delta.jpg",
+      "ink_bbox": [
+        220,
+        290,
+        550,
+        350
+      ],
+      "scroll_y": 0,
+      "ocr_text": null,
+      "transcript_window": []
+    },
+    {
+      "id": "snap_0006",
+      "surface_id": "wb_1",
+      "t": 1640,
+      "image": "snapshots/snap_0006.jpg",
+      "reason": "ink_committed",
+      "has_new_ink": true,
+      "ink_delta_image": "snapshots/snap_0006_delta.jpg",
+      "ink_bbox": [
+        220,
+        300,
+        470,
+        360
+      ],
+      "scroll_y": 0,
+      "ocr_text": null,
+      "transcript_window": [
+        "t0001",
+        "t0002"
+      ]
+    },
+    {
+      "id": "snap_0007",
+      "surface_id": "wb_1",
+      "t": 1667,
+      "image": "snapshots/snap_0007.jpg",
+      "reason": "ink_committed",
+      "has_new_ink": true,
+      "ink_delta_image": "snapshots/snap_0007_delta.jpg",
+      "ink_bbox": [
+        220,
+        300,
+        470,
+        360
+      ],
+      "scroll_y": 0,
+      "ocr_text": null,
+      "transcript_window": [
+        "t0001",
+        "t0002",
+        "t0003"
+      ]
+    },
+    {
+      "id": "snap_0008",
+      "surface_id": "wb_1",
+      "t": 1810,
+      "image": "snapshots/snap_0008.jpg",
+      "reason": "ink_committed",
+      "has_new_ink": true,
+      "ink_delta_image": "snapshots/snap_0008_delta.jpg",
+      "ink_bbox": [
+        230,
+        310,
+        600,
+        370
+      ],
+      "scroll_y": 0,
+      "ocr_text": null,
+      "transcript_window": []
+    },
+    {
+      "id": "snap_0009",
+      "surface_id": "wb_1",
+      "t": 1964,
+      "image": "snapshots/snap_0009.jpg",
+      "reason": "surface_changed",
+      "has_new_ink": false,
+      "ink_delta_image": null,
+      "ink_bbox": null,
+      "scroll_y": 0,
+      "ocr_text": null,
+      "transcript_window": []
+    },
+    {
+      "id": "snap_0010",
+      "surface_id": "wb_1",
+      "t": 2100,
+      "image": "snapshots/snap_0010.jpg",
+      "reason": "interactive_answered",
+      "has_new_ink": false,
+      "ink_delta_image": null,
+      "ink_bbox": null,
+      "scroll_y": 0,
+      "ocr_text": null,
+      "transcript_window": []
+    },
+    {
+      "id": "snap_0011",
+      "surface_id": "wb_1",
+      "t": 2267,
+      "image": "snapshots/snap_0011.jpg",
+      "reason": "surface_changed",
+      "has_new_ink": false,
+      "ink_delta_image": null,
+      "ink_bbox": null,
+      "scroll_y": 0,
+      "ocr_text": null,
+      "transcript_window": []
+    },
+    {
+      "id": "snap_0012",
+      "surface_id": "wb_1",
+      "t": 2400,
+      "image": "snapshots/snap_0012.jpg",
+      "reason": "ink_committed",
+      "has_new_ink": true,
+      "ink_delta_image": "snapshots/snap_0012_delta.jpg",
+      "ink_bbox": [
+        240,
+        320,
+        610,
+        380
+      ],
+      "scroll_y": 0,
+      "ocr_text": null,
+      "transcript_window": []
+    },
+    {
+      "id": "snap_0013",
+      "surface_id": "wb_1",
+      "t": 2600,
+      "image": "snapshots/snap_0013.jpg",
+      "reason": "ink_committed",
+      "has_new_ink": true,
+      "ink_delta_image": "snapshots/snap_0013_delta.jpg",
+      "ink_bbox": [
+        250,
+        330,
+        620,
+        390
+      ],
+      "scroll_y": 0,
+      "ocr_text": null,
+      "transcript_window": []
+    },
+    {
+      "id": "snap_0014",
+      "surface_id": "wb_1",
+      "t": 2870,
+      "image": "snapshots/snap_0014.jpg",
+      "reason": "session_end",
+      "has_new_ink": false,
+      "ink_delta_image": null,
+      "ink_bbox": null,
+      "scroll_y": 0,
+      "ocr_text": null,
+      "transcript_window": []
+    }
+  ],
+  "materials": [
+    {
+      "id": "mat_1",
+      "type": "explainer",
+      "image": null,
+      "source": "in_lesson",
+      "shown_from": 1964,
+      "shown_to": 2267,
+      "ocr_text": null,
+      "detected_question_numbers": [],
+      "source_ref": "materials/mat_1.html"
+    }
+  ],
+  "explainer_outlines": [
+    {
+      "surface_id": "exp_1",
+      "title": "Mastering Sets & Interval Notation",
+      "sections": [
+        {
+          "heading": "Why it matters",
+          "level": 2,
+          "text": [
+            "Intervals describe a continuous run of numbers."
+          ],
+          "worked_examples": [],
+          "questions": []
+        },
+        {
+          "heading": "Practice Zone",
+          "level": 2,
+          "text": [],
+          "worked_examples": [
+            {
+              "title": "Worked example 1",
+              "steps": [
+                "Subtract 2 from both sides",
+                "Divide by -3 and flip the sign"
+              ]
+            }
+          ],
+          "questions": [
+            {
+              "question_id": "q4",
+              "prompt": "Find the intersection of I1 = (-inf, 5) and I2 = [-2, inf)",
+              "options": [
+                "(-inf, inf)",
+                "(-2, 5]",
+                "[-2, 5)",
+                "empty set"
+              ],
+              "correct_option_index": 2
+            }
+          ]
+        }
+      ],
+      "source_ref": "materials/mat_1.html"
+    }
+  ],
+  "interactives": [
+    {
+      "surface_id": "exp_1",
+      "widget": "practice_zone",
+      "question_id": "q4",
+      "prompt": "Find the intersection of I1 = (-inf, 5) and I2 = [-2, inf)",
+      "options": [
+        "(-inf, inf)",
+        "(-2, 5]",
+        "[-2, 5)",
+        "empty set"
+      ],
+      "correct_option_index": 2,
+      "attempts": [
+        {
+          "t": 2540,
+          "by": "student",
+          "option_index": 1,
+          "correct": false
+        },
+        {
+          "t": 2562,
+          "by": "student",
+          "option_index": 2,
+          "correct": true
+        }
+      ],
+      "final_state": "correct_after_retry"
+    },
+    {
+      "surface_id": "exp_1",
+      "widget": "trap_or_truth",
+      "question_id": "q5",
+      "prompt": "Is (-2,5) a closed interval?",
+      "options": [
+        "yes",
+        "no"
+      ],
+      "correct_option_index": 1,
+      "attempts": [
+        {
+          "t": 2600,
+          "by": "student",
+          "option_index": 1,
+          "correct": true
+        }
+      ],
+      "final_state": "correct_first_try"
+    },
+    {
+      "surface_id": "exp_1",
+      "widget": "practice_zone",
+      "question_id": "q6",
+      "prompt": "Solve 4x < 9 - 2x",
+      "options": [
+        "x < 1.5",
+        "x > 1.5"
+      ],
+      "correct_option_index": 0,
+      "attempts": [
+        {
+          "t": 2700,
+          "by": "student",
+          "option_index": 1,
+          "correct": false
+        }
+      ],
+      "final_state": "incorrect"
+    }
+  ],
+  "homework": {
+    "previous_pack": null,
+    "submitted": false,
+    "submissions": []
+  },
+  "capture_report": {
+    "board_snapshots_kept": 14,
+    "duplicates_suppressed": 46,
+    "snapshots_with_new_ink": 9,
+    "screens_recorded": 0,
+    "asr_lines_low_confidence": 1,
+    "failures": [
+      {
+        "what": "lesson_screen_recording",
+        "why": "capture not enabled for this room"
+      },
+      {
+        "what": "ocr",
+        "why": "no OCR engine is bundled; snapshot and material text is not extracted"
+      }
+    ]
+  }
+}

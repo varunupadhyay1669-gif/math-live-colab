@@ -94,7 +94,6 @@ export default function StudentView() {
   const [askedAt, setAskedAt] = useState(0);
   // The teacher has asked the room to capture speech as text. This student is
   // ASKED before their microphone is ever used, and can stop at any time.
-  const [narrationAsk, setNarrationAsk] = useState(false);
   const [narrationOn, setNarrationOn] = useState(false);
   const narratorRef = useRef<Narrator | null>(null);
   const narrationStartRef = useRef(0);
@@ -112,7 +111,6 @@ export default function StudentView() {
     if (!n.start()) return false;
     narratorRef.current = n;
     setNarrationOn(true);
-    setNarrationAsk(false);
     return true;
   }, [roomId]);
   const [currentHtml, setCurrentHtml] = useState("");
@@ -654,7 +652,6 @@ export default function StudentView() {
     // what it actually rendered and asks for a resync if a frame was lost.
     newSocket.on("narration_request", ({ on, elapsed }: { on: boolean; elapsed?: number }) => {
       if (!on) {
-        setNarrationAsk(false);
         setNarrationOn(false);
         narratorRef.current?.stop();
         narratorRef.current = null;
@@ -666,13 +663,12 @@ export default function StudentView() {
       // arrival would put every student line near zero and scramble the order
       // of the merged transcript.
       narrationStartRef.current = Date.now() - Math.max(0, Number(elapsed) || 0);
-      // Already decided for this room? Honour it silently. Asking a student the
-      // same question at the start of every single lesson is how they end up
-      // tapping "no" out of habit.
-      const previous = getNarrationChoice(roomId || '');
-      if (previous === 'no') return;
-      if (previous === 'yes') { beginNarrating(); return; }
-      setNarrationAsk(true);
+      // Start straight away. The tutor obtains consent from the student and
+      // parent outside the app, so asking again here only interrupted a lesson
+      // that already had permission. A student who presses Stop is not
+      // restarted — that choice is remembered.
+      if (getNarrationChoice(roomId || '') === 'no') return;
+      beginNarrating();
     });
     newSocket.on("mirror_ping", ({ h }: { h?: string }) => {
       if (typeof h !== 'string') return;
@@ -1911,42 +1907,6 @@ export default function StudentView() {
       {/* A clip the teacher is showing. It opens, plays, pauses and closes on
           their say-so — the student can only move it around and turn sound on. */}
       <VideoOverlay socket={socket} roomId={roomId!} isTeacher={false} />
-
-      {/* Consent, not a notification. The teacher can ask; only the student
-          can agree, and their microphone stays shut until they do. */}
-      {narrationAsk && !narrationOn && (
-        <div className="fixed inset-0 z-[88] flex items-end justify-center p-4 pb-24 sm:items-center sm:pb-4"
-          style={{ background: 'rgba(0,0,0,0.32)' }}>
-          <div className="w-full max-w-sm animate-bounce-in"
-            style={{ background: 'var(--bg-card)', borderRadius: 'var(--radius-xl)', border: '1px solid var(--border-subtle)', boxShadow: 'var(--shadow-xl)', padding: 20 }}>
-            <div className="text-3xl mb-2" aria-hidden="true">🎙️</div>
-            <div className="text-base font-semibold" style={{ color: 'var(--text-primary)' }}>
-              Write down what we say?
-            </div>
-            <div className="text-sm mt-1.5" style={{ color: 'var(--text-secondary)', lineHeight: 1.55 }}>
-              Your teacher wants to keep a written note of this lesson. Your device
-              would turn what you say into text and send only the words — never a
-              recording of your voice. You can stop it whenever you like.
-            </div>
-            <div className="flex gap-2 mt-4">
-              <button onClick={() => { setNarrationChoice(roomId || '', 'no'); setNarrationAsk(false); }}
-                className="flex-1 px-4 py-2.5 text-sm rounded-lg font-medium"
-                style={{ color: 'var(--text-secondary)', border: '1px solid var(--border-default)' }}>
-                No thanks
-              </button>
-              <button onClick={() => {
-                  if (!beginNarrating()) { setNarrationAsk(false); showNotification('Could not start — check microphone permission.'); return; }
-                  setNarrationChoice(roomId || '', 'yes');
-                  showNotification('🎙️ Writing down what is said');
-                }}
-                className="flex-1 px-4 py-2.5 text-sm rounded-lg font-medium text-white"
-                style={{ background: 'var(--accent-indigo)' }}>
-                That is fine
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* While it is on, say so plainly and keep the off switch in reach. */}
       {narrationOn && (
