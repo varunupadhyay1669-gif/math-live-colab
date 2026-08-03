@@ -54,6 +54,10 @@ interface TeacherControlsProps {
   videoActive: boolean;
   onShowVideo: () => void;         // opens the paste-a-link dialog
   onStopVideo: () => void;         // closes it on everyone's screen
+  // Class pack — the whole lesson as one file for a language model
+  onDownloadPack: () => void;
+  packBusy: boolean;
+  packCount: number;               // snapshots + materials collected so far
   // Annotation eraser (HTML-overlay drawings)
   eraserMode: 'off' | 'stroke' | 'pixel';
   onSetEraserMode: (mode: 'off' | 'stroke' | 'pixel') => void;
@@ -84,6 +88,7 @@ export default function TeacherControls({
   onToggleWhiteboard, whiteboardMode,
   explanationActive, explanationName, onUploadExplanation, onExitExplanation,
   videoActive, onShowVideo, onStopVideo,
+  onDownloadPack, packBusy, packCount,
   eraserMode, onSetEraserMode,
   shapeTool, onSetShapeTool,
   followStudentClicks, onToggleFollowStudentClicks,
@@ -401,6 +406,23 @@ export default function TeacherControls({
             <path d="M10.5 9.5l5 2.5-5 2.5z" fill="currentColor" stroke="none" />
           </svg>
           <span className="tb-label-text">{videoActive ? 'Stop video' : 'Video'}</span>
+        </button>
+
+        {/* The whole lesson as one file, for pasting into a language model. */}
+        <button
+          onClick={onDownloadPack}
+          disabled={packBusy}
+          className="tb-btn-pack"
+          data-tip={packCount > 0
+            ? `Save this lesson as one PDF for an AI (${packCount} pieces captured so far)`
+            : 'Save this lesson as one PDF for an AI'}
+        >
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" />
+            <path d="M7 10l5 5 5-5" /><path d="M12 15V3" />
+          </svg>
+          <span className="tb-label-text">{packBusy ? 'Packing…' : 'Class pack'}</span>
+          {packCount > 0 && <span className="tb-pack-count">{packCount}</span>}
         </button>
 
         {/* ── Follow Student Clicks ── */}

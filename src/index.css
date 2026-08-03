@@ -2216,6 +2216,26 @@ body {
 .ml-dash-card-del { margin-left: auto; font-size: 15px !important; line-height: 1; padding: 3px 8px !important; }
 .ml-dash-card-del:hover { background: #DC2626 !important; color: #fff !important; border-color: #DC2626 !important; }
 
+/* ── Class pack (save the lesson as one file for an AI) ── */
+.tb-btn-pack {
+  display: inline-flex; align-items: center; gap: 7px;
+  height: 36px; padding: 0 13px; border-radius: 10px;
+  font-size: 13px; font-weight: 600; letter-spacing: -0.005em;
+  color: #0F766E; background: rgba(13, 148, 136, 0.08);
+  border: 1px solid rgba(13, 148, 136, 0.18); cursor: pointer;
+  transition: background 140ms var(--ml-easing), border-color 140ms var(--ml-easing);
+}
+.tb-btn-pack:hover:not(:disabled) { background: rgba(13, 148, 136, 0.14); border-color: rgba(13, 148, 136, 0.28); }
+.tb-btn-pack:disabled { opacity: 0.6; cursor: default; }
+.tb-pack-count {
+  font-size: 10.5px; font-weight: 700; line-height: 1; padding: 3px 6px;
+  border-radius: 999px; background: #0D9488; color: #fff;
+}
+@media (max-width: 760px) {
+  .tb-btn-pack span.tb-label-text { display: none; }
+  .tb-btn-pack { padding: 0 11px; }
+}
+
 /* ── Explanation tabs (over the lesson, bottom-left) ──
    Dark chips so they read as chrome over whatever HTML is behind them,
    which could be any colour at all. */

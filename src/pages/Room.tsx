@@ -18,6 +18,7 @@ import TeacherControls from "../components/TeacherControls";
 import ChatPanel from "../components/ChatPanel";
 import VideoCall from "../components/VideoCall";
 import VideoOverlay from "../components/VideoOverlay";
+import { ClassPack } from "../lib/classPack";
 import FeedbackToasts from "../components/FeedbackToasts";
 import PausedOverlay from "../components/PausedOverlay";
 import TimerDisplay from "../components/TimerDisplay";
@@ -265,6 +266,15 @@ export default function Room() {
 
   // A student tapped a locked lesson and asked to be let in.
   const [interactionAsk, setInteractionAsk] = useState<{ studentName: string; at: number } | null>(null);
+
+  // ── Class pack ──
+  // Collects the lesson as it happens — board snapshots, every lesson page and
+  // explainer, and a timeline — so it can be handed to a language model as one
+  // file afterwards. Lives in a ref: it must survive every re-render and must
+  // never itself cause one.
+  const packRef = useRef<ClassPack>(new ClassPack());
+  const [packCounts, setPackCounts] = useState({ snapshots: 0, artifacts: 0, moments: 0 });
+  const [packBusy, setPackBusy] = useState(false);
 
   // ── Shared YouTube clip (floats over whatever is on screen) ──
   const [videoPromptOpen, setVideoPromptOpen] = useState(false);
@@ -2032,6 +2042,9 @@ export default function Room() {
       setDrawMode(false);
       setLaserMode(false);
     }
+    // Leaving the board? Keep what was on it before it goes off screen.
+    if (!newMode) captureBoardNow('Whiteboard');
+    packRef.current.note(newMode ? 'Switched to the whiteboard' : 'Switched back to the lesson');
     setWhiteboardMode(newMode);
     if (socket) {
       socket.emit('whiteboard_mode_toggle', { roomId, active: newMode });
@@ -2055,6 +2068,7 @@ export default function Room() {
     const newAllowed = !studentInteractionAllowed;
     setStudentInteractionAllowed(newAllowed);
     socket.emit("toggle_student_interaction", { roomId, allowed: newAllowed });
+    packRef.current.note(newAllowed ? 'Handed the controls to the student' : 'Took the controls back');
     showNotif(newAllowed ? '🖐️ Students can now interact with the simulation' : '👁️ Students are now view-only');
   };
 
@@ -2141,6 +2155,7 @@ export default function Room() {
     if (!trimmed) return;
     const safeName = name.trim() || `Explanation-${new Date().toLocaleTimeString()}`;
     setTempContent({ html: trimmed, name: safeName });
+    packRef.current.addArtifact('explanation', safeName, trimmed);
     socket.emit('show_temp_content', { roomId, html: trimmed, name: safeName });
     setShowTempContent(true);
     showNotif(`📚 Showing explanation: ${safeName}`);
@@ -2166,9 +2181,78 @@ export default function Room() {
   const clearTempContent = () => {
     if (!socket) return;
     socket.emit('clear_temp_content', { roomId });
+    packRef.current.note('Closed the explainer, back to the lesson');
     setShowTempContent(false);
     setActiveExplanationId(null);
     showNotif('↩️ Back to main content');
+  };
+
+  // ── Class pack: collect the lesson while it happens ──
+  // Keep the pack's header current, so a download names the right people even
+  // if the teacher never opens anything else.
+  useEffect(() => {
+    packRef.current.meta = { room: roomId || '', teacher: teacherName, student: users.find(u => u.role === 'student')?.name };
+  }, [roomId, teacherName, users]);
+
+  // Whatever lesson is actually ON SCREEN goes into the pack. Hooked here
+  // rather than at the four separate upload/paste/library/reopen call sites,
+  // because they all funnel through this state and a fifth path added later
+  // would otherwise be silently missed. ClassPack de-duplicates, so a
+  // re-render reporting the same lesson costs nothing.
+  useEffect(() => {
+    if (!previewHtml) return;
+    const name = files.find(f => f.id === activeFileId)?.name || 'Lesson';
+    packRef.current.addArtifact('lesson', name, previewHtml);
+    setPackCounts(packRef.current.counts);
+  }, [previewHtml, activeFileId, files]);
+
+  // Snapshot the board on a slow tick. ClassPack itself drops anything taken
+  // too soon or identical to the last one, so this can be dumb and regular.
+  useEffect(() => {
+    const tick = () => {
+      const canvas = whiteboardRef.current?.getCanvas();
+      if (!canvas || !whiteboardMode) return;
+      if (packRef.current.offerSnapshot(canvas, 'Whiteboard')) {
+        setPackCounts(packRef.current.counts);
+      }
+    };
+    const id = setInterval(tick, 10_000);
+    return () => clearInterval(id);
+  }, [whiteboardMode]);
+
+  // Leaving the board is the moment its contents matter most — grab it before
+  // the teacher switches away, whatever the tick schedule says.
+  const captureBoardNow = useCallback((label: string) => {
+    const canvas = whiteboardRef.current?.getCanvas();
+    if (!canvas) return;
+    if (packRef.current.offerSnapshot(canvas, label, { force: true })) {
+      setPackCounts(packRef.current.counts);
+    }
+  }, []);
+
+  const downloadClassPack = async () => {
+    if (packBusy) return;
+    setPackBusy(true);
+    try {
+      captureBoardNow('Whiteboard (final)');
+      const pack = packRef.current;
+      pack.meta = { room: roomId || '', teacher: teacherName, student: users.find(u => u.role === 'student')?.name };
+      const blob = pack.buildPdf();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = pack.suggestedFilename();
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      // Revoke late: Safari can still be reading the blob when the click returns.
+      setTimeout(() => URL.revokeObjectURL(url), 30_000);
+      showNotif(`📦 Class pack saved — ${pack.counts.snapshots} board snapshots, ${pack.counts.artifacts} materials`);
+    } catch (e) {
+      showNotif(`⚠️ Could not build the class pack (${e instanceof Error ? e.message : 'unknown'})`);
+    } finally {
+      setPackBusy(false);
+    }
   };
 
   const openExplanation = (id: string) => socket?.emit('explanation_show', { roomId, id });
@@ -2802,6 +2886,9 @@ export default function Room() {
               videoActive={videoActive}
               onShowVideo={() => setVideoPromptOpen(true)}
               onStopVideo={() => socket?.emit('video_close', { roomId })}
+              onDownloadPack={downloadClassPack}
+              packBusy={packBusy}
+              packCount={packCounts.snapshots + packCounts.artifacts}
               eraserMode={eraserMode}
               onSetEraserMode={setEraserMode}
               shapeTool={shapeTool}
