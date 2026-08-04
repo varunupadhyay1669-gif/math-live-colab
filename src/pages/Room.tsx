@@ -29,6 +29,8 @@ import type { PackEvent, PackSurface, PackExplainerOutline, PackInteractive } fr
 import { Narrator, narrationSupported, getNarrationChoice, setNarrationChoice } from "../lib/narration";
 import { localTimezone } from "../lib/tz";
 import { getClassByRoomCode } from "../lib/classes";
+import { ScreenPeer, shareFailureMessage, type ShareStatus } from "../lib/screenShare";
+import ScreenShareViewer from "../components/ScreenShareViewer";
 import { parseGoals } from "../lib/studentProfile";
 import FeedbackToasts from "../components/FeedbackToasts";
 import PausedOverlay from "../components/PausedOverlay";
@@ -391,6 +393,16 @@ export default function Room() {
   const [peekUpdatedAt, setPeekUpdatedAt] = useState(0);
   const peekStudentRef = useRef<{ id: string; name: string } | null>(null);
   useEffect(() => { peekStudentRef.current = peekStudent; }, [peekStudent]);
+
+  // Live screen share from one student. Separate from Peek and from the video
+  // call — its own peer connection, so none of the three can disturb another.
+  const [screenShare, setScreenShare] = useState<{ id: string; name: string } | null>(null);
+  const [screenStatus, setScreenStatus] = useState<ShareStatus>('idle');
+  const [screenStream, setScreenStream] = useState<MediaStream | null>(null);
+  const [screenError, setScreenError] = useState<string | null>(null);
+  const screenPeerRef = useRef<ScreenPeer | null>(null);
+  const screenShareRef = useRef<{ id: string; name: string } | null>(null);
+  useEffect(() => { screenShareRef.current = screenShare; }, [screenShare]);
   // ── Lesson Time Machine ──
   const [bookmarks, setBookmarks] = useState<Array<{ id: string; name: string; ts: number }>>([]);
   const [showTimeMachine, setShowTimeMachine] = useState(false);
@@ -769,6 +781,14 @@ export default function Room() {
       for (const u of list) if (u.tz) participantTzRef.current[u.name] = u.tz;
     });
     newSocket.on("user_left", (data: { userId: string; userName: string }) => {
+      // If they were sharing their screen, the connection is now dead but the
+      // last frame would sit there looking live. Say what happened instead.
+      if (screenShareRef.current?.id === data.userId) {
+        screenPeerRef.current?.close();
+        screenPeerRef.current = null;
+        setScreenStream(null);
+        setScreenStatus('ended');
+      }
       setCursors(prev => { const n = { ...prev }; delete n[data.userId]; return n; });
       setAttention(prev => { const n = { ...prev }; delete n[data.userId]; return n; });
       showNotif(`${data.userName} left the session`);
@@ -1173,6 +1193,30 @@ export default function Room() {
         setPeekStudent({ id: studentId, name: studentName });
         setPeekHtml(html);
         setPeekUpdatedAt(Date.now());
+      }
+    });
+
+    // ── Screen share: the student's answer, and their video ──
+    newSocket.on("screen_signal", ({ signal, from }: { signal: any; from: string }) => {
+      const watching = screenShareRef.current;
+      if (!watching || watching.id !== from) return;   // not the one we asked
+      void screenPeerRef.current?.accept(signal);
+    });
+    newSocket.on("screen_state", ({ state, from, name }: { state: string; from: string; name?: string }) => {
+      const watching = screenShareRef.current;
+      if (!watching || watching.id !== from) return;
+      const who = name || watching.name;
+      if (state === 'sharing') { setScreenStatus('connecting'); setScreenError(null); }
+      if (state === 'declined') { setScreenStatus('declined'); setScreenError(null); }
+      if (state === 'unsupported') { setScreenStatus('unsupported'); setScreenError(null); }
+      if (state === 'failed') { setScreenStatus('failed'); setScreenError(shareFailureMessage({ name: 'NotReadableError' }, who)); }
+      if (state === 'stopped') {
+        // They pressed Stop, or closed the tab. Drop the connection rather than
+        // leaving their last frame on screen looking live.
+        screenPeerRef.current?.close();
+        screenPeerRef.current = null;
+        setScreenStream(null);
+        setScreenStatus('ended');
       }
     });
 
@@ -2064,6 +2108,48 @@ export default function Room() {
     showNotif(`⟳ Resyncing ${peekStudentRef.current.name}…`);
   };
 
+  // ── Screen share (watch the student's ACTUAL screen) ──
+  // Peek, above, shows the lesson iframe's DOM. This is the student's whole
+  // screen as live video — the thing that answers "why does yours look
+  // different from mine", because it shows everything, including what is
+  // covering the lesson.
+  const askForScreen = (studentId: string, studentName: string) => {
+    if (!socket) return;
+    screenPeerRef.current?.close();
+    setScreenStream(null);
+    setScreenError(null);
+    setScreenShare({ id: studentId, name: studentName });
+    setScreenStatus('asking');
+    // Ready to receive BEFORE asking: the offer can arrive the instant they
+    // accept, and a peer built only on arrival would miss the ICE candidates
+    // that come in right behind it.
+    const peer = new ScreenPeer({
+      send: (signal) => socket.emit('screen_signal', { roomId, to: studentId, signal }),
+      onStream: (stream) => { setScreenStream(stream); setScreenStatus('live'); },
+      onState: (s) => {
+        if (s === 'failed') { setScreenStatus('failed'); }
+        if (s === 'disconnected' || s === 'closed') setScreenStatus(prev => (prev === 'live' ? 'ended' : prev));
+      },
+    });
+    peer.prepare();
+    screenPeerRef.current = peer;
+    socket.emit('screen_request', { roomId, studentId });
+  };
+
+  const stopWatchingScreen = () => {
+    const watching = screenShareRef.current;
+    screenPeerRef.current?.close();
+    screenPeerRef.current = null;
+    setScreenStream(null);
+    setScreenShare(null);
+    setScreenStatus('idle');
+    setScreenError(null);
+    // Tell them to stop capturing. Closing our window while their screen is
+    // still being captured is the worst of both: they see the recording
+    // indicator, we see nothing.
+    if (watching && socket) socket.emit('screen_state', { roomId, state: 'stopped', to: watching.id });
+  };
+
   // ── Time Machine ──
   const createBookmark = () => {
     if (!socket) return;
@@ -2944,7 +3030,8 @@ export default function Room() {
                     <UserList users={users} attention={attention} isTeacher={true} socket={socket} roomId={roomId!}
                       controlHolderName={controlHolderName}
                       onGrantControl={grantControl}
-                      onPeek={peekAtStudent} />
+                      onPeek={peekAtStudent}
+                      onScreenShare={askForScreen} />
                   )}
                 </div>
               </>
@@ -4250,6 +4337,17 @@ export default function Room() {
           onRefresh={refreshPeek}
           onResync={resyncPeekStudent}
           onToggleControl={() => grantControl(controlHolderName === peekStudent.name ? null : peekStudent.name)}
+        />
+      )}
+
+      {screenShare && (
+        <ScreenShareViewer
+          studentName={screenShare.name}
+          status={screenStatus}
+          stream={screenStream}
+          error={screenError}
+          onClose={stopWatchingScreen}
+          onRetry={() => askForScreen(screenShare.id, screenShare.name)}
         />
       )}
 

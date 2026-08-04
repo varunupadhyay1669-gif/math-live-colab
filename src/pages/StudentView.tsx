@@ -7,6 +7,8 @@ import { cleanDisplayName } from "../lib/displayName";
 import { stepLockScript } from "../lib/stepLockScript";
 import { setupAttentionDetection } from "../lib/attentionDetector";
 import { localTimezone } from "../lib/tz";
+import { ScreenPeer, screenShareSupported } from "../lib/screenShare";
+import ScreenSharePrompt from "../components/ScreenSharePrompt";
 import { sounds } from "../lib/sounds";
 import { LESSON_IFRAME_SANDBOX, LESSON_IFRAME_ALLOW } from "../lib/iframeAttrs";
 
@@ -114,6 +116,62 @@ export default function StudentView() {
     setNarrationOn(true);
     return true;
   }, [roomId]);
+  // ── Screen sharing (the teacher watching this student's real screen) ──
+  // Everything here is gated on the student pressing a button, because
+  // getDisplayMedia refuses to run without a gesture. Nothing starts on its own.
+  const [shareAsk, setShareAsk] = useState<string | null>(null);   // who is asking
+  const [sharing, setSharing] = useState(false);
+  const screenPeerRef = useRef<ScreenPeer | null>(null);
+
+  const endShare = useCallback((tell = true) => {
+    screenPeerRef.current?.close();
+    screenPeerRef.current = null;
+    setSharing(false);
+    if (tell) socketRef.current?.emit('screen_state', { roomId, state: 'stopped' });
+  }, [roomId]);
+
+  const beginShare = useCallback(async () => {
+    setShareAsk(null);
+    if (!screenShareSupported()) {
+      socketRef.current?.emit('screen_state', { roomId, state: 'unsupported' });
+      showNotification('This device cannot share its screen — your teacher has been told.');
+      return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
+      const peer = new ScreenPeer({
+        send: (signal) => socketRef.current?.emit('screen_signal', { roomId, signal }),
+        onState: (s) => { if (s === 'failed' || s === 'closed') endShare(true); },
+      });
+      screenPeerRef.current = peer;
+      // The browser's own "Stop sharing" bar is the one most people use. Without
+      // this the tutor would keep a frozen last frame on screen and think they
+      // were still watching.
+      stream.getVideoTracks()[0]?.addEventListener('ended', () => endShare(true));
+      await peer.share(stream);
+      setSharing(true);
+      socketRef.current?.emit('screen_state', { roomId, state: 'sharing' });
+    } catch (e) {
+      screenPeerRef.current?.close();
+      screenPeerRef.current = null;
+      const declined = (e as { name?: string })?.name === 'NotAllowedError';
+      socketRef.current?.emit('screen_state', { roomId, state: declined ? 'declined' : 'failed' });
+    }
+  }, [roomId, endShare]);
+
+  const declineShare = useCallback(() => {
+    setShareAsk(null);
+    socketRef.current?.emit('screen_state', { roomId, state: 'declined' });
+  }, [roomId]);
+
+  // The socket effect subscribes once and must not re-run when endShare's
+  // identity changes, so it reaches the current one through a ref.
+  const endShareRef = useRef(endShare);
+  useEffect(() => { endShareRef.current = endShare; }, [endShare]);
+  // Leaving the page must release the capture. A tab closed mid-share would
+  // otherwise keep the screen-capture indicator up with nobody watching.
+  useEffect(() => () => { screenPeerRef.current?.close(); }, []);
+
   const [currentHtml, setCurrentHtml] = useState("");
   // Server-issued deterministic RNG seed for the current lesson - injected
   // into the sim so Math.random() matches the teacher's exactly.
@@ -671,6 +729,30 @@ export default function StudentView() {
       if (getNarrationChoice(roomId || '') === 'no') return;
       beginNarrating();
     });
+    // ── Screen share ──
+    newSocket.on("screen_request", ({ teacherName }: { teacherName?: string }) => {
+      // Answer for the device before troubling the student: on an iPad there is
+      // no getDisplayMedia at all, so a prompt here would ask them to do
+      // something their browser cannot do and leave the teacher waiting.
+      if (!screenShareSupported()) {
+        newSocket.emit('screen_state', { roomId, state: 'unsupported' });
+        return;
+      }
+      setShareAsk(teacherName || 'Your teacher');
+    });
+    newSocket.on("screen_signal", ({ signal }: { signal: any }) => {
+      // Only ever the teacher's answer to an offer we made. No peer, no share.
+      void screenPeerRef.current?.accept(signal);
+    });
+    newSocket.on("screen_state", ({ state }: { state: string }) => {
+      // The teacher closed the window. Stop capturing — leaving the screen
+      // captured because nobody is looking is exactly the wrong default.
+      if (state === 'stopped') {
+        endShareRef.current?.(false);
+        setShareAsk(null);
+      }
+    });
+
     newSocket.on("mirror_ping", ({ h }: { h?: string }) => {
       if (typeof h !== 'string') return;
       postToIframe({ type: 'MIRROR_PING', h });
@@ -1342,6 +1424,27 @@ export default function StudentView() {
 
   return (
     <div className="h-screen w-screen flex flex-col overflow-hidden" style={{ background: 'var(--bg-primary)' }}>
+
+      {shareAsk && (
+        <ScreenSharePrompt teacherName={shareAsk} onShare={beginShare} onDecline={declineShare} />
+      )}
+      {sharing && (
+        // Always visible while capturing. A student must never be in any doubt
+        // that their screen is being watched, and stopping is one tap away.
+        <div style={{
+          position: 'fixed', bottom: 16, left: '50%', transform: 'translateX(-50%)', zIndex: 60,
+          display: 'flex', alignItems: 'center', gap: 10,
+          background: 'rgba(220,38,38,0.95)', color: '#fff',
+          borderRadius: 999, padding: '8px 14px', boxShadow: 'var(--shadow-lg)',
+          fontSize: 13, fontWeight: 600,
+        }}>
+          <span>🖥️ You're sharing your screen</span>
+          <button onClick={() => endShare(true)} style={{
+            background: 'rgba(255,255,255,0.2)', color: '#fff', border: 'none',
+            borderRadius: 999, padding: '4px 12px', fontSize: 12, fontWeight: 700, cursor: 'pointer',
+          }}>Stop</button>
+        </div>
+      )}
 
       {/* ══════ HEADER ══════ */}
       <header className="app-header">

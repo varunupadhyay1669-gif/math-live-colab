@@ -2872,6 +2872,64 @@ Build a widget that teaches: ${safePrompt}`;
       socket.to(roomId).emit('rtc_presence', { active: !!active, name: user?.name || 'Someone', role: user?.role });
     });
 
+    // ─── SCREEN SHARE (the teacher watches the student's ACTUAL screen) ───
+    //
+    // Student Peek shows the lesson iframe's DOM, refreshed every couple of
+    // seconds. That answers "what does their lesson look like" and not the
+    // question a tutor actually asks when something is wrong: what is on their
+    // screen, right now, all of it — the whiteboard, the scroll position, the
+    // dialog they have not noticed. This is real getDisplayMedia video over
+    // WebRTC, one-way, student to teacher.
+    //
+    // Its own channel rather than rtc_signal: the video call may be running at
+    // the same time, and two negotiations on one broadcast channel would answer
+    // each other's offers. These are addressed to a single socket.
+    //
+    // The student always chooses. A share cannot start without them clicking,
+    // because the browser itself demands a gesture for getDisplayMedia — so the
+    // consent here is not a courtesy we could skip, it is how the API works.
+    socket.on('screen_request', ({ roomId, studentId }: { roomId: string; studentId: string }) => {
+      const room = rooms.get(roomId);
+      if (!requireTeacher(room, socket.id)) return;
+      if (typeof studentId !== 'string') return;
+      const target = room.users.get(studentId);
+      if (!target || target.role !== 'student') return;
+      const teacher = room.users.get(socket.id);
+      io.to(studentId).emit('screen_request', { teacherName: teacher?.name || 'Your teacher' });
+    });
+
+    // Signalling, addressed. A teacher may signal any member; a student may
+    // only ever signal the teacher — so one student can never open a peer
+    // connection to another.
+    socket.on('screen_signal', ({ roomId, to, signal }: { roomId: string; to?: string; signal: unknown }) => {
+      if (typeof roomId !== 'string' || !signal || typeof signal !== 'object') return;
+      const room = rooms.get(roomId);
+      if (!isMember(room, socket.id)) return;
+      const me = room.users.get(socket.id);
+      const dest = me?.role === 'teacher' ? to : room.teacherSocketId;
+      if (typeof dest !== 'string' || !room.users.has(dest)) return;
+      if (me?.role !== 'teacher' && dest !== room.teacherSocketId) return;
+      io.to(dest).emit('screen_signal', { signal, from: socket.id, name: me?.name || 'Someone' });
+    });
+
+    // What happened to the request: sharing / stopped / declined / unsupported.
+    // "unsupported" is the one that matters most in practice — iPadOS Safari
+    // has no getDisplayMedia at all, so a tutor waiting on a share that can
+    // never arrive needs to be told, not left watching a spinner.
+    socket.on('screen_state', ({ roomId, state, to }: { roomId: string; state: string; to?: string }) => {
+      const room = rooms.get(roomId);
+      if (!isMember(room, socket.id)) return;
+      if (!['sharing', 'stopped', 'declined', 'unsupported', 'failed'].includes(state)) return;
+      const me = room.users.get(socket.id);
+      // A student reports to the teacher; the teacher's "stop watching" goes to
+      // the one student they were watching — not to the room, which would tell
+      // three other children that someone's share ended.
+      const dest = me?.role === 'student' ? room.teacherSocketId : to;
+      if (typeof dest !== 'string' || !room.users.has(dest)) return;
+      if (me?.role !== 'teacher' && dest !== room.teacherSocketId) return;
+      io.to(dest).emit('screen_state', { state, from: socket.id, name: me?.name || 'Someone' });
+    });
+
     // ─── LIVE MIRROR relay (the "impossible to desync" engine) ───
     // The teacher's iframe is the single authoritative lesson instance; it
     // streams its REAL DOM here and the server relays it to every student, who

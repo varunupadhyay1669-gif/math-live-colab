@@ -24,9 +24,11 @@ interface UserListProps {
   controlHolderName?: string | null;
   onGrantControl?: (holderName: string | null) => void;
   onPeek?: (studentId: string, studentName: string) => void;
+  /** Ask this student to share their real screen (Zoom-style). */
+  onScreenShare?: (studentId: string, studentName: string) => void;
 }
 
-export default function UserList({ users, attention, isTeacher, socket, roomId, controlHolderName, onGrantControl, onPeek }: UserListProps) {
+export default function UserList({ users, attention, isTeacher, socket, roomId, controlHolderName, onGrantControl, onPeek, onScreenShare }: UserListProps) {
   const handleKick = (userId: string) => {
     if (!socket) return;
     socket.emit('kick_user', { roomId, userId });
@@ -78,6 +80,17 @@ export default function UserList({ users, attention, isTeacher, socket, roomId, 
                     className="text-[12px]" title="See this student's screen"
                     style={{ background: 'none', border: 'none', cursor: 'pointer', lineHeight: 1 }}>
                     👁️
+                  </button>
+                )}
+                {/* Ask them to share their actual screen. Distinct from the
+                    eye above: that shows the lesson's DOM, this shows their
+                    whole screen live — the one that answers "why does it look
+                    different on your side". */}
+                {onScreenShare && (
+                  <button onClick={() => onScreenShare(user.id, user.name)}
+                    className="text-[12px]" title="Ask to see their whole screen (live)"
+                    style={{ background: 'none', border: 'none', cursor: 'pointer', lineHeight: 1 }}>
+                    🖥️
                   </button>
                 )}
                 {/* Give / take back control */}
