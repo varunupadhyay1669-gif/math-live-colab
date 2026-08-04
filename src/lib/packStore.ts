@@ -31,6 +31,8 @@ export interface StoredSide {
   noteAfter: string;
   teacher: string;
   student: string | null;
+  /** display_name -> IANA zone, for whoever reported one. */
+  timezones?: Record<string, string>;
 }
 
 export interface StoredPack {

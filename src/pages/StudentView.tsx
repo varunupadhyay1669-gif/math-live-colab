@@ -6,6 +6,7 @@ import { mirrorScriptFor, stripLessonScripts } from "../lib/mirrorScript";
 import { cleanDisplayName } from "../lib/displayName";
 import { stepLockScript } from "../lib/stepLockScript";
 import { setupAttentionDetection } from "../lib/attentionDetector";
+import { localTimezone } from "../lib/tz";
 import { sounds } from "../lib/sounds";
 import { LESSON_IFRAME_SANDBOX, LESSON_IFRAME_ALLOW } from "../lib/iframeAttrs";
 
@@ -514,7 +515,7 @@ export default function StudentView() {
       // highest serverSeq THIS SIM INSTANCE has applied — that's what lets a
       // reconnect replay exactly the missed gap and nothing twice. It resets
       // only when the iframe genuinely rebuilds (new sim instance).
-      newSocket.emit("join_room", { roomId, userName: studentName, role: 'student' });
+      newSocket.emit("join_room", { roomId, userName: studentName, role: 'student', tz: localTimezone() });
       // Start attention detection
       cleanupAttention = setupAttentionDetection(newSocket, roomId, studentName);
     });
@@ -548,7 +549,7 @@ export default function StudentView() {
       setConnected(true);
       lastRevisionRef.current = 0;
       // lastInboundSeqRef intentionally kept — see the connect handler.
-      newSocket.emit("join_room", { roomId, userName: studentName, role: 'student' });
+      newSocket.emit("join_room", { roomId, userName: studentName, role: 'student', tz: localTimezone() });
       showNotification("✅ Reconnected!");
     });
 

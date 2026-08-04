@@ -16,7 +16,7 @@ interface RoomData {
   files: FileEntry[];
   activeFileId: string | null;
   lastRunHtml: string | null;
-  users: Map<string, { name: string; role: 'teacher' | 'student'; joinedAt: number; whiteboardSync: boolean }>;
+  users: Map<string, { name: string; role: 'teacher' | 'student'; joinedAt: number; whiteboardSync: boolean; tz?: string }>;
   isPaused: boolean;
   teacherSocketId: string | null;
   createdAt: number;
@@ -883,11 +883,26 @@ async function startServer() {
   process.on('SIGTERM', () => shutdown('SIGTERM'));
 
   function getRoomUserList(room: RoomData) {
-    const list: Array<{ id: string; name: string; role: string }> = [];
+    const list: Array<{ id: string; name: string; role: string; tz?: string }> = [];
     room.users.forEach((user, id) => {
-      list.push({ id, name: user.name, role: user.role });
+      const entry: { id: string; name: string; role: string; tz?: string } = { id, name: user.name, role: user.role };
+      // Only present when the client sent one. A class pack records each
+      // participant's timezone so the clock times in it mean something to a
+      // reader who wasn't in the room; an old client that doesn't send it
+      // leaves the field null rather than guessing the tutor's zone.
+      if (user.tz) entry.tz = user.tz;
+      list.push(entry);
     });
     return list;
+  }
+
+  // IANA zone names only ("Asia/Kolkata", "Europe/London", "UTC"). Anything
+  // else — including a free-text offset a caller might invent — is dropped, so
+  // this field can never carry arbitrary client text into the pack.
+  function safeTimezone(tz: unknown): string | undefined {
+    if (typeof tz !== 'string' || tz.length > 64) return undefined;
+    if (!/^(UTC|[A-Za-z][A-Za-z0-9_+-]*(\/[A-Za-z0-9_+-]+){1,2})$/.test(tz)) return undefined;
+    return tz;
   }
 
   function buildLeaderboard(room: RoomData) {
@@ -1212,7 +1227,7 @@ async function startServer() {
     });
 
     // ─── JOIN ROOM ───
-    socket.on('join_room', async ({ roomId, userName, role, password, authToken }: { roomId: string; userName: string; role: 'teacher' | 'student'; password?: string; authToken?: string }) => {
+    socket.on('join_room', async ({ roomId, userName, role, password, authToken, tz }: { roomId: string; userName: string; role: 'teacher' | 'student'; password?: string; authToken?: string; tz?: string }) => {
       // Validate inputs
       if (!isValidRoomId(roomId)) {
         socket.emit('join_error', { message: 'Invalid room code' });
@@ -1328,7 +1343,7 @@ async function startServer() {
       }
 
       socket.join(roomId);
-      room.users.set(socket.id, { name: safeName, role, joinedAt: Date.now(), whiteboardSync: true });
+      room.users.set(socket.id, { name: safeName, role, joinedAt: Date.now(), whiteboardSync: true, tz: safeTimezone(tz) });
 
       // Any join (teacher OR student) means the room is active again — clear the
       // last-student-left expiry countdown so the sweep won't target a room

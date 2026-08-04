@@ -15,6 +15,7 @@ import { buildZip, crc32 } from './src/lib/zip.ts';
 import { silenceSpans } from './src/lib/packExport.ts';
 import { ClassPack } from './src/lib/classPack.ts';
 import { packKey } from './src/lib/packStore.ts';
+import { isTimezone, localTimezone } from './src/lib/tz.ts';
 
 let pass = 0, fail = 0; const fails = [];
 const ok = (n) => { pass++; console.log(`  ✓ ${n}`); };
@@ -320,6 +321,7 @@ const stored = {
     interactives: [{ surface_id: 'exp_1', widget: 'practice_zone', question_id: 'q4', prompt: 'p', options: ['a', 'b'], correct_option_index: 1, attempts: [{ t: 200, by: 'student', option_index: 0, correct: false }], final_state: 'incorrect' }],
     attempts: [],
     intentBefore: 'finish sets', noteAfter: 'flips the sign', teacher: 'Varun Upadhyay', student: 'Kanishka Sharma',
+    timezones: { 'Varun Upadhyay': 'Asia/Kolkata', 'Kanishka Sharma': 'Asia/Dubai' },
   },
 };
 
@@ -366,6 +368,39 @@ const jsonOnly = rebuildJsonBlob(stored);
 assert(jsonOnly.filename.endsWith('.json'), 'the JSON-only export is a .json', jsonOnly.filename);
 assert(jsonOnly.blob.type === 'application/json', 'with the right type');
 assert(jsonOnly.blob.size > 500, 'and real content', String(jsonOnly.blob.size));
+
+console.log('E21: participant timezones');
+// A pack is full of wall-clock times. Without a zone per person they are
+// unreadable to anyone who was not in the room — including the model the pack
+// exists for. Tutor and student are routinely in different countries.
+assert(isTimezone('Asia/Kolkata'), 'an ordinary IANA zone is accepted');
+assert(isTimezone('America/Argentina/Buenos_Aires'), 'so is a three-part one');
+assert(isTimezone('UTC'), 'and bare UTC');
+assert(isTimezone('Etc/GMT+5'), 'and the Etc/GMT forms, which carry a sign');
+assert(!isTimezone('Kolkata'), 'a bare city is not a zone');
+assert(!isTimezone('GMT+5:30'), 'nor an offset string');
+assert(!isTimezone(''), 'nor empty');
+assert(!isTimezone(null) && !isTimezone(42), 'nor a non-string');
+assert(!isTimezone('../../etc/passwd'), 'a traversal-looking string is rejected');
+assert(!isTimezone('a/' + 'b'.repeat(80)), 'and anything over 64 chars');
+assert(!isTimezone('Asia/Kolkata<script>'), 'no punctuation smuggling into the pack');
+const liveTz = localTimezone();
+assert(liveTz === undefined || isTimezone(liveTz), 'this machine reports a valid zone or none', String(liveTz));
+
+const zoned = buildPackJson(fixture({ participants: [
+  { role: 'tutor', id: 'u_v', display_name: 'V', timezone: 'Asia/Kolkata' },
+  { role: 'student', id: 's_k', display_name: 'K', timezone: 'Asia/Dubai' },
+] }));
+assert(zoned.session.participants[0].timezone === 'Asia/Kolkata', 'the tutor zone reaches the pack');
+assert(zoned.session.participants[1].timezone === 'Asia/Dubai', 'and the student can be in a different one');
+assert(validatePack(zoned).length === 0, 'and it still validates');
+assert(rebuilt.json.session.participants[0].timezone === 'Asia/Kolkata',
+  'a re-export keeps the tutor zone', String(rebuilt.json.session.participants[0].timezone));
+assert(rebuilt.json.session.participants[1].timezone === 'Asia/Dubai',
+  'and the student one', String(rebuilt.json.session.participants[1].timezone));
+const noTz = rebuildFromStored({ ...stored, side: { ...stored.side, timezones: undefined } });
+assert(noTz.json.session.participants[0].timezone === null,
+  'a session saved before zones existed re-exports null, not a guessed zone');
 
 console.log(`\nPACK EXPORT RESULT: ${pass} passed, ${fail} failed`);
 if (fails.length) { console.log('FAILURES:'); fails.forEach(f => console.log('  - ' + f)); }

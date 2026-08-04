@@ -27,6 +27,7 @@ import { outlineExplainer, explainerTitle } from "../lib/explainerOutline";
 import { closestQuestionBlock, optionIndexOf, readCorrectness, summariseInteractives, withUnattempted, type RecordedAttempt } from "../lib/interactives";
 import type { PackEvent, PackSurface, PackExplainerOutline, PackInteractive } from "../lib/packSchema";
 import { Narrator, narrationSupported, getNarrationChoice, setNarrationChoice } from "../lib/narration";
+import { localTimezone } from "../lib/tz";
 import FeedbackToasts from "../components/FeedbackToasts";
 import PausedOverlay from "../components/PausedOverlay";
 import TimerDisplay from "../components/TimerDisplay";
@@ -71,6 +72,7 @@ interface UserInfo {
   id: string;
   name: string;
   role: string;
+  tz?: string;
 }
 
 interface StudentAttention {
@@ -285,6 +287,7 @@ export default function Room() {
   const [packBusy, setPackBusy] = useState(false);
   // Everything the JSON sidecar needs that isn't already in ClassPack.
   const packEventsRef = useRef<PackEvent[]>([]);
+  const participantTzRef = useRef<Record<string, string>>({});
   const packSurfacesRef = useRef<PackSurface[]>([{ id: 'wb_1', type: 'whiteboard', title: null }]);
   const packOutlinesRef = useRef<PackExplainerOutline[]>([]);
   const packAttemptsRef = useRef<RecordedAttempt[]>([]);
@@ -686,7 +689,7 @@ export default function Room() {
       // already in the room we'll be allowed (same name) and that other
       // tab will receive a `teacher_replaced` notification.
       setTeacherReplaced(false);
-      newSocket.emit("join_room", { roomId, userName: teacherName, role: 'teacher', authToken: authTokenRef.current ?? undefined });
+      newSocket.emit("join_room", { roomId, userName: teacherName, role: 'teacher', authToken: authTokenRef.current ?? undefined, tz: localTimezone() });
 
       // AUTONOMOUS: On a reconnect (NOT the initial connect), re-seed the
       // server with our cached HTML state. Render's free tier filesystem
@@ -750,7 +753,13 @@ export default function Room() {
     newSocket.on("session_state", applySessionState);
     newSocket.on("sync_full_state", applySessionState);
 
-    newSocket.on("user_list", (list: UserInfo[]) => setUsers(list));
+    newSocket.on("user_list", (list: UserInfo[]) => {
+      setUsers(list);
+      // Remember each person's zone by name rather than reading the live list
+      // at export time: a student who drops before the pack is built has left
+      // the list, but their times are still all over the session.
+      for (const u of list) if (u.tz) participantTzRef.current[u.name] = u.tz;
+    });
     newSocket.on("user_left", (data: { userId: string; userName: string }) => {
       setCursors(prev => { const n = { ...prev }; delete n[data.userId]; return n; });
       setAttention(prev => { const n = { ...prev }; delete n[data.userId]; return n; });
@@ -2476,6 +2485,7 @@ export default function Room() {
           intentBefore, noteAfter,
           teacher: teacherName,
           student: users.find(u => u.role === 'student')?.name ?? null,
+          timezones: { ...participantTzRef.current, ...(localTimezone() ? { [teacherName]: localTimezone()! } : {}) },
         },
       });
     };
@@ -2662,8 +2672,11 @@ export default function Room() {
         subject: 'Math',
         lessonNumber: null,
         participants: [
-          { role: 'tutor' as const, id: `u_${slugId(teacherName)}`, display_name: teacherName, timezone: null },
-          ...(studentName ? [{ role: 'student' as const, id: `s_${slugId(studentName)}`, display_name: studentName, timezone: null }] : []),
+          // Our own zone we know first-hand; the student's arrived with their
+          // join. Either may be absent, and null is the honest answer for a
+          // browser that wouldn't say.
+          { role: 'tutor' as const, id: `u_${slugId(teacherName)}`, display_name: teacherName, timezone: localTimezone() || null },
+          ...(studentName ? [{ role: 'student' as const, id: `s_${slugId(studentName)}`, display_name: studentName, timezone: participantTzRef.current[studentName] || null }] : []),
         ],
         intentBefore: intentBefore.trim() || null,
         noteAfter: noteAfter.trim() || null,

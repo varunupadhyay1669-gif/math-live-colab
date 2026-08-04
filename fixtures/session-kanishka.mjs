@@ -33,8 +33,8 @@ export function fixture(overrides = {}) {
     subject: 'Math',
     lessonNumber: 3,
     participants: [
-      { role: 'tutor', id: 'u_varun_upadhyay', display_name: 'Varun Upadhyay', timezone: null },
-      { role: 'student', id: 's_kanishka_sharma', display_name: 'Kanishka Sharma', timezone: null },
+      { role: 'tutor', id: 'u_varun_upadhyay', display_name: 'Varun Upadhyay', timezone: 'Asia/Kolkata' },
+      { role: 'student', id: 's_kanishka_sharma', display_name: 'Kanishka Sharma', timezone: 'Asia/Dubai' },
     ],
     intentBefore: 'aiming to finish sets; homework should lean on interval notation',
     noteAfter: 'still flipping the inequality sign when dividing by a negative - worksheet should drill that',

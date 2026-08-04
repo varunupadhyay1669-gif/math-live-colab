@@ -32,6 +32,9 @@ export function rebuildFromStored(stored: StoredPack): RebuiltPack | null {
   const teacher = side?.teacher || pack.meta.teacher || 'Teacher';
   const student = side?.student || pack.meta.student || null;
   const room = stored.room || pack.meta.room || '';
+  // Zones were reported live and cannot be recovered later, so a session saved
+  // before this existed re-exports with nulls rather than the wrong offset.
+  const tz = side?.timezones || {};
 
   const snapshots: RawSnapshot[] = pack.allSnapshots.map(sn => ({
     t: sn.t, dataUrl: sn.dataUrl, width: sn.width, height: sn.height, label: sn.label,
@@ -52,8 +55,8 @@ export function rebuildFromStored(stored: StoredPack): RebuiltPack | null {
     subject: 'Math',
     lessonNumber: null,
     participants: [
-      { role: 'tutor', id: `u_${slugId(teacher)}`, display_name: teacher, timezone: null },
-      ...(student ? [{ role: 'student' as const, id: `s_${slugId(student)}`, display_name: student, timezone: null }] : []),
+      { role: 'tutor', id: `u_${slugId(teacher)}`, display_name: teacher, timezone: tz[teacher] || null },
+      ...(student ? [{ role: 'student' as const, id: `s_${slugId(student)}`, display_name: student, timezone: tz[student] || null }] : []),
     ],
     intentBefore: side?.intentBefore || pack.meta.intentBefore || null,
     noteAfter: side?.noteAfter || pack.meta.noteAfter || null,

@@ -13,13 +13,13 @@
         "role": "tutor",
         "id": "u_varun_upadhyay",
         "display_name": "Varun Upadhyay",
-        "timezone": null
+        "timezone": "Asia/Kolkata"
       },
       {
         "role": "student",
         "id": "s_kanishka_sharma",
         "display_name": "Kanishka Sharma",
-        "timezone": null
+        "timezone": "Asia/Dubai"
       }
     ],
     "textbook": null,
