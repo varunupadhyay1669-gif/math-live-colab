@@ -58,6 +58,8 @@ export function rebuildFromStored(stored: StoredPack): RebuiltPack | null {
       { role: 'tutor', id: `u_${slugId(teacher)}`, display_name: teacher, timezone: tz[teacher] || null },
       ...(student ? [{ role: 'student' as const, id: `s_${slugId(student)}`, display_name: student, timezone: tz[student] || null }] : []),
     ],
+    textbook: (side?.textbook as string | null | undefined) ?? null,
+    studentProfile: (side?.studentProfile as PackInputs['studentProfile']) ?? null,
     intentBefore: side?.intentBefore || pack.meta.intentBefore || null,
     noteAfter: side?.noteAfter || pack.meta.noteAfter || null,
     narration: pack.allNarration,

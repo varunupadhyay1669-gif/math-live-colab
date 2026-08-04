@@ -36,6 +36,8 @@ export function fixture(overrides = {}) {
       { role: 'tutor', id: 'u_varun_upadhyay', display_name: 'Varun Upadhyay', timezone: 'Asia/Kolkata' },
       { role: 'student', id: 's_kanishka_sharma', display_name: 'Kanishka Sharma', timezone: 'Asia/Dubai' },
     ],
+    textbook: 'NCERT Class 9 Maths',
+    studentProfile: { grade: 'Class 9', level: 'Foundation', goals: ['Confident with inequalities', 'Show every step'] },
     intentBefore: 'aiming to finish sets; homework should lean on interval notation',
     noteAfter: 'still flipping the inequality sign when dividing by a negative - worksheet should drill that',
     narration: [

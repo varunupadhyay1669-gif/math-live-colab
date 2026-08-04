@@ -56,6 +56,10 @@ export interface PackInputs {
   subject: string;
   lessonNumber: number | null;
   participants: PackParticipant[];
+  /** Free text from the student's dashboard: "NCERT Class 9 Maths". */
+  textbook?: string | null;
+  /** grade / level / goals, also from the dashboard. */
+  studentProfile?: { grade: string | null; level: string | null; goals: string[] } | null;
   intentBefore: string | null;
   noteAfter: string | null;
   narration: NarrationLine[];
@@ -78,6 +82,17 @@ export const LOW_CONFIDENCE_THRESHOLD = 0.72;
 
 const secs = (ms: number) => Math.round(ms) / 1000;
 const pad4 = (n: number) => String(n).padStart(4, '0');
+
+/**
+ * A profile the tutor never filled in is null, not an object of empty strings.
+ *
+ * `{grade: null, level: null, goals: []}` in the file reads as "we recorded
+ * this student's profile and it is blank", which is a different and wrong
+ * claim. Absent means we don't know.
+ */
+function emptyProfile(p: PackInputs['studentProfile']): boolean {
+  return !p || (!p.grade && !p.level && (p.goals || []).length === 0);
+}
 
 /** Which surface was on screen at time t, from the surface_changed events. */
 export function surfaceAt(events: PackEvent[], tSeconds: number, fallback: string | null): string | null {
@@ -245,7 +260,11 @@ export function buildPackJson(inputs: PackInputs): ClassPackJson {
       subject: inputs.subject,
       lesson_number: inputs.lessonNumber,
       participants: inputs.participants,
-      textbook: null,          // no source for this yet — see the note in the report
+      // One line of the tutor's own words. It is not parsed into an edition or
+      // a note — guessing structure out of "Cambridge IGCSE Extended (4th ed)"
+      // would put invented facts in a file a model reads as ground truth.
+      textbook: inputs.textbook?.trim() ? { title: inputs.textbook.trim(), edition: null, note: null } : null,
+      student_profile: emptyProfile(inputs.studentProfile) ? null : inputs.studentProfile!,
       tutor_intent_before: inputs.intentBefore,
       tutor_note_after: inputs.noteAfter,
     },

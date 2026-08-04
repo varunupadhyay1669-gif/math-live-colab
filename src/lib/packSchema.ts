@@ -9,7 +9,17 @@
 // absent — and every id is stable across re-exports of the same session so a
 // consumer can diff two exports meaningfully.
 
-export const SCHEMA_VERSION = '1.0';
+export const SCHEMA_VERSION = '1.1';
+
+/**
+ * Any 1.x pack is valid. New fields in a minor version are optional additions,
+ * so a pack written by an older exporter is still readable — and rejecting one
+ * would mean a tutor's file from last month stopped validating just because the
+ * app moved on. A major bump is what signals a real break.
+ */
+export function versionAccepted(v: unknown): boolean {
+  return typeof v === 'string' && /^1\.\d+$/.test(v);
+}
 
 export interface PackParticipant {
   role: 'tutor' | 'student';
@@ -28,6 +38,14 @@ export interface PackSession {
   lesson_number: number | null;
   participants: PackParticipant[];
   textbook: { title: string; edition: string | null; note: string | null } | null;
+  /**
+   * What the tutor holds in their head between lessons, from the student's
+   * dashboard: which class they're in, the level they work at, what they're
+   * working towards. A pack without it describes an hour with an anonymous
+   * learner; with it, a worksheet built from the pack is pitched right.
+   * Null when this room has no student record, or the tutor left it blank.
+   */
+  student_profile: { grade: string | null; level: string | null; goals: string[] } | null;
   tutor_intent_before: string | null;
   tutor_note_after: string | null;
 }
@@ -181,10 +199,16 @@ export function validatePack(pack: unknown): string[] {
   const isNum = (v: unknown) => typeof v === 'number' && Number.isFinite(v);
   const isBool = (v: unknown) => typeof v === 'boolean';
   const nullable = (v: unknown, ok: (x: unknown) => boolean) => v === null || ok(v);
+  // Iterate only what is actually iterable. `(x || [])` looks safe and isn't:
+  // a string or an object passes the || and then has no .entries(), so a
+  // malformed pack made the validator THROW instead of reporting the fault —
+  // exactly backwards for the one caller that matters, the one checking a file
+  // it did not write. The isArr() check above each loop still records the error.
+  const list = <T>(v: unknown): T[] => (Array.isArray(v) ? v as T[] : []);
 
   if (!p || typeof p !== 'object') return ['pack is not an object'];
 
-  req(p.schema_version === SCHEMA_VERSION, `schema_version must be ${SCHEMA_VERSION}`);
+  req(versionAccepted(p.schema_version), `schema_version must be 1.x (current ${SCHEMA_VERSION})`);
   req(isStr(p.generated_at), 'generated_at must be a string');
 
   const s = p.session;
@@ -195,7 +219,7 @@ export function validatePack(pack: unknown): string[] {
     req(isNum(s.duration_s) && s.duration_s >= 0, 'session.duration_s must be a number');
     req(isStr(s.room), 'session.room must be a string');
     req(isArr(s.participants), 'session.participants must be an array');
-    for (const [i, part] of (s.participants || []).entries()) {
+    for (const [i, part] of list<any>(s.participants).entries()) {
       req(part.role === 'tutor' || part.role === 'student', `participants[${i}].role invalid`);
       req(isStr(part.id) && part.id.length > 0, `participants[${i}].id missing`);
       req(isStr(part.display_name), `participants[${i}].display_name missing`);
@@ -203,11 +227,29 @@ export function validatePack(pack: unknown): string[] {
     }
     req(nullable(s.tutor_intent_before, isStr), 'session.tutor_intent_before must be string or null');
     req(nullable(s.tutor_note_after, isStr), 'session.tutor_note_after must be string or null');
+    if (s.textbook !== null && s.textbook !== undefined) {
+      req(isStr(s.textbook.title) && s.textbook.title.length > 0, 'session.textbook.title must be a non-empty string');
+      req(nullable(s.textbook.edition, isStr), 'session.textbook.edition must be string or null');
+      req(nullable(s.textbook.note, isStr), 'session.textbook.note must be string or null');
+    }
+    // Additive: a pack written before this field existed simply omits it, and
+    // that must not be an error. Only a PRESENT profile is checked.
+    if (s.student_profile !== null && s.student_profile !== undefined) {
+      req(nullable(s.student_profile.grade, isStr), 'session.student_profile.grade must be string or null');
+      req(nullable(s.student_profile.level, isStr), 'session.student_profile.level must be string or null');
+      // Guarded rather than chained: a validator that THROWS on a malformed
+      // pack is useless to the one caller that matters — the one checking a
+      // file it did not write. Report the fault, never raise it.
+      req(isArr(s.student_profile.goals), 'session.student_profile.goals must be an array');
+      if (isArr(s.student_profile.goals)) {
+        req(s.student_profile.goals.every(isStr), 'session.student_profile.goals must all be strings');
+      }
+    }
   }
 
-  const surfaceIds = new Set((p.surfaces || []).map(x => x.id));
+  const surfaceIds = new Set(list<any>(p.surfaces).map(x => x.id));
   req(isArr(p.surfaces), 'surfaces must be an array');
-  for (const [i, sf] of (p.surfaces || []).entries()) {
+  for (const [i, sf] of list<any>(p.surfaces).entries()) {
     req(isStr(sf.id) && sf.id.length > 0, `surfaces[${i}].id missing`);
     req(['whiteboard', 'explainer', 'lesson'].includes(sf.type), `surfaces[${i}].type invalid`);
     req(nullable(sf.title, isStr), `surfaces[${i}].title must be string or null`);
@@ -215,7 +257,7 @@ export function validatePack(pack: unknown): string[] {
 
   req(isArr(p.transcript), 'transcript must be an array');
   const lineIds = new Set<string>();
-  for (const [i, l] of (p.transcript || []).entries()) {
+  for (const [i, l] of list<any>(p.transcript).entries()) {
     req(isStr(l.id) && l.id.length > 0, `transcript[${i}].id missing`);
     req(!lineIds.has(l.id), `transcript[${i}].id "${l.id}" is duplicated`);
     lineIds.add(l.id);
@@ -230,7 +272,7 @@ export function validatePack(pack: unknown): string[] {
 
   req(isArr(p.snapshots), 'snapshots must be an array');
   const snapIds = new Set<string>();
-  for (const [i, sn] of (p.snapshots || []).entries()) {
+  for (const [i, sn] of list<any>(p.snapshots).entries()) {
     req(isStr(sn.id) && sn.id.length > 0, `snapshots[${i}].id missing`);
     req(!snapIds.has(sn.id), `snapshots[${i}].id "${sn.id}" is duplicated`);
     snapIds.add(sn.id);
@@ -242,7 +284,7 @@ export function validatePack(pack: unknown): string[] {
     req(sn.ink_bbox === null || (isArr(sn.ink_bbox) && sn.ink_bbox.length === 4), `snapshots[${i}].ink_bbox must be null or 4 numbers`);
     req(nullable(sn.ocr_text, isStr), `snapshots[${i}].ocr_text must be string or null`);
     req(isArr(sn.transcript_window), `snapshots[${i}].transcript_window must be an array`);
-    for (const id of sn.transcript_window || []) {
+    for (const id of list<any>(sn.transcript_window)) {
       req(lineIds.has(id), `snapshots[${i}].transcript_window references unknown line "${id}"`);
     }
     // A frame claiming new ink with no evidence of where it is helps nobody.
@@ -250,14 +292,14 @@ export function validatePack(pack: unknown): string[] {
   }
 
   req(isArr(p.interactives), 'interactives must be an array');
-  for (const [i, it] of (p.interactives || []).entries()) {
+  for (const [i, it] of list<any>(p.interactives).entries()) {
     req(surfaceIds.has(it.surface_id), `interactives[${i}].surface_id "${it.surface_id}" is not a known surface`);
     req(isStr(it.question_id) && it.question_id.length > 0, `interactives[${i}].question_id missing`);
     req(isStr(it.prompt), `interactives[${i}].prompt must be a string`);
     req(isArr(it.options), `interactives[${i}].options must be an array`);
     req(nullable(it.correct_option_index, isNum), `interactives[${i}].correct_option_index must be number or null`);
     req(isArr(it.attempts), `interactives[${i}].attempts must be an array`);
-    for (const [j, a] of (it.attempts || []).entries()) {
+    for (const [j, a] of list<any>(it.attempts).entries()) {
       req(isNum(a.t), `interactives[${i}].attempts[${j}].t must be a number`);
       req(a.by === 'tutor' || a.by === 'student', `interactives[${i}].attempts[${j}].by invalid`);
       req(nullable(a.correct, isBool), `interactives[${i}].attempts[${j}].correct must be boolean or null`);

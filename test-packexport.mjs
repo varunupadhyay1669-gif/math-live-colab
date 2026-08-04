@@ -402,6 +402,68 @@ const noTz = rebuildFromStored({ ...stored, side: { ...stored.side, timezones: u
 assert(noTz.json.session.participants[0].timezone === null,
   'a session saved before zones existed re-exports null, not a guessed zone');
 
+console.log('E22: who the hour was for — textbook and student profile');
+// The pack described an hour with an anonymous learner. The tutor already
+// keeps this on the dashboard; a worksheet built from a pack that includes it
+// is pitched at the right level and matches the book the student owns.
+assert(pack.session.textbook?.title === 'NCERT Class 9 Maths', 'the book reaches the pack', JSON.stringify(pack.session.textbook));
+assert(pack.session.textbook.edition === null && pack.session.textbook.note === null,
+  'and is not split into invented structure — one line is what the tutor typed');
+assert(pack.session.student_profile.grade === 'Class 9', 'the grade reaches it');
+assert(pack.session.student_profile.level === 'Foundation', 'and the level');
+assert(pack.session.student_profile.goals.length === 2, 'and every goal', String(pack.session.student_profile.goals.length));
+assert(validatePack(pack).length === 0, 'and the pack still validates');
+
+const noRecord = buildPackJson(fixture({ textbook: null, studentProfile: null }));
+assert(noRecord.session.textbook === null, 'an ad-hoc room with no student record says null');
+assert(noRecord.session.student_profile === null, 'and null for the profile');
+assert(validatePack(noRecord).length === 0, 'which is still a valid pack — the fields are additive');
+const blank = buildPackJson(fixture({ textbook: '   ', studentProfile: { grade: '', level: '', goals: [] } }));
+assert(blank.session.textbook === null, 'whitespace is not a textbook title');
+assert(blank.session.student_profile === null,
+  'and an untouched profile is absent, not an object of empty strings claiming we looked');
+
+console.log('E23: an older pack is still a valid pack');
+// A tutor's file from last month must not stop validating because the app
+// gained a field. Additive means additive.
+assert(SCHEMA_VERSION === '1.1', `current version is 1.1`, SCHEMA_VERSION);
+const older = JSON.parse(JSON.stringify(pack));
+older.schema_version = '1.0';
+delete older.session.student_profile;
+delete older.session.textbook;
+assert(validatePack(older).length === 0, 'a 1.0 pack with neither field validates', validatePack(older).slice(0, 2).join(' | '));
+assert(validatePack({ ...pack, schema_version: '0.9' }).length > 0, 'but a pre-1.x pack is still rejected');
+assert(validatePack({ ...pack, schema_version: '2.0' }).length > 0, 'and so is a future major version');
+const badProfile = JSON.parse(JSON.stringify(pack));
+badProfile.session.student_profile.goals = 'confidence';
+assert(validatePack(badProfile).some(e => e.includes('goals must be an array')), 'a malformed profile is caught');
+const badBook = JSON.parse(JSON.stringify(pack));
+badBook.session.textbook.title = '';
+assert(validatePack(badBook).some(e => e.includes('textbook.title')), 'and an empty book title');
+
+console.log('E24: the validator reports faults, it does not raise them');
+// Its only real caller is someone checking a file they did not write — a pack
+// pulled off disk, edited by hand, or written by an older build. Throwing on
+// bad input is the one behaviour that makes it useless there.
+const survives = (label, mutate) => {
+  const bad_ = JSON.parse(JSON.stringify(pack));
+  mutate(bad_);
+  try { assert(validatePack(bad_).length > 0, label); }
+  catch (e) { bad(label, 'THREW: ' + e.message); }
+};
+survives('a string where participants should be', p => { p.session.participants = 'Varun'; });
+survives('a string where surfaces should be', p => { p.surfaces = 'wb_1'; });
+survives('a number where transcript should be', p => { p.transcript = 7; });
+survives('an object where snapshots should be', p => { p.snapshots = { a: 1 }; });
+survives('a string transcript_window on a snapshot', p => { p.snapshots[0].transcript_window = 't0001'; });
+survives('a string where interactives should be', p => { p.interactives = 'q7'; });
+survives('a string where an interactive\'s attempts should be', p => { p.interactives[0].attempts = 'one'; });
+survives('goals that are not a list', p => { p.session.student_profile.goals = 'confidence'; });
+try {
+  assert(validatePack(undefined).length > 0 && validatePack([]).length > 0 && validatePack('{}').length > 0,
+    'undefined, an array and a string are all rejected without throwing');
+} catch (e) { bad('primitive inputs', 'THREW: ' + e.message); }
+
 console.log(`\nPACK EXPORT RESULT: ${pass} passed, ${fail} failed`);
 if (fails.length) { console.log('FAILURES:'); fails.forEach(f => console.log('  - ' + f)); }
 process.exit(fail === 0 ? 0 : 1);

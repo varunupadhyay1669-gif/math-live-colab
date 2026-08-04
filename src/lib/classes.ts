@@ -20,6 +20,7 @@ export interface ClassRow {
   level?: string | null;
   goals?: string | null;    // one goal per line
   avatar?: string | null;   // a single emoji; blank falls back to initials
+  textbook?: string | null; // the book this student follows (migration 002)
 }
 
 /** Thrown when the profile columns haven't been added to the database yet. */
@@ -93,6 +94,7 @@ export async function updateClass(
   fields: {
     student_name?: string; label?: string | null;
     grade?: string | null; level?: string | null; goals?: string | null; avatar?: string | null;
+    textbook?: string | null;
   },
 ): Promise<void> {
   if (!supabase) return;

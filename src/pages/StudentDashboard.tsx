@@ -42,7 +42,7 @@ export default function StudentDashboard() {
   // Draft of the editable fields. Kept separate from `row` so typing never
   // fights a background refresh, and so Cancel is a real cancel.
   const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState({ grade: '', level: '', goals: '', avatar: '', label: '' });
+  const [draft, setDraft] = useState({ grade: '', level: '', goals: '', avatar: '', label: '', textbook: '' });
 
   useEffect(() => {
     if (auth.loading) return;
@@ -59,7 +59,7 @@ export default function StudentDashboard() {
       const p = profileFrom(found);
       setDraft({
         grade: p.grade, level: p.level, goals: joinGoals(p.goals),
-        avatar: p.avatar, label: found.label ?? '',
+        avatar: p.avatar, label: found.label ?? '', textbook: found.textbook ?? '',
       });
       try { setSessions(await listSessions(found.id)); } catch { setSessions([]); }
       // Packs live in this browser, not the database, so they are only ever
@@ -118,6 +118,7 @@ export default function StudentDashboard() {
       level: draft.level.trim() || null,
       goals: joinGoals(parseGoals(draft.goals)) || null,
       avatar: firstEmoji(draft.avatar) || null,
+      textbook: draft.textbook.trim() || null,
     };
     try {
       await updateClass(row.id, fields);
@@ -135,7 +136,7 @@ export default function StudentDashboard() {
 
   const cancel = () => {
     const p = profileFrom(row);
-    setDraft({ grade: p.grade, level: p.level, goals: joinGoals(p.goals), avatar: p.avatar, label: row?.label ?? '' });
+    setDraft({ grade: p.grade, level: p.level, goals: joinGoals(p.goals), avatar: p.avatar, label: row?.label ?? '', textbook: row?.textbook ?? '' });
     setEditing(false);
     setError(null);
   };
@@ -246,6 +247,7 @@ export default function StudentDashboard() {
               <dl className="ml-sd-facts">
                 <Fact label="Grade / year" value={profile.grade} />
                 <Fact label="Level" value={profile.level} />
+                <Fact label="Textbook" value={row.textbook ?? ''} />
                 <div className="ml-sd-fact">
                   <dt>Goals</dt>
                   <dd>
@@ -266,6 +268,11 @@ export default function StudentDashboard() {
                   <span>Level</span>
                   <input className="ml-dark-input" value={draft.level} placeholder="e.g. Higher, Foundation, Olympiad"
                     onChange={(e) => setDraft(d => ({ ...d, level: e.target.value }))} />
+                </label>
+                <label>
+                  <span>Textbook</span>
+                  <input className="ml-dark-input" value={draft.textbook} placeholder="e.g. NCERT Class 9 Maths"
+                    onChange={(e) => setDraft(d => ({ ...d, textbook: e.target.value }))} />
                 </label>
                 <label>
                   <span>Subject / note</span>

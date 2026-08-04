@@ -1,5 +1,5 @@
 {
-  "schema_version": "1.0",
+  "schema_version": "1.1",
   "generated_at": "2026-08-03T21:30:00.000Z",
   "session": {
     "id": "sess_kanishka_20260803",
@@ -22,7 +22,19 @@
         "timezone": "Asia/Dubai"
       }
     ],
-    "textbook": null,
+    "textbook": {
+      "title": "NCERT Class 9 Maths",
+      "edition": null,
+      "note": null
+    },
+    "student_profile": {
+      "grade": "Class 9",
+      "level": "Foundation",
+      "goals": [
+        "Confident with inequalities",
+        "Show every step"
+      ]
+    },
     "tutor_intent_before": "aiming to finish sets; homework should lean on interval notation",
     "tutor_note_after": "still flipping the inequality sign when dividing by a negative - worksheet should drill that"
   },

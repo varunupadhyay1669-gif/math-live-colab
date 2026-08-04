@@ -28,6 +28,8 @@ import { closestQuestionBlock, optionIndexOf, readCorrectness, summariseInteract
 import type { PackEvent, PackSurface, PackExplainerOutline, PackInteractive } from "../lib/packSchema";
 import { Narrator, narrationSupported, getNarrationChoice, setNarrationChoice } from "../lib/narration";
 import { localTimezone } from "../lib/tz";
+import { getClassByRoomCode } from "../lib/classes";
+import { parseGoals } from "../lib/studentProfile";
 import FeedbackToasts from "../components/FeedbackToasts";
 import PausedOverlay from "../components/PausedOverlay";
 import TimerDisplay from "../components/TimerDisplay";
@@ -288,6 +290,12 @@ export default function Room() {
   // Everything the JSON sidecar needs that isn't already in ClassPack.
   const packEventsRef = useRef<PackEvent[]>([]);
   const participantTzRef = useRef<Record<string, string>>({});
+  // The student's record from the dashboard — their class, level, what they're
+  // working towards, the book they follow. Fetched once, best effort: an
+  // ad-hoc room with no student record, a signed-out tutor, an un-migrated
+  // database or an offline Supabase all leave this null and the lesson runs
+  // exactly as before. It only ever adds context to the class pack.
+  const classRowRef = useRef<{ grade: string | null; level: string | null; goals: string[]; textbook: string | null } | null>(null);
   const packSurfacesRef = useRef<PackSurface[]>([{ id: 'wb_1', type: 'whiteboard', title: null }]);
   const packOutlinesRef = useRef<PackExplainerOutline[]>([]);
   const packAttemptsRef = useRef<RecordedAttempt[]>([]);
@@ -2427,6 +2435,27 @@ export default function Room() {
   }, [whiteboardMode, showTempContent, tempContent, previewHtml, iframeDocNonce]);
 
   // ── Surviving a reload ──
+  // Pull the student's record once, so the pack can say who this hour was for.
+  // Deliberately silent on failure — an ad-hoc room has no record, and a lesson
+  // must never wait on, or be broken by, a profile lookup.
+  useEffect(() => {
+    if (!roomId) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const found = await getClassByRoomCode(roomId);
+        if (cancelled || !found) return;
+        classRowRef.current = {
+          grade: found.grade ?? null,
+          level: found.level ?? null,
+          goals: parseGoals(found.goals ?? ''),
+          textbook: found.textbook ?? null,
+        };
+      } catch { /* no record, not signed in, or the columns aren't there yet */ }
+    })();
+    return () => { cancelled = true; };
+  }, [roomId]);
+
   // The pack is the lesson's only record while the lesson runs. Losing it to a
   // refresh at minute 40 is unrecoverable, because the lesson is over. Restore
   // anything already captured for this room today, then keep saving.
@@ -2486,6 +2515,10 @@ export default function Room() {
           teacher: teacherName,
           student: users.find(u => u.role === 'student')?.name ?? null,
           timezones: { ...participantTzRef.current, ...(localTimezone() ? { [teacherName]: localTimezone()! } : {}) },
+          textbook: classRowRef.current?.textbook ?? null,
+          studentProfile: classRowRef.current
+            ? { grade: classRowRef.current.grade, level: classRowRef.current.level, goals: classRowRef.current.goals }
+            : null,
         },
       });
     };
@@ -2678,6 +2711,10 @@ export default function Room() {
           { role: 'tutor' as const, id: `u_${slugId(teacherName)}`, display_name: teacherName, timezone: localTimezone() || null },
           ...(studentName ? [{ role: 'student' as const, id: `s_${slugId(studentName)}`, display_name: studentName, timezone: participantTzRef.current[studentName] || null }] : []),
         ],
+        textbook: classRowRef.current?.textbook ?? null,
+        studentProfile: classRowRef.current
+          ? { grade: classRowRef.current.grade, level: classRowRef.current.level, goals: classRowRef.current.goals }
+          : null,
         intentBefore: intentBefore.trim() || null,
         noteAfter: noteAfter.trim() || null,
         narration: pack.allNarration,

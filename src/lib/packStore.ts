@@ -33,6 +33,9 @@ export interface StoredSide {
   student: string | null;
   /** display_name -> IANA zone, for whoever reported one. */
   timezones?: Record<string, string>;
+  /** The student's record as it stood during the lesson. */
+  textbook?: string | null;
+  studentProfile?: { grade: string | null; level: string | null; goals: string[] } | null;
 }
 
 export interface StoredPack {
