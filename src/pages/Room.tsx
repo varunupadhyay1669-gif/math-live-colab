@@ -2432,6 +2432,17 @@ export default function Room() {
       if (revived) {
         packRef.current = revived;
         setPackCounts(revived.counts);
+        setHomeworkItems([...revived.allHomework]);
+        const side = stored.side;
+        if (side) {
+          packEventsRef.current = (side.events as typeof packEventsRef.current) || [];
+          if (Array.isArray(side.surfaces) && side.surfaces.length) packSurfacesRef.current = side.surfaces as typeof packSurfacesRef.current;
+          packOutlinesRef.current = (side.outlines as typeof packOutlinesRef.current) || [];
+          packInteractivesRef.current = (side.interactives as typeof packInteractivesRef.current) || [];
+          packAttemptsRef.current = (side.attempts as typeof packAttemptsRef.current) || [];
+          if (side.intentBefore) setIntentBefore(side.intentBefore);
+          if (side.noteAfter) setNoteAfter(side.noteAfter);
+        }
         showNotif(`📦 Picked up this lesson's record again — ${revived.counts.snapshots} snapshots, ${revived.counts.narration} spoken lines`);
       }
       setPackRestored(true);
@@ -2454,6 +2465,18 @@ export default function Room() {
         startedAt: pack.startedAt,
         savedAt: Date.now(),
         state: pack.toState(),
+        // The side tables too: without them a reload kept the board and the
+        // transcript but lost every answered question.
+        side: {
+          events: packEventsRef.current,
+          surfaces: packSurfacesRef.current,
+          outlines: packOutlinesRef.current,
+          interactives: packInteractivesRef.current,
+          attempts: packAttemptsRef.current,
+          intentBefore, noteAfter,
+          teacher: teacherName,
+          student: users.find(u => u.role === 'student')?.name ?? null,
+        },
       });
     };
     const id = setInterval(write, 20_000);
@@ -2465,7 +2488,7 @@ export default function Room() {
       window.removeEventListener('pagehide', write);
       write();
     };
-  }, [roomId, packRestored]);
+  }, [roomId, packRestored, intentBefore, noteAfter, teacherName, users]);
 
   // ── P0-3: snapshot when the board actually CHANGES ──
   // A timer produced runs of near-identical frames and missed the moments that

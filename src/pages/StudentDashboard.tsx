@@ -7,6 +7,8 @@ import { cleanDisplayName } from "../lib/displayName";
 import {
   profileFrom, joinGoals, parseGoals, avatarFor, summariseHistory, sinceLabel, firstEmoji,
 } from "../lib/studentProfile";
+import { listPacks, type StoredPack } from "../lib/packStore";
+import { rebuildJsonBlob, rebuildArchive } from "../lib/packRebuild";
 
 // ─────────────────────────────────────────────────────────────────────────
 // One student, one page.
@@ -33,6 +35,9 @@ export default function StudentDashboard() {
   const [saving, setSaving] = useState(false);
   const [savedAt, setSavedAt] = useState(0);
   const [copied, setCopied] = useState(false);
+  // Class packs captured for this student's room, still on this machine.
+  const [packs, setPacks] = useState<StoredPack[]>([]);
+  const [rebuilding, setRebuilding] = useState<string | null>(null);
 
   // Draft of the editable fields. Kept separate from `row` so typing never
   // fights a background refresh, and so Cancel is a real cancel.
@@ -57,6 +62,9 @@ export default function StudentDashboard() {
         avatar: p.avatar, label: found.label ?? '',
       });
       try { setSessions(await listSessions(found.id)); } catch { setSessions([]); }
+      // Packs live in this browser, not the database, so they are only ever
+      // available on the machine the lesson was taught from.
+      try { setPacks((await listPacks()).filter(p => p.room === found.room_code)); } catch { setPacks([]); }
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not load this student');
     } finally {
@@ -130,6 +138,31 @@ export default function StudentDashboard() {
     setDraft({ grade: p.grade, level: p.level, goals: joinGoals(p.goals), avatar: p.avatar, label: row?.label ?? '' });
     setEditing(false);
     setError(null);
+  };
+
+  const downloadBlob = (blob: Blob, filename: string) => {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 30_000);
+  };
+
+  const reExport = async (stored: StoredPack, jsonOnly: boolean) => {
+    if (rebuilding) return;
+    setRebuilding(stored.key);
+    try {
+      const built = jsonOnly ? rebuildJsonBlob(stored) : await rebuildArchive(stored);
+      if (!built) { setError('That saved lesson could not be rebuilt — the record looks incomplete.'); return; }
+      downloadBlob(built.blob, built.filename);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not rebuild that pack');
+    } finally {
+      setRebuilding(null);
+    }
   };
 
   const fmtDate = (iso: string) => {
@@ -299,6 +332,44 @@ export default function StudentDashboard() {
             )}
           </section>
         </div>
+
+        {/* ── Class packs still on this machine ──
+            Re-export without re-running the lesson: the JSON alone when a
+            consumer just needs the data again, or the whole archive. */}
+        {packs.length > 0 && (
+          <section className="ml-sd-card" style={{ marginTop: 14 }}>
+            <div className="ml-sd-card-head">
+              <h2>Saved class packs</h2>
+              <span className="ml-sd-count">{packs.length}</span>
+            </div>
+            <p className="ml-sd-blank" style={{ lineHeight: 1.5, marginBottom: 10 }}>
+              Captured on this computer. Re-export one to hand to an AI again — the
+              JSON on its own, or the full pack with the PDF and images.
+            </p>
+            <ul className="ml-sd-sessions">
+              {packs.map((p) => (
+                <li key={p.key}>
+                  <span className="ml-sd-session-text">
+                    <strong>{new Date(p.startedAt).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })}</strong>
+                    <span className="ml-sd-session-date">
+                      saved {fmtDate(new Date(p.savedAt).toISOString())}
+                    </span>
+                  </span>
+                  <span style={{ display: 'flex', gap: 6 }}>
+                    <button className="ml-dark-btn ml-dark-btn-ghost" disabled={rebuilding === p.key}
+                      onClick={() => void reExport(p, true)}>
+                      {rebuilding === p.key ? 'Working…' : 'JSON only'}
+                    </button>
+                    <button className="ml-dark-btn ml-dark-btn-glass" disabled={rebuilding === p.key}
+                      onClick={() => void reExport(p, false)}>
+                      Full pack
+                    </button>
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </section>
+        )}
       </div>
     </Shell>
   );

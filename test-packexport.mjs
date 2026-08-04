@@ -126,6 +126,12 @@ assert(readCorrectness(el('option correct'), null) === true, 'a "correct" class 
 assert(readCorrectness(el('option wrong'), null) === false, 'a "wrong" class as incorrect');
 assert(readCorrectness(el('option'), null) === null, 'a page that says nothing yields null, not a guess');
 assert(readCorrectness(el('option', { 'data-correct': 'false' }), null) === false, 'data-correct="false" is respected');
+// On a question BLOCK, data-correct is the index of the right option, not a
+// verdict on this click. Reading it as a boolean marked wrong answers correct.
+const blockWithIndex = el('question', { 'data-correct': '0' });
+assert(readCorrectness(el('option'), blockWithIndex) === null, 'a numeric data-correct on the block is an index, not a verdict');
+assert(readCorrectness(el('option wrong'), blockWithIndex) === false, 'the option\'s own state still wins');
+assert(readCorrectness(el('option', { 'data-correct': 'true' }), blockWithIndex) === true, 'and a real verdict on the option is respected');
 const unanswered = summariseInteractives([{ questionId: 'q7', prompt: 'p', options: ['a', 'b'], correctIndex: 0, optionIndex: null, correct: null, widget: 'w', by: 'student', t: 1 }], 'exp_1');
 assert(unanswered[0].final_state === 'unanswered', 'a non-answer is not scored');
 
@@ -292,6 +298,74 @@ assert(hwBack.allHomework.length === 2, 'attachments come back after a reload', 
 assert(hwBack.allHomework.find(h => h.kind === 'submission').dataUrl === IMG, 'with the image intact');
 hwBack.removeHomework('attempt.jpg', 'submission');
 assert(hwBack.allHomework.length === 1, 'and can be removed again');
+
+console.log('E19: a stored session can be re-exported without re-running it (P2-4)');
+const { rebuildFromStored, rebuildJsonBlob } = await import('./src/lib/packRebuild.ts');
+const source = new ClassPack();
+source.meta = { room: 'kanishka', teacher: 'Varun Upadhyay', student: 'Kanishka Sharma' };
+source.addNarration('Varun Upadhyay', 'so we subtract two from both sides');
+source.addNarration('Kanishka Sharma', 'is it minus eighteen');
+source.addArtifact('explanation', 'Interval notation', '<html><body>...</body></html>');
+source.offerImage(IMG, 400, 300, 'Whiteboard', { force: true, surfaceId: 'wb_1', reason: 'ink_committed', inkBbox: [10, 20, 90, 60] });
+source.addHomework({ kind: 'submission', name: 'attempt.jpg', mime: 'image/jpeg', dataUrl: IMG, width: 40, height: 30, addedAt: 5 });
+
+const stored = {
+  key: 'kanishka:2026-08-04', room: 'kanishka',
+  startedAt: source.startedAt, savedAt: source.startedAt + 2400_000,
+  state: JSON.parse(JSON.stringify(source.toState())),
+  side: {
+    events: [{ t: 100, type: 'control_handed_to_student' }],
+    surfaces: [{ id: 'wb_1', type: 'whiteboard', title: null }, { id: 'exp_1', type: 'explainer', title: 'Interval notation' }],
+    outlines: [{ surface_id: 'exp_1', title: 'Interval notation', sections: [], source_ref: null }],
+    interactives: [{ surface_id: 'exp_1', widget: 'practice_zone', question_id: 'q4', prompt: 'p', options: ['a', 'b'], correct_option_index: 1, attempts: [{ t: 200, by: 'student', option_index: 0, correct: false }], final_state: 'incorrect' }],
+    attempts: [],
+    intentBefore: 'finish sets', noteAfter: 'flips the sign', teacher: 'Varun Upadhyay', student: 'Kanishka Sharma',
+  },
+};
+
+const rebuilt = rebuildFromStored(stored);
+assert(rebuilt !== null, 'a stored session rebuilds');
+assert(validatePack(rebuilt.json).length === 0, 'and the rebuilt pack validates', validatePack(rebuilt.json).slice(0, 2).join(' | '));
+assert(rebuilt.json.session.duration_s === 2400, 'the length comes from when it was last saved', String(rebuilt.json.session.duration_s));
+assert(rebuilt.json.transcript.length === 2, 'the transcript survives');
+assert(rebuilt.json.interactives[0].question_id === 'q4', 'and the answered question, which lives outside the pack');
+assert(rebuilt.json.interactives[0].final_state === 'incorrect', 'with what she actually did');
+
+// The regression that shipped: attempts and discovered questions are two
+// separate stored lists, and reading only the second re-exported every
+// question as "unanswered" — losing the whole point of the pack.
+const attemptsOnly = rebuildFromStored({
+  ...stored,
+  side: {
+    ...stored.side,
+    // As the app actually stores it: the question found on the page carries no
+    // attempts, and the click is recorded separately.
+    interactives: [{ surface_id: 'exp_1', widget: 'multiple_choice', question_id: 'q7', prompt: 'Which is closed?', options: ['[2,7]', '(2,7)'], correct_option_index: 0, attempts: [], final_state: 'unanswered' }],
+    attempts: [{ questionId: 'q7', prompt: 'Which is closed?', options: ['[2,7]', '(2,7)'], correctIndex: 0, optionIndex: 1, correct: false, widget: 'multiple_choice', by: 'student', t: 240 }],
+  },
+});
+const q7 = attemptsOnly.json.interactives.find(i => i.question_id === 'q7');
+assert(q7.attempts.length === 1, 'a stored attempt is folded back in on re-export', String(q7.attempts.length));
+assert(q7.final_state === 'incorrect', 'so a wrong answer does not re-export as "unanswered"', q7.final_state);
+assert(q7.attempts[0].by === 'student', 'still attributed to the student');
+assert(rebuilt.json.surfaces.length === 2, 'the surface registry too');
+assert(rebuilt.json.explainer_outlines.length === 1, 'and the explainer outline');
+assert(rebuilt.json.session.tutor_intent_before === 'finish sets', 'the tutor intent is not lost');
+assert(rebuilt.json.homework.submitted === true, 'nor her homework');
+assert(rebuilt.json.snapshots[0].has_new_ink === true, 'ink metadata rebuilds');
+assert(rebuilt.json.capture_report.failures.some(f => f.what === 're-export'),
+  'and the pack says plainly that it was rebuilt rather than captured live');
+
+console.log('E20: re-export is stable and refuses a broken record');
+const again = rebuildFromStored(stored);
+assert(JSON.stringify({ ...rebuilt.json, generated_at: null }) === JSON.stringify({ ...again.json, generated_at: null }),
+  'two re-exports of one session are identical apart from the timestamp');
+assert(rebuildFromStored({ ...stored, state: { v: 99 } }) === null, 'an unreadable record yields null, not a partial pack');
+assert(rebuildFromStored({ ...stored, side: undefined }) !== null, 'a record with no side tables still rebuilds what it has');
+const jsonOnly = rebuildJsonBlob(stored);
+assert(jsonOnly.filename.endsWith('.json'), 'the JSON-only export is a .json', jsonOnly.filename);
+assert(jsonOnly.blob.type === 'application/json', 'with the right type');
+assert(jsonOnly.blob.size > 500, 'and real content', String(jsonOnly.blob.size));
 
 console.log(`\nPACK EXPORT RESULT: ${pass} passed, ${fail} failed`);
 if (fails.length) { console.log('FAILURES:'); fails.forEach(f => console.log('  - ' + f)); }

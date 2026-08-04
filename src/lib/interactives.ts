@@ -56,16 +56,24 @@ export function closestQuestionBlock(el: ElLike | null, maxHops = 8): ElLike | n
  * false "she got this wrong" is worse than one built on a gap.
  */
 export function readCorrectness(optionEl: ElLike | null, block: ElLike | null): boolean | null {
-  const check = (el: ElLike | null): boolean | null => {
+  const check = (el: ElLike | null, allowAttr: boolean): boolean | null => {
     if (!el) return null;
-    const attr = el.getAttribute('data-correct');
-    if (attr !== null) return attr !== 'false';
+    if (allowAttr) {
+      const attr = el.getAttribute('data-correct');
+      // A NUMBER here is an index ("option 2 is the right one"), not a verdict
+      // on this click. Reading it as a boolean marked every answer on such a
+      // question correct — including wrong ones, in the pack a worksheet is
+      // then built from.
+      if (attr !== null && !/^\d+$/.test(attr.trim())) return attr !== 'false';
+    }
     const cls = ((el as any).className && String((el as any).className)) || '';
     if (/\b(correct|right|is-correct|success)\b/.test(cls)) return true;
     if (/\b(incorrect|wrong|is-wrong|error|fail)\b/.test(cls)) return false;
     return null;
   };
-  return check(optionEl) ?? check(block);
+  // On the option, data-correct is a verdict. On the block it is an index, so
+  // only its classes are consulted there.
+  return check(optionEl, true) ?? check(block, false);
 }
 
 /** Index of the clicked option within its question block. */

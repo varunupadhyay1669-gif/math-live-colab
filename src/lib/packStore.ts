@@ -14,14 +14,35 @@ const DB_NAME = 'mathslive';
 const DB_VERSION = 1;
 const STORE = 'packs';
 
+/**
+ * The exporter's side tables, which live outside ClassPack.
+ *
+ * These were NOT being stored, so a reload brought the board and the transcript
+ * back but silently dropped every answered question, the surface registry and
+ * the explainer outlines — the newest and most valuable half of the record.
+ */
+export interface StoredSide {
+  events: unknown[];
+  surfaces: unknown[];
+  outlines: unknown[];
+  interactives: unknown[];
+  attempts: unknown[];
+  intentBefore: string;
+  noteAfter: string;
+  teacher: string;
+  student: string | null;
+}
+
 export interface StoredPack {
   /** room + start date — one pack per room per day, so a reload rejoins it. */
   key: string;
   room: string;
   startedAt: number;
   savedAt: number;
-  /** The serialised ClassPack state plus the exporter's side tables. */
+  /** The serialised ClassPack state. */
   state: unknown;
+  /** Everything the exporter needs that ClassPack does not hold. */
+  side?: StoredSide;
 }
 
 function open(): Promise<IDBDatabase> {
