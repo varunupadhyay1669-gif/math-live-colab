@@ -3857,3 +3857,30 @@ html, body, #root { background: var(--bg-primary); }
   .ml-switcher-name { display: none; }
   .ml-switcher-btn { max-width: 120px; }
 }
+
+/* ── "My screen": the tutor shows their real screen to the class ──
+   The escape hatch when the lesson will not render on the student's device,
+   and the only screen sharing that works at all when they are on an iPad —
+   which cannot capture a screen but can watch one perfectly well. */
+.tb-btn-screen {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 36px;
+  padding: 0 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(15, 23, 42, 0.10);
+  background: #fff;
+  color: #334155;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.tb-btn-screen:hover { background: #f8fafc; border-color: rgba(15, 23, 42, 0.18); }
+.tb-btn-screen.is-on {
+  background: #ECFDF5;
+  border-color: rgba(16, 185, 129, 0.40);
+  color: #047857;
+}
+.ml-board-open .tb-btn-screen { height: 30px; }

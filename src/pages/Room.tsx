@@ -29,7 +29,7 @@ import type { PackEvent, PackSurface, PackExplainerOutline, PackInteractive } fr
 import { Narrator, narrationSupported, getNarrationChoice, setNarrationChoice } from "../lib/narration";
 import { localTimezone } from "../lib/tz";
 import { getClassByRoomCode } from "../lib/classes";
-import { ScreenPeer, shareFailureMessage, type ShareStatus } from "../lib/screenShare";
+import { ScreenPeer, shareFailureMessage, screenShareSupported, type ShareStatus } from "../lib/screenShare";
 import ScreenShareViewer from "../components/ScreenShareViewer";
 import { parseGoals } from "../lib/studentProfile";
 import LessonSwitcher from "../components/LessonSwitcher";
@@ -419,6 +419,8 @@ export default function Room() {
 
   // Live screen share from one student. Separate from Peek and from the video
   // call — its own peer connection, so none of the three can disturb another.
+  // Live member list for handlers that must not re-subscribe on every change.
+  const usersRef = useRef<UserInfo[]>([]);
   const [screenShare, setScreenShare] = useState<{ id: string; name: string } | null>(null);
   const [screenStatus, setScreenStatus] = useState<ShareStatus>('idle');
   const [screenStream, setScreenStream] = useState<MediaStream | null>(null);
@@ -426,6 +428,17 @@ export default function Room() {
   const screenPeerRef = useRef<ScreenPeer | null>(null);
   const screenShareRef = useRef<{ id: string; name: string } | null>(null);
   useEffect(() => { screenShareRef.current = screenShare; }, [screenShare]);
+
+  // ── Sharing OUR screen to the class ──
+  // One peer per student, not one shared connection: WebRTC is point to point,
+  // and a room can hold more than one child. Kept in a ref because students
+  // arrive and leave mid-share and the socket handlers must reach the live map.
+  const [myScreenOn, setMyScreenOn] = useState(false);
+  const myScreenStreamRef = useRef<MediaStream | null>(null);
+  const myScreenPeersRef = useRef<Map<string, ScreenPeer>>(new Map());
+  // The socket effect subscribes once; this is how it reaches the current
+  // offer function without re-subscribing every render.
+  const offerScreenToRef = useRef<((studentId: string) => void) | null>(null);
   // ── Lesson Time Machine ──
   const [bookmarks, setBookmarks] = useState<Array<{ id: string; name: string; ts: number }>>([]);
   const [showTimeMachine, setShowTimeMachine] = useState(false);
@@ -813,6 +826,17 @@ export default function Room() {
 
     newSocket.on("user_list", (list: UserInfo[]) => {
       setUsers(list);
+      const before = usersRef.current;
+      usersRef.current = list;
+      // A student who arrives mid-share gets their own connection, or they sit
+      // looking at a lesson the tutor has already stopped teaching from.
+      if (myScreenStreamRef.current) {
+        for (const u of list) {
+          if (u.role !== 'student') continue;
+          if (before.some(b => b.id === u.id)) continue;
+          offerScreenToRef.current?.(u.id);
+        }
+      }
       // Remember each person's zone by name rather than reading the live list
       // at export time: a student who drops before the pack is built has left
       // the list, but their times are still all over the session.
@@ -1236,9 +1260,15 @@ export default function Room() {
 
     // ── Screen share: the student's answer, and their video ──
     newSocket.on("screen_signal", ({ signal, from }: { signal: any; from: string }) => {
+      // TWO conversations share this channel and both can be live at once:
+      // a student's screen we asked to watch, and our own screen we are
+      // pushing to them. Routing everything to the watch peer meant the
+      // student's ANSWER to our share was silently dropped, so the handshake
+      // never completed and the tutor's screen never arrived.
+      const sharingPeer = myScreenPeersRef.current.get(from);
+      if (sharingPeer) void sharingPeer.accept(signal);
       const watching = screenShareRef.current;
-      if (!watching || watching.id !== from) return;   // not the one we asked
-      void screenPeerRef.current?.accept(signal);
+      if (watching && watching.id === from) void screenPeerRef.current?.accept(signal);
     });
     newSocket.on("screen_state", ({ state, from, name }: { state: string; from: string; name?: string }) => {
       const watching = screenShareRef.current;
@@ -2279,6 +2309,68 @@ export default function Room() {
     screenPeerRef.current = peer;
     socket.emit('screen_request', { roomId, studentId });
   };
+
+  // Open a one-way video connection to one student and start pushing.
+  const offerScreenTo = useCallback((studentId: string) => {
+    const stream = myScreenStreamRef.current;
+    if (!socket || !stream) return;
+    // Never two connections to one student — a late user_list can name someone
+    // we are already sending to.
+    myScreenPeersRef.current.get(studentId)?.close();
+    const peer = new ScreenPeer({
+      send: (signal) => socket.emit('screen_signal', { roomId, to: studentId, signal }),
+      onState: (st) => {
+        if (st === 'failed' || st === 'closed') {
+          myScreenPeersRef.current.get(studentId)?.close();
+          myScreenPeersRef.current.delete(studentId);
+        }
+      },
+    });
+    myScreenPeersRef.current.set(studentId, peer);
+    void peer.share(stream);
+  }, [socket, roomId]);
+
+  useEffect(() => { offerScreenToRef.current = offerScreenTo; }, [offerScreenTo]);
+
+  const stopMyScreen = useCallback((tell = true) => {
+    myScreenPeersRef.current.forEach(p => p.close());
+    myScreenPeersRef.current.clear();
+    // close() on each peer stops the tracks it holds; the stream itself is
+    // shared between them, so stop it once here too or the browser keeps the
+    // capture indicator up with nobody receiving.
+    myScreenStreamRef.current?.getTracks().forEach(t => { try { t.stop(); } catch { /* noop */ } });
+    myScreenStreamRef.current = null;
+    setMyScreenOn(false);
+    if (tell && socket) socket.emit('teacher_screen', { roomId, on: false });
+  }, [socket, roomId]);
+
+  const startMyScreen = useCallback(async () => {
+    if (!socket) return;
+    if (!screenShareSupported()) {
+      showNotif('This browser cannot share a screen. Chrome, Edge, Firefox or Safari on a computer can.');
+      return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
+      myScreenStreamRef.current = stream;
+      setMyScreenOn(true);
+      // The browser's own "Stop sharing" bar is what most people reach for.
+      stream.getVideoTracks()[0]?.addEventListener('ended', () => stopMyScreen(true));
+      socket.emit('teacher_screen', { roomId, on: true });
+      usersRef.current.filter(u => u.role === 'student').forEach(u => offerScreenTo(u.id));
+      showNotif('🖥️ Sharing your screen with the class');
+    } catch (e) {
+      myScreenStreamRef.current = null;
+      setMyScreenOn(false);
+      if ((e as { name?: string })?.name !== 'NotAllowedError') showNotif('Could not start screen sharing.');
+    }
+  }, [socket, roomId, offerScreenTo, stopMyScreen]);
+
+  // Leaving the page must release the capture.
+  useEffect(() => () => {
+    myScreenPeersRef.current.forEach(p => p.close());
+    myScreenStreamRef.current?.getTracks().forEach(t => { try { t.stop(); } catch { /* noop */ } });
+  }, []);
 
   const stopWatchingScreen = () => {
     const watching = screenShareRef.current;
@@ -3636,6 +3728,8 @@ export default function Room() {
               onToggleWhiteboard={toggleWhiteboardMode}
               followStudentClicks={followStudentClicks}
               onToggleFollowStudentClicks={() => setFollowStudentClicks(v => !v)}
+              myScreenOn={myScreenOn}
+              onToggleMyScreen={() => (myScreenOn ? stopMyScreen(true) : void startMyScreen())}
               whiteboardMode={whiteboardMode}
               explanationActive={showTempContent && !!tempContent}
               explanationName={tempContent?.name ?? null}

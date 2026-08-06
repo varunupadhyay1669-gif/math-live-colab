@@ -29,6 +29,10 @@ interface RoomData {
   // Sync modes
   scrollSyncEnabled: boolean;
   studentInteractionAllowed: boolean; // When false, students are view-only (like screen share)
+  // Is the tutor currently sharing their screen? Kept on the room so a student
+  // who joins or reconnects mid-share is told, instead of sitting on a lesson
+  // the tutor has already given up on and moved past.
+  teacherScreenOn: boolean;
   // Room password (optional)
   password: string | null;
   // Students waiting for HTML sync from teacher (joined before teacher's DOM capture arrives)
@@ -170,6 +174,8 @@ interface SessionStatePayload {
   files: FileEntry[];
   isPaused: boolean;
   scrollSyncEnabled: boolean;
+  /** Is the tutor sharing their screen right now? */
+  teacherScreenOn: boolean;
   studentInteractionAllowed: boolean;
   currentStep: number;
   gates: Record<number, { question: string; options: string[]; correctIndex: number }>;
@@ -361,6 +367,7 @@ async function startServer() {
       gates: {},
       scrollSyncEnabled: true,
       studentInteractionAllowed: false, // View-only by default
+      teacherScreenOn: false,
       password: null,
       pendingSyncStudents: new Set(),
       scores: {},
@@ -601,6 +608,9 @@ async function startServer() {
       gates: room.gates,
       scrollSyncEnabled: room.scrollSyncEnabled,
       studentInteractionAllowed: room.studentInteractionAllowed,
+      // So a student joining or reconnecting mid-share knows to expect the
+      // tutor's screen rather than the lesson.
+      teacherScreenOn: room.teacherScreenOn,
       password: room.password,
       scores: room.scores,
       revision: room.revision,
@@ -1068,6 +1078,9 @@ async function startServer() {
       // shipping every explainer's body on every hydration.
       explanations: room.explanations.map(e => ({ id: e.id, name: e.name })),
       activeExplanationId: room.activeExplanationId,
+      // So a student joining or reconnecting mid-share expects the tutor's
+      // screen rather than sitting on a lesson they have moved past.
+      teacherScreenOn: room.teacherScreenOn,
       whiteboard: room.whiteboard,
       // AUTONOMOUS: HTML-overlay annotations replayed on join so a
       // late-joining student sees the same markup the teacher's been
@@ -2945,7 +2958,32 @@ Build a widget that teaches: ${safePrompt}`;
       io.to(dest).emit('screen_state', { state, from: socket.id, name: me?.name || 'Someone' });
     });
 
-    // ─── LIVE MIRROR relay (the "impossible to desync" engine) ───
+    // ─── TEACHER SCREEN SHARE (the tutor shows their real screen) ───
+    //
+    // The other direction, and the more useful one when sync is the problem.
+    // Live Mirror can fail for reasons neither person can see — a lesson that
+    // will not render, a device that will not run it — and no amount of
+    // resyncing helps if the student's browser simply cannot show the thing.
+    // Sharing the tutor's actual screen sidesteps the whole question: whatever
+    // is wrong with the lesson, the student sees exactly what the tutor sees.
+    //
+    // It also works on the devices that CANNOT share their own. iPadOS Safari
+    // has no getDisplayMedia, so a student there can never send their screen —
+    // but receiving video is ordinary WebRTC and works fine. For a tutor whose
+    // students are on iPads this is the only screen sharing available at all.
+    socket.on('teacher_screen', ({ roomId, on }: { roomId: string; on: boolean }) => {
+      const room = rooms.get(roomId);
+      if (!requireTeacher(room, socket.id)) return;
+      const teacher = room.users.get(socket.id);
+      room.teacherScreenOn = !!on;
+      socket.to(roomId).emit('teacher_screen', {
+        on: !!on,
+        name: teacher?.name || 'Your teacher',
+        from: socket.id,
+      });
+    });
+
+        // ─── LIVE MIRROR relay (the "impossible to desync" engine) ───
     // The teacher's iframe is the single authoritative lesson instance; it
     // streams its REAL DOM here and the server relays it to every student, who
     // render it read-only (they never run the lesson JS, so they cannot be on a

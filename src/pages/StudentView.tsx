@@ -9,6 +9,7 @@ import { setupAttentionDetection } from "../lib/attentionDetector";
 import { localTimezone } from "../lib/tz";
 import { ScreenPeer, screenShareSupported } from "../lib/screenShare";
 import ScreenSharePrompt from "../components/ScreenSharePrompt";
+import TeacherScreenView from "../components/TeacherScreenView";
 import { sounds } from "../lib/sounds";
 import { LESSON_IFRAME_SANDBOX, LESSON_IFRAME_ALLOW } from "../lib/iframeAttrs";
 
@@ -127,6 +128,13 @@ export default function StudentView() {
   const [shareAsk, setShareAsk] = useState<string | null>(null);   // who is asking
   const [sharing, setSharing] = useState(false);
   const screenPeerRef = useRef<ScreenPeer | null>(null);
+  // ── Receiving the TUTOR's screen ──
+  // The direction that works on this device. iPadOS Safari cannot capture a
+  // screen, but receiving video is ordinary WebRTC — so when the lesson will
+  // not render here, the tutor can still show it.
+  const [teacherScreen, setTeacherScreen] = useState<MediaStream | null>(null);
+  const [teacherScreenName, setTeacherScreenName] = useState('Your teacher');
+  const teacherScreenPeerRef = useRef<ScreenPeer | null>(null);
 
   const endShare = useCallback((tell = true) => {
     screenPeerRef.current?.close();
@@ -762,8 +770,36 @@ export default function StudentView() {
       setShareAsk(teacherName || 'Your teacher');
     });
     newSocket.on("screen_signal", ({ signal }: { signal: any }) => {
-      // Only ever the teacher's answer to an offer we made. No peer, no share.
-      void screenPeerRef.current?.accept(signal);
+      // Two conversations share this channel: our own share (we offered, they
+      // answer) and the tutor's share (they offer, we answer). An offer is
+      // always theirs — we never answer our own.
+      if (signal?.description?.type === 'offer') {
+        if (!teacherScreenPeerRef.current) {
+          const peer = new ScreenPeer({
+            send: (sig) => newSocket.emit('screen_signal', { roomId, signal: sig }),
+            onStream: (stream) => setTeacherScreen(stream),
+            onState: (st) => { if (st === 'failed' || st === 'closed') setTeacherScreen(null); },
+          });
+          teacherScreenPeerRef.current = peer;
+        }
+        void teacherScreenPeerRef.current.accept(signal);
+        return;
+      }
+      // A candidate could belong to either. Give it to whichever exists;
+      // ScreenPeer holds candidates that arrive before their description.
+      if (teacherScreenPeerRef.current) void teacherScreenPeerRef.current.accept(signal);
+      if (screenPeerRef.current) void screenPeerRef.current.accept(signal);
+    });
+
+    newSocket.on("teacher_screen", ({ on, name }: { on: boolean; name?: string }) => {
+      if (name) setTeacherScreenName(name);
+      if (on) {
+        showNotification(`🖥️ ${name || 'Your teacher'} is sharing their screen`);
+        return;   // the offer follows; the handler above builds the peer
+      }
+      teacherScreenPeerRef.current?.close();
+      teacherScreenPeerRef.current = null;
+      setTeacherScreen(null);
     });
     newSocket.on("screen_state", ({ state }: { state: string }) => {
       // The teacher closed the window. Stop capturing — leaving the screen
@@ -1459,6 +1495,9 @@ export default function StudentView() {
   return (
     <div className="h-screen w-screen flex flex-col overflow-hidden" style={{ background: 'var(--bg-primary)' }}>
 
+      {teacherScreen && (
+        <TeacherScreenView stream={teacherScreen} teacherName={teacherScreenName} />
+      )}
       {shareAsk && (
         <ScreenSharePrompt teacherName={shareAsk} onShare={beginShare} onDecline={declineShare} />
       )}

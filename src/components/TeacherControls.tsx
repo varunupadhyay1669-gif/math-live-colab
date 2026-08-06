@@ -72,6 +72,9 @@ interface TeacherControlsProps {
   // Follow student clicks
   followStudentClicks: boolean;
   onToggleFollowStudentClicks: () => void;
+  // Sharing the tutor's own screen with the class
+  myScreenOn: boolean;
+  onToggleMyScreen: () => void;
 }
 
 const PEN_COLORS = ['#5B5FE6', '#0F1117', '#10B981', '#0EA5E9', '#EF4444', '#F59E0B'];
@@ -96,6 +99,7 @@ export default function TeacherControls({
   eraserMode, onSetEraserMode,
   shapeTool, onSetShapeTool,
   followStudentClicks, onToggleFollowStudentClicks,
+  myScreenOn, onToggleMyScreen,
 }: TeacherControlsProps) {
   const [showTimerMenu, setShowTimerMenu] = useState(false);
   const [customTime, setCustomTime] = useState('');
@@ -455,6 +459,20 @@ export default function TeacherControls({
             <path d="M5 10a7 7 0 0014 0" /><path d="M12 17v5" />
           </svg>
           <span className="tb-label-text">{narrationOn ? 'Listening' : 'Narrate'}</span>
+        </button>
+
+        {/* Show them your actual screen. The escape hatch when the lesson will
+            not render on their device — and the only screen sharing that works
+            at all when they are on an iPad, which cannot capture but can watch. */}
+        <button
+          onClick={onToggleMyScreen}
+          className={`tb-btn-screen${myScreenOn ? ' is-on' : ''}`}
+          data-tip={myScreenOn ? 'Stop sharing your screen with the class' : 'Show the class your actual screen (works even when the lesson will not load for them)'}
+        >
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <rect x="2" y="4" width="20" height="13" rx="2" /><path d="M8 21h8" /><path d="M12 17v4" />
+          </svg>
+          <span className="tb-label-text">{myScreenOn ? 'Sharing' : 'My screen'}</span>
         </button>
 
         {/* What only the tutor knows: the lesson's aim, and last week's homework. */}
