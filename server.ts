@@ -2583,7 +2583,12 @@ Build a widget that teaches: ${safePrompt}`;
     socket.on('start_timer', ({ roomId, seconds }: { roomId: string; seconds: number }) => {
       const room = rooms.get(roomId);
       if (!requireTeacher(room, socket.id)) return;
-      io.to(roomId).emit('timer_started', { seconds, startedAt: Date.now() });
+      // The teacher can now type a custom time, so a typo reaches this. An
+      // unchecked value here means every student's screen counts down from
+      // NaN, or from a number that never ends. 5s..1h, whole seconds.
+      const s = Math.round(Number(seconds));
+      if (!Number.isFinite(s) || s < 5 || s > 3600) return;
+      io.to(roomId).emit('timer_started', { seconds: s, startedAt: Date.now() });
     });
 
     socket.on('stop_timer', ({ roomId }: { roomId: string }) => {

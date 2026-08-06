@@ -3527,3 +3527,184 @@ html, body, #root { background: var(--bg-primary); }
   backdrop-filter: none;
 }
 .ml-dark-recent-pill:hover { border-color: var(--accent-indigo); color: var(--accent-indigo); background: #fff; }
+
+/* ══════════════════════════════════════════════════════════════════
+   ROOM CHROME — giving the board its screen back
+   ══════════════════════════════════════════════════════════════════
+   A signed-in tutor with an unsaved board used to lose ~190px above the
+   whiteboard: header, expiry banner, "save to history" banner, teacher
+   toolbar, board-actions row. On a 720px laptop that is more than a quarter
+   of the screen, held permanently for prompts that matter twice a lesson.
+   These rules collapse the banners into one line and slim every band while
+   the whiteboard is open. Nothing is removed — only compacted. */
+
+.ml-status-strip {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 3px 14px;
+  font-size: 12.5px;
+  line-height: 1.4;
+  background: rgba(238, 242, 255, 0.92);
+  border-bottom: 1px solid rgba(79, 70, 229, 0.15);
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.ml-status-strip::-webkit-scrollbar { display: none; }
+.ml-status-strip.is-ok {
+  background: rgba(236, 253, 245, 0.92);
+  border-bottom-color: rgba(16, 185, 129, 0.18);
+  color: #065F46;
+}
+.ml-status-strip-text {
+  color: #312E81;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.ml-status-strip-btn {
+  flex: 0 0 auto;
+  padding: 3px 11px;
+  border-radius: 7px;
+  border: 1px solid #6366F1;
+  background: #fff;
+  color: #3730A3;
+  font-weight: 700;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.ml-status-strip-btn.is-primary {
+  border-color: transparent;
+  background: #4F46E5;
+  color: #fff;
+}
+.ml-status-strip-btn:disabled { opacity: 0.6; cursor: wait; }
+
+/* ── Slim mode: applied to the room shell while the whiteboard is open ── */
+.ml-board-open .app-header {
+  height: 40px;
+  padding: 0 12px;
+}
+/* Code / Split / Preview switch between HTML lesson views. On the whiteboard
+   there is no HTML to switch, so it is dead weight sitting in the tightest
+   row on screen. */
+.ml-board-open .ml-viewmode-switch { display: none; }
+.ml-board-open .teacher-toolbar { padding: 3px 8px; }
+.ml-board-open .ml-status-strip { padding: 2px 14px; font-size: 12px; }
+
+/* The whiteboard's own bar FLOATS over the board (position:absolute), so it
+   never pushed the canvas down — but it does cover the top-left of the
+   drawing area, which is where a tutor starts writing. Shorter and closer to
+   the edge gives that corner back. */
+.ml-board-open .whiteboard-topbar {
+  min-height: 40px;
+  top: 8px;
+  padding: 5px 8px;
+  border-radius: 13px;
+}
+.ml-board-open .whiteboard-action { height: 28px; padding: 0 9px; }
+.ml-board-open .whiteboard-rail { top: 8px; }
+.ml-board-open .whiteboard-control-group { min-height: 30px; padding: 2px; }
+.ml-board-open .whiteboard-control-group > * { height: 26px; }
+.ml-board-open .whiteboard-chip { height: 28px; padding: 0 10px; font-size: 12px; }
+.ml-board-open .teacher-toolbar .tb-btn { height: 30px; }
+.ml-board-open .teacher-toolbar .tb-btn-label { height: 28px; }
+.ml-board-open .ml-status-strip-btn { padding: 2px 10px; }
+.ml-board-open .teacher-toolbar .tb-btn-whiteboard,
+.ml-board-open .teacher-toolbar .tb-btn-video,
+.ml-board-open .teacher-toolbar .tb-btn-mic,
+.ml-board-open .teacher-toolbar .tb-btn-notes,
+.ml-board-open .teacher-toolbar .tb-btn-pack { height: 30px; }
+.ml-board-open .teacher-toolbar .tb-label-text { height: auto; line-height: 1.1; }
+
+/* ── Challenge timer: the one control both people watch ──
+   It was a 15px clock glyph in a 32px square, showing "45s" only while
+   running. A tutor calling "twenty seconds left" had to find it first. */
+.tb-btn-timer {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 36px;
+  padding: 0 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(15, 23, 42, 0.10);
+  background: #fff;
+  color: #334155;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.tb-btn-timer:hover { background: #f8fafc; border-color: rgba(15, 23, 42, 0.18); }
+.tb-timer-value { font-variant-numeric: tabular-nums; min-width: 42px; text-align: left; }
+.tb-btn-timer.is-running {
+  background: #FEF2F2;
+  border-color: rgba(220, 38, 38, 0.35);
+  color: #B91C1C;
+  animation: tb-timer-pulse 2s ease-in-out infinite;
+}
+@keyframes tb-timer-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(220, 38, 38, 0.22); }
+  50%      { box-shadow: 0 0 0 4px rgba(220, 38, 38, 0.06); }
+}
+/* Respect a reader who has asked for less motion — a pulsing red control at
+   the top of the screen for ten minutes is exactly what that setting is for. */
+@media (prefers-reduced-motion: reduce) {
+  .tb-btn-timer.is-running { animation: none; }
+}
+.ml-board-open .tb-btn-timer { height: 30px; }
+
+.tb-timer-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 4px;
+  padding: 6px;
+}
+.tb-timer-preset {
+  padding: 7px 4px;
+  border-radius: 8px;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  background: #fff;
+  color: #334155;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.tb-timer-preset:hover { background: #EEF2FF; border-color: rgba(79, 70, 229, 0.35); color: #3730A3; }
+
+.tb-timer-custom {
+  display: flex;
+  gap: 5px;
+  padding: 4px 6px 6px;
+  border-top: 1px solid rgba(15, 23, 42, 0.07);
+}
+.tb-timer-custom input {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 9px;
+  border-radius: 8px;
+  border: 1px solid rgba(15, 23, 42, 0.14);
+  font-size: 12.5px;
+  color: #0F172A;
+  background: #fff;
+}
+.tb-timer-custom input.has-error { border-color: #DC2626; background: #FEF2F2; }
+.tb-timer-go {
+  padding: 6px 12px;
+  border-radius: 8px;
+  border: none;
+  background: #4F46E5;
+  color: #fff;
+  font-size: 12.5px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.tb-timer-hint {
+  padding: 0 8px 8px;
+  font-size: 11.5px;
+  line-height: 1.4;
+  color: #B91C1C;
+}

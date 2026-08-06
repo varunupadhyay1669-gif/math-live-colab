@@ -1,6 +1,7 @@
 import React, { useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Socket } from 'socket.io-client';
+import { TIMER_PRESETS, parseDuration, formatDuration, presetLabel } from '../lib/timerOptions';
 
 interface TeacherControlsProps {
   socket: Socket | null;
@@ -74,7 +75,6 @@ interface TeacherControlsProps {
 }
 
 const PEN_COLORS = ['#5B5FE6', '#0F1117', '#10B981', '#0EA5E9', '#EF4444', '#F59E0B'];
-const TIMER_OPTIONS = [30, 60, 90, 120, 180];
 const REACTION_EMOJIS = ['\u{1F389}', '\u2705', '\u{1F914}', '\u274C', '\u{1F44F}', '\u{1F525}'];
 
 export default function TeacherControls({
@@ -98,6 +98,8 @@ export default function TeacherControls({
   followStudentClicks, onToggleFollowStudentClicks,
 }: TeacherControlsProps) {
   const [showTimerMenu, setShowTimerMenu] = useState(false);
+  const [customTime, setCustomTime] = useState('');
+  const [customError, setCustomError] = useState(false);
   const [showReactionMenu, setShowReactionMenu] = useState(false);
   // Dropdowns render through a PORTAL anchored to their trigger's rect.
   // Inside the toolbar they were clipped: `overflow-x-auto` forces
@@ -312,38 +314,65 @@ export default function TeacherControls({
 
         {/* ── Engage ── */}
         <div className="relative" style={{ display: 'inline-flex' }}>
+          {/* Deliberately the widest control on the toolbar. A running timer is
+              the one thing on screen that BOTH people are watching, and it was
+              a 15px glyph you had to hunt for. */}
           <button ref={timerBtnRef}
             onClick={() => {
-              if (!showTimerMenu) setTimerMenuPos(anchorMenu(timerBtnRef.current, 170));
+              if (!showTimerMenu) setTimerMenuPos(anchorMenu(timerBtnRef.current, 232));
               setShowTimerMenu(!showTimerMenu);
             }}
-            className={`tb-btn ${challengeTimer ? 'active' : ''}`}
-            data-tip={challengeTimer ? `${challengeTimer.remaining}s remaining` : 'Challenge timer'}>
-            {challengeTimer ? (
-              <span style={{ fontSize: '12px', fontWeight: 700, fontVariantNumeric: 'tabular-nums', color: 'inherit' }}>
-                {challengeTimer.remaining}s
-              </span>
-            ) : (
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
-              </svg>
-            )}
+            className={`tb-btn-timer ${challengeTimer ? 'is-running' : ''}`}
+            data-tip={challengeTimer ? 'Timer running — click to change or stop' : 'Challenge timer'}
+            aria-label={challengeTimer ? `Timer, ${challengeTimer.remaining} seconds remaining` : 'Start a challenge timer'}>
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
+            </svg>
+            <span className="tb-timer-value">
+              {challengeTimer ? formatDuration(challengeTimer.remaining) : 'Timer'}
+            </span>
           </button>
           {showTimerMenu && timerMenuPos && createPortal(
             <>
               <div className="fixed inset-0 z-40" onClick={() => setShowTimerMenu(false)} />
               <div className="animate-slide-down dropdown-menu"
                 style={{ position: 'fixed', left: timerMenuPos.left, top: timerMenuPos.top, zIndex: 50 }}>
-                {TIMER_OPTIONS.map(sec => (
-                  <button key={sec} onClick={() => { onStartTimer(sec); setShowTimerMenu(false); }}
-                    className="dropdown-item">
-                    {sec >= 60 ? `${sec / 60} min` : `${sec}s`}
-                  </button>
-                ))}
+                {/* A grid, not a list: eleven durations as a vertical column
+                    would run off the bottom of a laptop screen. */}
+                <div className="tb-timer-grid">
+                  {TIMER_PRESETS.map(sec => (
+                    <button key={sec} onClick={() => { onStartTimer(sec); setShowTimerMenu(false); }}
+                      className="tb-timer-preset">
+                      {presetLabel(sec)}
+                    </button>
+                  ))}
+                </div>
+                <form className="tb-timer-custom"
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    const secs = parseDuration(customTime);
+                    if (secs === null) { setCustomError(true); return; }
+                    onStartTimer(secs);
+                    setCustomTime('');
+                    setCustomError(false);
+                    setShowTimerMenu(false);
+                  }}>
+                  <input
+                    value={customTime}
+                    onChange={(e) => { setCustomTime(e.target.value); setCustomError(false); }}
+                    placeholder="7 min, 90s, 2:30"
+                    aria-label="Custom timer length"
+                    className={customError ? 'has-error' : ''}
+                  />
+                  <button type="submit" className="tb-timer-go">Start</button>
+                </form>
+                {customError && (
+                  <div className="tb-timer-hint">Try “90s”, “7 min”, or “2:30” — between 5 seconds and an hour.</div>
+                )}
                 {challengeTimer && (
                   <button onClick={() => { onStopTimer(); setShowTimerMenu(false); }}
                     className="dropdown-item danger">
-                    Stop Timer
+                    Stop timer
                   </button>
                 )}
               </div>

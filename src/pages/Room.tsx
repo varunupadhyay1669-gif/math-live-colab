@@ -11,7 +11,7 @@ import { sessionRecorder } from "../lib/sessionRecorder";
 import { sounds } from "../lib/sounds";
 import { savedBoards, templates } from "../lib/prefs";
 import { LESSON_IFRAME_SANDBOX, LESSON_IFRAME_ALLOW } from "../lib/iframeAttrs";
-import SaveBoardBanner from "../components/SaveBoardBanner";
+import RoomStatusStrip from "../components/RoomStatusStrip";
 
 // ── Components ──
 import TeacherControls from "../components/TeacherControls";
@@ -2929,7 +2929,7 @@ export default function Room() {
   const activeFile = files.find(f => f.id === activeFileId);
 
   return (
-    <div className="h-screen flex flex-col overflow-hidden"
+    <div className={`h-screen flex flex-col overflow-hidden${whiteboardMode ? ' ml-board-open' : ''}`}
       style={{ background: 'var(--bg-primary)', color: 'var(--text-primary)' }}
       onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
       onDragLeave={(e) => { if (e.currentTarget === e.target) setIsDragging(false); }}
@@ -2973,10 +2973,10 @@ export default function Room() {
 
           <span className="hidden sm:inline text-[12px] font-mono font-semibold" style={{ color: 'var(--text-muted)' }}>{roomId}</span>
 
-          <div className="header-divider hidden sm:block" />
+          <div className="header-divider hidden sm:block ml-viewmode-switch" />
 
           {/* View Mode Toggles */}
-          <div style={{ display: 'flex', gap: '2px' }}>
+          <div className="ml-viewmode-switch" style={{ display: 'flex', gap: '2px' }}>
             {(['code', 'split', 'preview'] as ViewMode[]).map(mode => (
               <button key={mode} onClick={() => setViewMode(mode)}
                 className={`tb-btn ${viewMode === mode ? 'active' : ''}`}
@@ -3283,46 +3283,30 @@ export default function Room() {
           Shown when the room is anonymous (claimed=false) — counts down
           to expiry and offers a single-click save. Once saved (claimed)
           the banner hides for everyone. */}
-      {!claimed && expiresAt && (
-        <SaveBoardBanner
-          expiresAt={expiresAt}
-          saving={savingBoard}
-          onSave={() => {
-            if (!socket) return;
-            setSavingBoard(true);
-            socket.emit('claim_room', { roomId, name: teacherName });
-            // Persist locally so Home's "My boards" can list it.
-            try {
-              savedBoards.add({
-                roomId: roomId!,
-                name: teacherName,
-                claimedAt: Date.now(),
-                label: activeFile?.name || (whiteboardMode ? 'Whiteboard board' : 'Untitled board'),
-              });
-            } catch { /* localStorage failure is non-fatal */ }
-          }}
-        />
-      )}
-      {auth.enabled && auth.user && (
-        <div className="px-4 py-1.5 flex items-center justify-center gap-2 text-xs font-semibold"
-          style={{ background: '#EEF2FF', color: '#3730A3', borderBottom: '1px solid rgba(99,102,241,0.18)' }}>
-          <span>Keep a record of this lesson for the student</span>
-          <button
-            onClick={saveToHistory}
-            disabled={savingHistory}
-            style={{ padding: '3px 12px', borderRadius: 8, border: '1px solid #6366F1', background: '#fff', color: '#3730A3', fontWeight: 700, cursor: savingHistory ? 'default' : 'pointer' }}
-          >
-            {savingHistory ? 'Saving…' : '💾 Save to history'}
-          </button>
-        </div>
-      )}
-      {claimed && claimedBy && (
-        <div className="px-4 py-1.5 flex items-center justify-center gap-2 text-xs font-semibold"
-          style={{ background: '#ECFDF5', color: '#065F46', borderBottom: '1px solid rgba(16,185,129,0.18)' }}>
-          <span>✓ Saved by {claimedBy}</span>
-          <span style={{ opacity: 0.7 }}>· This board will keep working for the next 30 days</span>
-        </div>
-      )}
+      <RoomStatusStrip
+        expiresAt={expiresAt}
+        claimed={claimed}
+        claimedBy={claimedBy}
+        savingBoard={savingBoard}
+        onSaveBoard={() => {
+          if (!socket) return;
+          setSavingBoard(true);
+          socket.emit('claim_room', { roomId, name: teacherName });
+          // Persist locally so Home's "My boards" can list it.
+          try {
+            savedBoards.add({
+              roomId: roomId!,
+              name: teacherName,
+              claimedAt: Date.now(),
+              label: activeFile?.name || (whiteboardMode ? 'Whiteboard board' : 'Untitled board'),
+            });
+          } catch { /* localStorage failure is non-fatal */ }
+        }}
+        canSaveHistory={!!(auth.enabled && auth.user)}
+        savingHistory={savingHistory}
+        onSaveHistory={saveToHistory}
+        slim={whiteboardMode}
+      />
 
       {/* ═══ HAND RAISED BANNER ═══ */}
       {handRaised && (

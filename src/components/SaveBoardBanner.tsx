@@ -15,6 +15,8 @@ interface Props {
   expiresAt: number; // ms epoch
   saving: boolean;
   onSave: () => void;
+  /** Whiteboard open: trim to one tight line, every pixel here costs board. */
+  slim?: boolean;
 }
 
 function formatTimeLeft(ms: number): string {
@@ -31,7 +33,7 @@ function formatTimeLeft(ms: number): string {
   return minutes < 1 ? 'less than a minute' : `${minutes}m`;
 }
 
-export default function SaveBoardBanner({ expiresAt, saving, onSave }: Props) {
+export default function SaveBoardBanner({ expiresAt, saving, onSave, slim = false }: Props) {
   const [now, setNow] = useState(Date.now());
 
   useEffect(() => {
@@ -48,36 +50,21 @@ export default function SaveBoardBanner({ expiresAt, saving, onSave }: Props) {
 
   return (
     <div
-      className="px-4 py-2 flex items-center justify-center gap-3"
-      style={{
-        background: 'rgba(238,242,255,0.9)',
-        borderBottom: '1px solid rgba(79,70,229,0.15)',
-        fontSize: 13,
-      }}
+      className="ml-status-strip"
+      style={{ fontSize: slim ? 12 : 13 }}
     >
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#4F46E5" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
         <circle cx="12" cy="12" r="10" />
         <polyline points="12 6 12 12 16 14" />
       </svg>
-      <span style={{ color: '#312E81', fontWeight: 600 }}>{text}</span>
+      <span className="ml-status-strip-text">{slim ? text.replace(' to save your board.', ' to save this board') : text}</span>
       <button
+        className="ml-status-strip-btn is-primary"
         onClick={onSave}
         disabled={saving}
-        style={{
-          padding: '5px 14px',
-          borderRadius: 8,
-          border: 'none',
-          background: saving ? '#A5B4FC' : '#4F46E5',
-          color: '#fff',
-          fontWeight: 700,
-          fontSize: 12.5,
-          cursor: saving ? 'wait' : 'pointer',
-          letterSpacing: '0.01em',
-          boxShadow: 'none',
-        }}
         aria-label="Save this board to my boards"
       >
-        {saving ? 'Saving…' : 'Save to my boards'}
+        {saving ? 'Saving…' : slim ? 'Save board' : 'Save to my boards'}
       </button>
     </div>
   );
