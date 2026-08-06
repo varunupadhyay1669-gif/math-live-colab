@@ -110,7 +110,10 @@ interface WhiteboardProps {
   whiteboardSyncEnabled?: boolean;
 }
 
-type ShapeKind = 'line' | 'rect' | 'circle' | 'arrow' | 'diamond';
+// ShapeKind now lives in lib/shapeGeometry alongside the corner maths, so the
+// renderer and the hit test cannot drift apart on what a shape actually is.
+import { shapePolygon, isPolygonal, ellipseBox, nearEllipseEdge, SHAPE_CATALOG, type ShapeKind } from '../lib/shapeGeometry';
+export type { ShapeKind };
 type ShapeFillStyle = 'solid' | 'hachure' | 'cross-hatch';
 type ShapeStrokeStyle = 'solid' | 'dashed' | 'dotted';
 
@@ -270,7 +273,7 @@ export interface WhiteboardRef {
   getView: () => { boardScale: number; boardOffsetX: number; boardOffsetY: number };
 }
 
-type BoardTool = 'select' | 'pen' | 'highlighter' | 'eraser' | 'pan' | 'line' | 'rect' | 'circle' | 'arrow' | 'diamond' | 'compass' | 'ruler' | 'protractor' | 'text';
+type BoardTool = 'select' | 'pen' | 'highlighter' | 'eraser' | 'pan' | 'compass' | 'ruler' | 'protractor' | 'text' | ShapeKind;
 
 // Default font size for new text in board units. ~24px at 100% zoom.
 const TEXT_DEFAULT_FONT_SIZE = 24;
@@ -282,12 +285,31 @@ const TEXT_LINE_HEIGHT_RATIO = 1.25;
 // just additionally tags the resulting shape with centerMark so the centre
 // point is visible). Ruler / protractor are spawn-toggle instruments and
 // don't go through the shape-create dispatch.
-const SHAPE_TOOLS: BoardTool[] = ['line', 'rect', 'circle', 'arrow', 'diamond', 'compass'];
+const SHAPE_KINDS = new Set<string>(SHAPE_CATALOG.map(s => s.id));
+const SHAPE_TOOLS: BoardTool[] = [...SHAPE_CATALOG.map(s => s.id), 'compass'];
 const isShapeTool = (t: BoardTool): boolean => SHAPE_TOOLS.includes(t);
 const shapeKindForTool = (t: BoardTool): ShapeKind | null => {
   if (t === 'compass') return 'circle';
-  if (t === 'line' || t === 'rect' || t === 'circle' || t === 'arrow' || t === 'diamond') return t;
-  return null;
+  return SHAPE_KINDS.has(t) ? (t as ShapeKind) : null;
+};
+
+
+// One small SVG per shape, drawn inside a 24x24 box. Used by the rail button
+// (which shows the currently-chosen shape) and by the palette grid.
+const SHAPE_ICONS: Record<string, React.ReactNode> = {
+  line: <path d="M5 19L19 5" />,
+  arrow: <><path d="M5 19L19 5" /><path d="M12 5h7v7" /></>,
+  rect: <rect x="4" y="6" width="16" height="12" />,
+  parallelogram: <path d="M8 6h12l-4 12H4z" />,
+  trapezoid: <path d="M8 6h8l4 12H4z" />,
+  diamond: <path d="M12 3l9 9-9 9-9-9z" />,
+  triangle: <path d="M12 4l9 16H3z" />,
+  rightTriangle: <path d="M5 4v16h15z" />,
+  circle: <circle cx="12" cy="12" r="8" />,
+  ellipse: <ellipse cx="12" cy="12" rx="9" ry="6" />,
+  pentagon: <path d="M12 3l9 6.5-3.4 10.5H6.4L3 9.5z" />,
+  hexagon: <path d="M8 4h8l4 8-4 8H8l-4-8z" />,
+  star: <path d="M12 3l2.7 6.2 6.3.5-4.8 4.1 1.5 6.2L12 16.7 6.3 20l1.5-6.2L3 9.7l6.3-.5z" />,
 };
 
 // Default sizes for spawned instruments (board units).
@@ -471,6 +493,11 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
     // feature feel half-finished.
     const [multiTextIds, setMultiTextIds] = useState<string[]>([]);
     const [tool, setTool] = useState<BoardTool>('select');
+    // Which shape the rail button offers. Remembered because a tutor drawing
+    // triangles draws several in a row — reopening the palette each time is the
+    // friction that sends people back to freehand.
+    const [lastShape, setLastShape] = useState<ShapeKind>('rect');
+    const [showShapePalette, setShowShapePalette] = useState(false);
     // When tool is 'eraser', this picks between two eraser flavours:
     //   stroke = click on a stroke to delete the entire stroke (existing).
     //   pixel  = drag to "paint" an erase path that removes whatever it
@@ -944,15 +971,18 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
         const d = Math.hypot(point.x - shape.x1, point.y - shape.y1);
         return Math.abs(d - r) <= tol;
       }
-      if (shape.kind === 'diamond') {
-        const cx = (shape.x1 + shape.x2) / 2, cy = (shape.y1 + shape.y2) / 2;
-        const left = Math.min(shape.x1, shape.x2), right = Math.max(shape.x1, shape.x2);
-        const top = Math.min(shape.y1, shape.y2), bottom = Math.max(shape.y1, shape.y2);
-        const v = [{ x: cx, y: top }, { x: right, y: cy }, { x: cx, y: bottom }, { x: left, y: cy }];
-        for (let i = 0; i < 4; i++) {
-          if (distanceToSegment(point, v[i], v[(i + 1) % 4]) <= tol) return true;
+      if (shape.kind === 'ellipse') {
+        return nearEllipseEdge(point.x, point.y, shape.x1, shape.y1, shape.x2, shape.y2, tol);
+      }
+      // Every other closed outline: the SAME corners the renderer drew, so a
+      // shape can never be visible-but-unselectable.
+      const poly = shapePolygon(shape.kind, shape.x1, shape.y1, shape.x2, shape.y2);
+      if (poly) {
+        for (let i = 0; i < poly.length; i++) {
+          const a = { x: poly[i][0], y: poly[i][1] };
+          const b = { x: poly[(i + 1) % poly.length][0], y: poly[(i + 1) % poly.length][1] };
+          if (distanceToSegment(point, a, b) <= tol) return true;
         }
-        return false;
       }
       return false;
     }, [view.boardScale]);
@@ -1990,11 +2020,15 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
               ctx.arc(shape.x1, shape.y1, Math.max(sw * 0.9, 3 / view.boardScale), 0, Math.PI * 2);
               ctx.fill();
             }
-          } else if (shape.kind === 'diamond') {
-            const cx = (shape.x1 + shape.x2) / 2, cy = (shape.y1 + shape.y2) / 2;
-            const left = Math.min(shape.x1, shape.x2), right = Math.max(shape.x1, shape.x2);
-            const top = Math.min(shape.y1, shape.y2), bottom = Math.max(shape.y1, shape.y2);
-            rc.polygon([[cx, top], [right, cy], [cx, bottom], [left, cy]], opts);
+          } else if (shape.kind === 'ellipse') {
+            const e = ellipseBox(shape.x1, shape.y1, shape.x2, shape.y2);
+            rc.ellipse(e.cx, e.cy, e.rx * 2, e.ry * 2, opts);
+          } else if (isPolygonal(shape.kind)) {
+            // Rectangle is handled above (rough.js draws a nicer one), so this
+            // is every other closed outline: rhombus, triangles, trapezium,
+            // pentagon, hexagon, star — one branch, one source of corners.
+            const poly = shapePolygon(shape.kind, shape.x1, shape.y1, shape.x2, shape.y2);
+            if (poly) rc.polygon(poly, opts);
           } else if (shape.kind === 'line' || shape.kind === 'arrow') {
             rc.line(shape.x1, shape.y1, shape.x2, shape.y2, opts);
             if (shape.kind === 'arrow') {
@@ -2641,11 +2675,12 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
                 ctx.fillStyle = shape.color;
                 ctx.beginPath(); ctx.arc(shape.x1, shape.y1, Math.max(sw * 0.9, 3 / scale), 0, Math.PI * 2); ctx.fill();
               }
-            } else if (shape.kind === 'diamond') {
-              const cx = (shape.x1 + shape.x2) / 2, cy = (shape.y1 + shape.y2) / 2;
-              const left = Math.min(shape.x1, shape.x2), right = Math.max(shape.x1, shape.x2);
-              const top = Math.min(shape.y1, shape.y2), bottom = Math.max(shape.y1, shape.y2);
-              rc.polygon([[cx, top], [right, cy], [cx, bottom], [left, cy]], opts);
+            } else if (shape.kind === 'ellipse') {
+              const e = ellipseBox(shape.x1, shape.y1, shape.x2, shape.y2);
+              rc.ellipse(e.cx, e.cy, e.rx * 2, e.ry * 2, opts);
+            } else if (isPolygonal(shape.kind)) {
+              const poly = shapePolygon(shape.kind, shape.x1, shape.y1, shape.x2, shape.y2);
+              if (poly) rc.polygon(poly, opts);
             } else if (shape.kind === 'line' || shape.kind === 'arrow') {
               rc.line(shape.x1, shape.y1, shape.x2, shape.y2, opts);
               if (shape.kind === 'arrow') {
@@ -4113,7 +4148,8 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
     const rulerActive = instruments.some(i => i.kind === 'ruler');
     const protractorActive = instruments.some(i => i.kind === 'protractor');
 
-    const tools: Array<{ id: BoardTool; label: string; icon: React.ReactNode; pressed?: boolean }> = [
+    const shapeLabel = SHAPE_CATALOG.find(c => c.id === lastShape)?.label || 'Shapes';
+    const tools: Array<{ id: BoardTool; label: string; icon: React.ReactNode; pressed?: boolean; isShapePalette?: boolean }> = [
       // AUTONOMOUS: [ORDER-3 FRICTION] - Eraser used to live at the bottom
       // of a 12-tool rail. On a 13" MacBook the rail overflowed and Eraser
       // was below the viewport with no way to scroll. Reordered:
@@ -4138,11 +4174,11 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
       // Text — typed labels for math (eg "x = 45°", "let n be even"). Click
       // anywhere on the board, type, press Enter to commit.
       { id: 'text', label: 'Text', icon: <><path d="M4 7V5h16v2" /><path d="M9 19h6" /><path d="M12 5v14" /></> },
-      { id: 'line', label: 'Line', icon: <path d="M5 19L19 5" /> },
-      { id: 'rect', label: 'Rectangle', icon: <rect x="4" y="6" width="16" height="12" /> },
-      { id: 'circle', label: 'Circle', icon: <circle cx="12" cy="12" r="8" /> },
-      { id: 'arrow', label: 'Arrow', icon: <><path d="M5 19L19 5" /><path d="M12 5h7v7" /></> },
-      { id: 'diamond', label: 'Diamond', icon: <path d="M12 3l9 9-9 9-9-9z" /> },
+      // Shapes live behind ONE rail entry. The rail already overflowed a 13"
+      // screen at fifteen tools; adding eight more as siblings would have put
+      // the eraser below the fold again. The button shows whichever shape is
+      // currently chosen, so the common case is still a single click.
+      { id: lastShape, label: shapeLabel, icon: SHAPE_ICONS[lastShape], isShapePalette: true },
       // Compass — circle drawn from the centre, leaves a small dot at the centre point.
       { id: 'compass', label: 'Compass', icon: <><circle cx="12" cy="12" r="8" /><circle cx="12" cy="12" r="1.5" fill="currentColor" /><path d="M12 4v3" /></> },
       // Ruler — toggle: spawn / remove the ruler instrument on the board.
@@ -4157,7 +4193,7 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
     // by the next hydration. Hide them from non-teachers — interactive students
     // keep the tools that actually sync (pen, eraser, highlighter, pan, select,
     // image), matching the server permission model.
-    const TEACHER_ONLY_TOOLS = new Set<BoardTool>(['text', 'line', 'rect', 'circle', 'arrow', 'diamond', 'compass', 'ruler', 'protractor']);
+    const TEACHER_ONLY_TOOLS = new Set<BoardTool>(['text', 'compass', 'ruler', 'protractor', ...SHAPE_CATALOG.map(c => c.id)]);
     const visibleTools = isTeacher ? tools : tools.filter(t => !TEACHER_ONLY_TOOLS.has(t.id));
 
     const toolChip =
@@ -4168,7 +4204,9 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
       tool === 'rect' ? 'Draw rectangle — click and drag' :
       tool === 'circle' ? 'Draw circle — click and drag from centre' :
       tool === 'arrow' ? 'Draw arrow — click and drag from start to head' :
-      tool === 'diamond' ? 'Draw diamond — click and drag' :
+      tool === 'diamond' ? 'Draw rhombus — click and drag' :
+      isShapeTool(tool) && tool !== 'compass'
+        ? `Draw ${(SHAPE_CATALOG.find(c => c.id === tool)?.label || 'shape').toLowerCase()} — click and drag` :
       tool === 'compass' ? 'Compass — click and drag from centre to draw a circle with a centre mark' :
       tool === 'ruler' ? 'Click to drop a ruler on the board' :
       tool === 'protractor' ? 'Click to drop a protractor on the board' :
@@ -4203,19 +4241,59 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
         {canEdit && (
           <aside className="whiteboard-rail" aria-label="Whiteboard tools">
             {visibleTools.map(item => (
-              <button
-                key={item.id}
-                onClick={() => setTool(item.id)}
-                className={`whiteboard-tool ${tool === item.id ? 'active' : ''} ${item.pressed ? 'pressed' : ''}`}
-                title={item.pressed ? `${item.label} on the board (click to remove)` : item.label}
-                aria-label={item.label}
-                aria-pressed={!!item.pressed}
-              >
-                <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-                  {item.icon}
-                </svg>
-                <span>{item.label}</span>
-              </button>
+              item.isShapePalette ? (
+                <div key="shapes" className="whiteboard-shape-slot">
+                  <button
+                    onClick={() => { setTool(lastShape); setShowShapePalette(v => !v); }}
+                    className={`whiteboard-tool ${isShapeTool(tool) && tool !== 'compass' ? 'active' : ''}`}
+                    title={`${item.label} — click for all shapes`}
+                    aria-label={`Shapes, currently ${item.label}`}
+                    aria-expanded={showShapePalette}
+                  >
+                    <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                      {item.icon}
+                    </svg>
+                    <span>{item.label}</span>
+                    <span className="whiteboard-shape-caret" aria-hidden="true">▸</span>
+                  </button>
+                  {showShapePalette && (
+                    <>
+                      <div className="fixed inset-0" style={{ zIndex: 39 }} onClick={() => setShowShapePalette(false)} />
+                      <div className="whiteboard-shape-palette" role="menu" aria-label="Shapes">
+                        {SHAPE_CATALOG.map(c => (
+                          <button
+                            key={c.id}
+                            role="menuitem"
+                            className={`whiteboard-shape-option ${tool === c.id ? 'active' : ''}`}
+                            onClick={() => { setLastShape(c.id); setTool(c.id); setShowShapePalette(false); }}
+                            title={c.label}
+                            aria-label={c.label}
+                          >
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                              {SHAPE_ICONS[c.id]}
+                            </svg>
+                            <span>{c.label}</span>
+                          </button>
+                        ))}
+                      </div>
+                    </>
+                  )}
+                </div>
+              ) : (
+                <button
+                  key={item.id}
+                  onClick={() => setTool(item.id)}
+                  className={`whiteboard-tool ${tool === item.id ? 'active' : ''} ${item.pressed ? 'pressed' : ''}`}
+                  title={item.pressed ? `${item.label} on the board (click to remove)` : item.label}
+                  aria-label={item.label}
+                  aria-pressed={!!item.pressed}
+                >
+                  <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                    {item.icon}
+                  </svg>
+                  <span>{item.label}</span>
+                </button>
+              )
             ))}
             <div className="whiteboard-rail-divider" />
             <button onClick={() => uploadInputRef.current?.click()} className="whiteboard-tool" title="Upload image">
