@@ -100,6 +100,11 @@ export default function StudentView() {
   const [narrationOn, setNarrationOn] = useState(false);
   const narratorRef = useRef<Narrator | null>(null);
   const narrationStartRef = useRef(0);
+  // A room the teacher has not opened yet is the NORMAL state for a student
+  // who clicks their link a few minutes early. Kept apart from joinError so it
+  // renders as "waiting", and so the retry loop knows it is worth retrying.
+  const [waitingForRoom, setWaitingForRoom] = useState(false);
+  const [joinAttempts, setJoinAttempts] = useState(0);
   const socketRef = useRef<typeof socket>(null);
   useEffect(() => { socketRef.current = socket; }, [socket]);
 
@@ -171,6 +176,22 @@ export default function StudentView() {
   // Leaving the page must release the capture. A tab closed mid-share would
   // otherwise keep the screen-capture indicator up with nobody watching.
   useEffect(() => () => { screenPeerRef.current?.close(); }, []);
+
+  // Keep knocking until the teacher opens the room.
+  //
+  // This is the whole fix for "I have to join and join and ultimately it
+  // connects": the student's link now works whenever they open it, and the
+  // lesson starts by itself the moment the teacher arrives. Every 3s, because
+  // this is one tiny emit on an idle socket and a student waiting to start a
+  // lesson should not sit through a backoff.
+  useEffect(() => {
+    if (!waitingForRoom || !socket || !connected) return;
+    const id = setInterval(() => {
+      setJoinAttempts(n => n + 1);
+      socket.emit('join_room', { roomId, userName: studentName, role: 'student', tz: localTimezone() });
+    }, 3000);
+    return () => clearInterval(id);
+  }, [waitingForRoom, socket, connected, roomId, studentName]);
 
   const [currentHtml, setCurrentHtml] = useState("");
   // Server-issued deterministic RNG seed for the current lesson - injected
@@ -753,6 +774,10 @@ export default function StudentView() {
       }
     });
 
+    // Arriving room state IS the join succeeding — stop waiting and stop
+    // knocking.
+    newSocket.on("room_state", () => { setWaitingForRoom(false); setJoinAttempts(0); });
+
     newSocket.on("mirror_ping", ({ h }: { h?: string }) => {
       if (typeof h !== 'string') return;
       postToIframe({ type: 'MIRROR_PING', h });
@@ -984,7 +1009,16 @@ export default function StudentView() {
     });
 
     // ── Join Error ──
-    newSocket.on("join_error", ({ message }: { message: string }) => {
+    newSocket.on("join_error", ({ message, retryable }: { message: string; retryable?: boolean }) => {
+      if (retryable) {
+        // Do NOT show the dead end. The student did nothing wrong and the
+        // situation fixes itself the moment the teacher opens the room; the
+        // retry effect below keeps knocking so they never touch the page.
+        setWaitingForRoom(true);
+        setJoinError(null);
+        return;
+      }
+      setWaitingForRoom(false);
       setJoinError(message);
     });
 
@@ -1581,6 +1615,28 @@ export default function StudentView() {
       </header>
 
       {/* ══════ JOIN ERROR ══════ */}
+      {/* Waiting room. NOT an error: the student's link is fine, the teacher
+          simply is not in yet, and this clears itself. */}
+      {waitingForRoom && !joinError && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4"
+          style={{ background: 'rgba(0,0,0,0.4)', backdropFilter: 'blur(6px)' }}>
+          <div className="w-full max-w-sm animate-bounce-in text-center"
+            style={{ background: 'var(--bg-card)', borderRadius: '12px', border: '1px solid var(--border-subtle)', boxShadow: 'var(--shadow-xl)', padding: '32px 24px' }}>
+            <div className="text-4xl mb-4">⏳</div>
+            <h3 className="font-display text-lg font-bold mb-2" style={{ color: 'var(--text-primary)' }}>
+              Waiting for your teacher
+            </h3>
+            <p className="text-sm" style={{ color: 'var(--text-secondary)', lineHeight: 1.55 }}>
+              You&rsquo;re in the right place — the lesson starts by itself the moment they open the room.
+              Keep this page open.
+            </p>
+            <p className="text-xs mt-4" style={{ color: 'var(--text-muted)' }}>
+              Checking every few seconds{joinAttempts > 0 ? ` · ${joinAttempts} ${joinAttempts === 1 ? 'try' : 'tries'}` : ''}
+            </p>
+          </div>
+        </div>
+      )}
+
       {joinError && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4"
           style={{ background: 'rgba(0,0,0,0.4)', backdropFilter: 'blur(6px)' }}>

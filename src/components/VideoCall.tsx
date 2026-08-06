@@ -40,7 +40,39 @@ export default function VideoCall({ socket, roomId, polite, selfLabel = 'You' }:
   const [camOn, setCamOn] = useState(true);
   const [minimised, setMinimised] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [pos, setPos] = useState({ x: 16, y: 84 });
+  // Bottom-right by default, and remembered.
+  //
+  // It used to sit at (16, 84) — directly on top of the tool rail, which runs
+  // the entire left edge (top:76 to bottom:14). So the button permanently
+  // covered the first tools, and being a plain fixed <button> it could not be
+  // moved out of the way either.
+  const [pos, setPos] = useState(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem('mathslive:callpos') || 'null');
+      if (saved && Number.isFinite(saved.x) && Number.isFinite(saved.y)) return saved;
+    } catch { /* corrupt entry — fall through to the default */ }
+    return {
+      x: Math.max(120, (typeof window !== 'undefined' ? window.innerWidth : 1280) - 210),
+      y: Math.max(80, (typeof window !== 'undefined' ? window.innerHeight : 720) - 74),
+    };
+  });
+  useEffect(() => {
+    try { localStorage.setItem('mathslive:callpos', JSON.stringify(pos)); } catch { /* private mode */ }
+  }, [pos]);
+  // A remembered position must not survive a move to a smaller screen, or the
+  // button sits off the edge with no way to grab it.
+  useEffect(() => {
+    const clamp = () => setPos(p => ({
+      x: Math.max(4, Math.min(window.innerWidth - 120, p.x)),
+      y: Math.max(4, Math.min(window.innerHeight - 56, p.y)),
+    }));
+    clamp();
+    window.addEventListener('resize', clamp);
+    return () => window.removeEventListener('resize', clamp);
+  }, []);
+  // Distinguishes a drag from a click on the idle pill: the whole control is a
+  // button, so the panel's "don't drag from a control" rule cannot apply here.
+  const idleDragRef = useRef<{ dx: number; dy: number; moved: boolean } | null>(null);
   // Held in state (not just on the element) so the <video> can be re-attached
   // whenever it mounts or re-renders — see the wiring effects below.
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
@@ -410,10 +442,33 @@ export default function VideoCall({ socket, roomId, polite, selfLabel = 'You' }:
   if (!active) {
     return (
       <button
-        onClick={startCall}
-        title="Start a video call with the other person in this room"
+        onClick={() => { if (!idleDragRef.current?.moved) startCall(); }}
+        onPointerDown={(e) => {
+          idleDragRef.current = { dx: e.clientX - pos.x, dy: e.clientY - pos.y, moved: false };
+          (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+        }}
+        onPointerMove={(e) => {
+          const d = idleDragRef.current;
+          if (!d) return;
+          const nx = e.clientX - d.dx, ny = e.clientY - d.dy;
+          // A few pixels of travel while pressing is a click, not a drag —
+          // otherwise a slightly shaky tap moves the button instead of calling.
+          if (!d.moved && Math.abs(nx - pos.x) + Math.abs(ny - pos.y) < 4) return;
+          d.moved = true;
+          setPos({
+            x: Math.max(4, Math.min(window.innerWidth - 120, nx)),
+            y: Math.max(4, Math.min(window.innerHeight - 56, ny)),
+          });
+        }}
+        onPointerUp={(e) => {
+          try { (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId); } catch { /* already released */ }
+          // Cleared after the click handler has read it.
+          setTimeout(() => { idleDragRef.current = null; }, 0);
+        }}
+        title="Start a video call — drag to move this out of the way"
         style={{
           position: 'fixed', left: pos.x, top: pos.y, zIndex: 70,
+          touchAction: 'none',
           display: 'flex', alignItems: 'center', gap: 8,
           padding: '9px 14px', borderRadius: 999, border: 0, cursor: 'pointer',
           background: peerReady ? '#16a34a' : '#4f46e5', color: '#fff',

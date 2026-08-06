@@ -18,6 +18,8 @@ interface Props {
   sessions: SessionRow[];
   /** Which lesson is on the board — null means today's, unsaved. */
   currentSessionId: string | null;
+  /** False in an ad-hoc room: there are students to switch TO, but no lessons. */
+  isClassRoom: boolean;
   busy: boolean;
   onPickStudent: (row: ClassRow) => void;
   onPickLesson: (row: SessionRow) => void;
@@ -34,7 +36,7 @@ function useOutsideClose(onClose: () => void, open: boolean) {
 }
 
 export default function LessonSwitcher({
-  student, classes, sessions, currentSessionId, busy,
+  student, classes, sessions, currentSessionId, isClassRoom, busy,
   onPickStudent, onPickLesson, onNewLesson,
 }: Props) {
   const [open, setOpen] = useState<null | 'student' | 'lesson'>(null);
@@ -71,6 +73,7 @@ export default function LessonSwitcher({
         <span className="ml-switcher-caret" aria-hidden="true">⌄</span>
       </button>
 
+      {isClassRoom && (
       <button
         ref={lessonBtn}
         className="ml-switcher-btn is-lesson"
@@ -83,6 +86,7 @@ export default function LessonSwitcher({
         {busy ? 'Loading…' : current ? lessonLabel(current) : 'Today'}
         <span className="ml-switcher-caret" aria-hidden="true">⌄</span>
       </button>
+      )}
 
       {open && pos && createPortal(
         <>

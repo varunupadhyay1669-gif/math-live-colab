@@ -1230,12 +1230,12 @@ async function startServer() {
     socket.on('join_room', async ({ roomId, userName, role, password, authToken, tz }: { roomId: string; userName: string; role: 'teacher' | 'student'; password?: string; authToken?: string; tz?: string }) => {
       // Validate inputs
       if (!isValidRoomId(roomId)) {
-        socket.emit('join_error', { message: 'Invalid room code' });
+        socket.emit('join_error', { code: 'bad_room', retryable: false, message: 'Invalid room code' });
         return;
       }
       const safeName = sanitizeString(userName, MAX_USERNAME_LENGTH) || 'Anonymous';
       if (role !== 'teacher' && role !== 'student') {
-        socket.emit('join_error', { message: 'Invalid role' });
+        socket.emit('join_error', { code: 'bad_role', retryable: false, message: 'Invalid role' });
         return;
       }
 
@@ -1260,7 +1260,17 @@ async function startServer() {
         }
       }
       if (!existingRoom && role !== 'teacher') {
-        socket.emit('join_error', { message: 'Room not found. Ask the teacher to start the room first.' });
+        // NOT an error — the teacher simply has not opened the room yet, which
+        // is the normal state for a student who clicks their link two minutes
+        // early. It used to render a dead end whose only button was "Go home",
+        // so the student reloaded until the teacher happened to be in. The
+        // code lets the client tell "wait, it's coming" apart from "this will
+        // never work" (wrong password, someone else's class) and wait instead.
+        socket.emit('join_error', {
+          code: 'room_not_open',
+          retryable: true,
+          message: 'Your teacher has not opened the room yet.',
+        });
         return;
       }
       updateRoomActivity(roomId);
@@ -1283,7 +1293,7 @@ async function startServer() {
       if (role === 'teacher' && ownershipEnabled) {
         const decision = await verifyTeacherOwnership(roomId, authToken);
         if (decision === 'reject') {
-          socket.emit('join_error', { message: 'This class belongs to another teacher. Please sign in as the owner.' });
+          socket.emit('join_error', { code: 'not_owner', retryable: false, message: 'This class belongs to another teacher. Please sign in as the owner.' });
           return;
         }
       }
@@ -1297,7 +1307,7 @@ async function startServer() {
       if (role === 'teacher' && room.teacherSocketId) {
         const sittingTeacher = room.users.get(room.teacherSocketId);
         if (sittingTeacher && sittingTeacher.name !== safeName) {
-          socket.emit('join_error', { message: 'Another teacher is already in this room.' });
+          socket.emit('join_error', { code: 'teacher_taken', retryable: false, message: 'Another teacher is already in this room.' });
           return;
         }
       }

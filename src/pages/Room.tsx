@@ -2626,6 +2626,16 @@ export default function Room() {
     if (!roomId) return;
     let cancelled = false;
     (async () => {
+      // The student list comes FIRST and does not depend on this room being a
+      // registered class. It used to: an ad-hoc room returned early here, so a
+      // signed-in tutor sitting in one saw no switcher at all and had no way to
+      // reach the students they do have.
+      try {
+        const { listClasses } = await import('../lib/classes');
+        const rows = await listClasses();
+        if (!cancelled) setMyClasses(rows.filter(r => r.room_code !== roomId));
+      } catch { /* not signed in, or no classes yet */ }
+
       try {
         const found = await getClassByRoomCode(roomId);
         if (cancelled || !found) return;
@@ -2637,16 +2647,8 @@ export default function Room() {
         };
         setClassId(found.id);
         setClassStudent(found.student_name);
-        // The switcher's two lists. Both are best-effort: a failure here must
-        // leave the lesson running, just without the switcher.
-        const [{ listClasses }, { listSessions, findSessionForDay, lessonDay }] = await Promise.all([
-          import('../lib/classes'), import('../lib/sessions'),
-        ]);
         try {
-          const rows = await listClasses();
-          if (!cancelled) setMyClasses(rows.filter(r => r.room_code !== roomId));
-        } catch { /* no list, no switcher */ }
-        try {
+          const { listSessions, findSessionForDay, lessonDay } = await import('../lib/sessions');
           const rows = await listSessions(found.id);
           if (cancelled) return;
           setMySessions(rows);
@@ -2655,7 +2657,7 @@ export default function Room() {
           const today = findSessionForDay(rows, lessonDay(new Date().toISOString()));
           if (today) setCurrentSessionId(today.id);
         } catch { /* no history yet */ }
-      } catch { /* no record, not signed in, or the columns aren't there yet */ }
+      } catch { /* not a registered class, or the columns aren't there yet */ }
     })();
     return () => { cancelled = true; };
   }, [roomId]);
@@ -3093,11 +3095,12 @@ export default function Room() {
 
           {/* Who, and which lesson. Only for a signed-in tutor with a student
               record — an ad-hoc room has neither to switch between. */}
-          {classId && (
+          {(classId || myClasses.length > 0) && (
             <>
               <div className="header-divider hidden sm:block" />
               <LessonSwitcher
-                student={classStudent || 'Student'}
+                student={classStudent || 'Pick a student'}
+                isClassRoom={!!classId}
                 classes={myClasses}
                 sessions={mySessions}
                 currentSessionId={currentSessionId}
