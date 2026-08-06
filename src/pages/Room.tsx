@@ -32,6 +32,10 @@ import { getClassByRoomCode } from "../lib/classes";
 import { ScreenPeer, shareFailureMessage, type ShareStatus } from "../lib/screenShare";
 import ScreenShareViewer from "../components/ScreenShareViewer";
 import { parseGoals } from "../lib/studentProfile";
+import LessonSwitcher from "../components/LessonSwitcher";
+import { boardHasContent } from "../lib/lessonNav";
+import type { ClassRow } from "../lib/classes";
+import type { SessionRow } from "../lib/sessions";
 import FeedbackToasts from "../components/FeedbackToasts";
 import PausedOverlay from "../components/PausedOverlay";
 import TimerDisplay from "../components/TimerDisplay";
@@ -298,6 +302,13 @@ export default function Room() {
   // database or an offline Supabase all leave this null and the lesson runs
   // exactly as before. It only ever adds context to the class pack.
   const classRowRef = useRef<{ grade: string | null; level: string | null; goals: string[]; textbook: string | null } | null>(null);
+  // Switching students and lesson days without leaving the room.
+  const [myClasses, setMyClasses] = useState<ClassRow[]>([]);
+  const [mySessions, setMySessions] = useState<SessionRow[]>([]);
+  const [classId, setClassId] = useState<string | null>(null);
+  const [classStudent, setClassStudent] = useState<string>('');
+  const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
+  const [switchBusy, setSwitchBusy] = useState(false);
   const packSurfacesRef = useRef<PackSurface[]>([{ id: 'wb_1', type: 'whiteboard', title: null }]);
   const packOutlinesRef = useRef<PackExplainerOutline[]>([]);
   const packAttemptsRef = useRef<RecordedAttempt[]>([]);
@@ -2108,6 +2119,93 @@ export default function Room() {
     showNotif(`⟳ Resyncing ${peekStudentRef.current.name}…`);
   };
 
+  // ── Switching students and lesson days ──
+  //
+  // Both replace what is on the board, so both save first. Losing a lesson's
+  // work to a menu click is the one unrecoverable thing this feature could do.
+  const saveCurrentLesson = useCallback(async (): Promise<void> => {
+    if (!classId || !boardHasContent(whiteboardState)) return;
+    const { saveLessonForDay, listSessions } = await import('../lib/sessions');
+    const topic = files.find(f => f.id === activeFileId)?.name
+      || (whiteboardMode ? 'Whiteboard session' : 'Session');
+    const id = await saveLessonForDay({
+      classId, topic, html: previewHtmlRef.current || null,
+      whiteboard: whiteboardState, sessionId: currentSessionId,
+    });
+    if (id) setCurrentSessionId(id);
+    try { setMySessions(await listSessions(classId)); } catch { /* keep the stale list */ }
+  }, [classId, whiteboardState, files, activeFileId, whiteboardMode, currentSessionId]);
+
+  /** Wipe the live board for everyone, then replay a saved one onto it. */
+  const loadLessonOntoBoard = useCallback((snap: any, html: string | null) => {
+    if (!socket) return;
+    socket.emit('whiteboard_clear', { roomId });
+    if (snap?.gridMode) socket.emit('whiteboard_set_grid_mode', { roomId, gridMode: snap.gridMode });
+    for (const shape of (snap?.shapes || [])) socket.emit('whiteboard_add_shape', { roomId, shape });
+    for (const text of (snap?.texts || [])) socket.emit('whiteboard_add_text', { roomId, text });
+    for (const inst of (snap?.instruments || [])) socket.emit('whiteboard_add_instrument', { roomId, instrument: inst });
+    for (const obj of (snap?.objects || [])) socket.emit('whiteboard_add_image', { roomId, object: obj });
+    for (const stroke of (snap?.strokes || [])) socket.emit('whiteboard_draw', { roomId, stroke });
+    if (html && html.length <= 2 * 1024 * 1024) {
+      const fileId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      socket.emit('upload_file', { roomId, file: { id: fileId, name: 'Lesson', html, uploadedAt: Date.now() } });
+      setSimPreviewHtml(html);
+    } else if (html) {
+      showNotif('⚠️ That lesson’s HTML is over the 2MB sync limit — the board loaded, the page did not');
+    }
+  }, [socket, roomId]);
+
+  const switchToLesson = useCallback(async (row: SessionRow) => {
+    if (switchBusy) return;
+    setSwitchBusy(true);
+    try {
+      await saveCurrentLesson();
+      const { getSession } = await import('../lib/sessions');
+      const full = await getSession(row.id);
+      if (!full) { showNotif('⚠️ That lesson could not be opened'); return; }
+      loadLessonOntoBoard(full.whiteboard_snapshot, full.html_used);
+      setCurrentSessionId(full.id);
+      showNotif(`📂 Opened ${new Date(full.started_at).toLocaleDateString()}${full.topic ? ' — ' + full.topic : ''}`);
+    } catch {
+      showNotif('⚠️ Could not switch lesson');
+    } finally {
+      setSwitchBusy(false);
+    }
+  }, [switchBusy, saveCurrentLesson, loadLessonOntoBoard]);
+
+  const startNewLesson = useCallback(async () => {
+    if (switchBusy) return;
+    setSwitchBusy(true);
+    try {
+      await saveCurrentLesson();
+      if (socket) socket.emit('whiteboard_clear', { roomId });
+      // A new lesson is not yet a row. It becomes one on the first save, and
+      // pointing at nothing is what makes that a NEW row rather than an
+      // overwrite of whatever was last open.
+      setCurrentSessionId(null);
+      showNotif('✦ Fresh board — the previous lesson is saved in this student’s history');
+    } catch {
+      showNotif('⚠️ Could not start a new lesson');
+    } finally {
+      setSwitchBusy(false);
+    }
+  }, [switchBusy, saveCurrentLesson, socket, roomId]);
+
+  const switchToStudent = useCallback(async (row: ClassRow) => {
+    if (switchBusy) return;
+    setSwitchBusy(true);
+    try {
+      await saveCurrentLesson();
+      // Their room is a different room entirely, so this is a navigation. A
+      // full load is also the simplest way to be certain no state from the
+      // previous student survives into the next one's lesson.
+      window.location.href = `/room/${row.room_code}`;
+    } catch {
+      showNotif('⚠️ Could not switch student');
+      setSwitchBusy(false);
+    }
+  }, [switchBusy, saveCurrentLesson]);
+
   // ── Screen share (watch the student's ACTUAL screen) ──
   // Peek, above, shows the lesson iframe's DOM. This is the student's whole
   // screen as live video — the thing that answers "why does yours look
@@ -2537,6 +2635,26 @@ export default function Room() {
           goals: parseGoals(found.goals ?? ''),
           textbook: found.textbook ?? null,
         };
+        setClassId(found.id);
+        setClassStudent(found.student_name);
+        // The switcher's two lists. Both are best-effort: a failure here must
+        // leave the lesson running, just without the switcher.
+        const [{ listClasses }, { listSessions, findSessionForDay, lessonDay }] = await Promise.all([
+          import('../lib/classes'), import('../lib/sessions'),
+        ]);
+        try {
+          const rows = await listClasses();
+          if (!cancelled) setMyClasses(rows.filter(r => r.room_code !== roomId));
+        } catch { /* no list, no switcher */ }
+        try {
+          const rows = await listSessions(found.id);
+          if (cancelled) return;
+          setMySessions(rows);
+          // If today already has a saved lesson, this room is continuing it —
+          // so saving writes back to that row instead of starting a second one.
+          const today = findSessionForDay(rows, lessonDay(new Date().toISOString()));
+          if (today) setCurrentSessionId(today.id);
+        } catch { /* no history yet */ }
       } catch { /* no record, not signed in, or the columns aren't there yet */ }
     })();
     return () => { cancelled = true; };
@@ -2972,6 +3090,24 @@ export default function Room() {
           <div className="header-divider hidden sm:block" />
 
           <span className="hidden sm:inline text-[12px] font-mono font-semibold" style={{ color: 'var(--text-muted)' }}>{roomId}</span>
+
+          {/* Who, and which lesson. Only for a signed-in tutor with a student
+              record — an ad-hoc room has neither to switch between. */}
+          {classId && (
+            <>
+              <div className="header-divider hidden sm:block" />
+              <LessonSwitcher
+                student={classStudent || 'Student'}
+                classes={myClasses}
+                sessions={mySessions}
+                currentSessionId={currentSessionId}
+                busy={switchBusy}
+                onPickStudent={switchToStudent}
+                onPickLesson={switchToLesson}
+                onNewLesson={startNewLesson}
+              />
+            </>
+          )}
 
           <div className="header-divider hidden sm:block ml-viewmode-switch" />
 
