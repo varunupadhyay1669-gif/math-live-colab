@@ -34,6 +34,7 @@ import ScreenShareViewer from "../components/ScreenShareViewer";
 import { parseGoals } from "../lib/studentProfile";
 import LessonSwitcher from "../components/LessonSwitcher";
 import { boardHasContent } from "../lib/lessonNav";
+import { shouldReseedBoard, boardPieceCount } from "../lib/boardRecovery";
 import type { ClassRow } from "../lib/classes";
 import type { SessionRow } from "../lib/sessions";
 import FeedbackToasts from "../components/FeedbackToasts";
@@ -161,6 +162,17 @@ export default function Room() {
   // we want to distinguish them to drive the re-seed-server-with-cached-
   // HTML logic (only re-seed on reconnects, not the first connect).
   const hasEverConnectedRef = useRef(false);
+  // The last board we KNOW had content. Deliberately not derived from
+  // whiteboardState, because that is overwritten by whatever the server sends —
+  // including the empty room a restarted server hands back, which is precisely
+  // the moment we need the old contents.
+  const lastGoodBoardRef = useRef<any>(null);
+  // Armed on reconnect, disarmed after one restore, so several state messages
+  // arriving around one reconnect cannot stack duplicates.
+  const boardReseedPendingRef = useRef(false);
+  // Set below, once the socket exists. Held in a ref because the decision is
+  // made inside applySessionState, which runs before that closure is built.
+  const reseedBoardRef = useRef<((board: any) => void) | null>(null);
   // Refs that mirror state we need to read from inside the socket
   // setup useEffect (which has a small dep list and would otherwise
   // see stale closure values).
@@ -594,6 +606,19 @@ export default function Room() {
     if (Array.isArray(state.explanations)) setExplanations(state.explanations);
     if ('activeExplanationId' in state) setActiveExplanationId(state.activeExplanationId ?? null);
     if (state.whiteboard) setWhiteboardState(state.whiteboard);
+    if (boardHasContent(state.whiteboard)) lastGoodBoardRef.current = state.whiteboard;
+    // The server restarted and handed us a fresh, empty room. Our own browser
+    // still holds the lesson, so push it back rather than letting an hour of
+    // teaching disappear off every screen at once.
+    // (This page IS the teacher — the only client that holds the whole board.)
+    const decision = shouldReseedBoard(state.whiteboard, lastGoodBoardRef.current, {
+      wasReconnect: boardReseedPendingRef.current,
+      alreadyReseeded: false,
+    });
+    if (decision.reseed) {
+      boardReseedPendingRef.current = false;
+      reseedBoardRef.current?.(lastGoodBoardRef.current);
+    }
     if (Array.isArray(state.annotations)) setAnnotations(state.annotations);
     // Whiteboard mode is server-persisted; restore on reconnect so the
     // teacher lands on the same surface they were on before disconnect.
@@ -706,6 +731,8 @@ export default function Room() {
     newSocket.on("connect", () => {
       const wasReconnect = hasEverConnectedRef.current;
       hasEverConnectedRef.current = true;
+      // Arm board recovery for the state message that follows this reconnect.
+      boardReseedPendingRef.current = wasReconnect;
       setConnected(true);
       // Revision guard resets on (re)connect (a recreated room restarts
       // revisions at 0; re-applying identical state is harmless).
@@ -2154,6 +2181,25 @@ export default function Room() {
       showNotif('⚠️ That lesson’s HTML is over the 2MB sync limit — the board loaded, the page did not');
     }
   }, [socket, roomId]);
+
+  // Push our copy of the board back to a server that lost it. Same replay the
+  // lesson switcher and the template hydrator use — one way to put a board on
+  // the wire, so a bug in it shows up everywhere rather than only here.
+  const reseedBoard = useCallback((board: any) => {
+    if (!socket || !board) return;
+    const pieces = boardPieceCount(board);
+    if (board.gridMode) socket.emit('whiteboard_set_grid_mode', { roomId, gridMode: board.gridMode });
+    for (const shape of (board.shapes || [])) socket.emit('whiteboard_add_shape', { roomId, shape });
+    for (const text of (board.texts || [])) socket.emit('whiteboard_add_text', { roomId, text });
+    for (const inst of (board.instruments || [])) socket.emit('whiteboard_add_instrument', { roomId, instrument: inst });
+    for (const obj of (board.objects || [])) socket.emit('whiteboard_add_image', { roomId, object: obj });
+    for (const stroke of (board.strokes || [])) socket.emit('whiteboard_draw', { roomId, stroke });
+    // Say so. A board that blanks and silently refills looks like a glitch;
+    // named, it is the app visibly catching the lesson.
+    showNotif(`↻ The server restarted — put your board back (${pieces} ${pieces === 1 ? 'item' : 'items'})`);
+    console.info('[recovery] re-seeded the whiteboard after a server restart', pieces);
+  }, [socket, roomId]);
+  useEffect(() => { reseedBoardRef.current = reseedBoard; }, [reseedBoard]);
 
   const switchToLesson = useCallback(async (row: SessionRow) => {
     if (switchBusy) return;
