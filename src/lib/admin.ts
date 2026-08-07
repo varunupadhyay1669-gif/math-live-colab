@@ -1,4 +1,5 @@
 import { supabase } from './supabase';
+import { classifyAdminError } from './adminLabels';
 
 // MathsLive Admin — reading across every tutor.
 //
@@ -44,39 +45,36 @@ export class AdminNotInstalled extends Error {
   }
 }
 
-/** Postgres 42883 = undefined_function — migration 004 has not been run. */
-function notInstalled(e: unknown): boolean {
-  const code = (e as { code?: string })?.code;
-  const msg = (e as { message?: string })?.message || '';
-  return code === '42883' || /could not find the function|does not exist/i.test(msg);
-}
-
-/** 42501 = insufficient_privilege — signed in, but not an admin. */
-function notAllowed(e: unknown): boolean {
-  const code = (e as { code?: string })?.code;
-  const msg = (e as { message?: string })?.message || '';
-  return code === '42501' || /not authorised|not authorized/i.test(msg);
-}
-
 /**
- * Is the signed-in user an admin?
+ * Why the admin page is or is not available.
  *
- * False for "no", for "not signed in", and for "the migration is not installed"
- * — all three mean the same thing to the page: do not show it.
+ * This used to be a boolean, so "the database functions were never installed"
+ * rendered as "this account does not have access" — telling the owner they
+ * lacked permission to their own platform, and sending them looking for a
+ * permissions bug that did not exist. Three different situations need three
+ * different sentences.
  */
-export async function isPlatformAdmin(): Promise<boolean> {
-  if (!supabase) return false;
+export type AdminAccess = 'admin' | 'denied' | 'not-installed' | 'no-auth' | 'error';
+
+export async function checkAdminAccess(): Promise<AdminAccess> {
+  if (!supabase) return 'no-auth';
   const { data, error } = await supabase.rpc('is_platform_admin');
-  if (error) return false;
-  return data === true;
+  if (error) return classifyAdminError(error);
+  return data === true ? 'admin' : 'denied';
+}
+
+/** Kept for callers that only need yes/no. */
+export async function isPlatformAdmin(): Promise<boolean> {
+  return (await checkAdminAccess()) === 'admin';
 }
 
 export async function fetchTutorUsage(): Promise<TutorUsage[]> {
   if (!supabase) throw new Error('Auth is not configured');
   const { data, error } = await supabase.rpc('admin_tutor_usage');
   if (error) {
-    if (notInstalled(error)) throw new AdminNotInstalled();
-    if (notAllowed(error)) throw new Error('Not authorised.');
+    const kind = classifyAdminError(error);
+    if (kind === 'not-installed') throw new AdminNotInstalled();
+    if (kind === 'denied') throw new Error('Not authorised.');
     throw error;
   }
   return (data ?? []) as TutorUsage[];
@@ -86,8 +84,9 @@ export async function fetchStudentUsage(): Promise<StudentUsage[]> {
   if (!supabase) throw new Error('Auth is not configured');
   const { data, error } = await supabase.rpc('admin_student_usage');
   if (error) {
-    if (notInstalled(error)) throw new AdminNotInstalled();
-    if (notAllowed(error)) throw new Error('Not authorised.');
+    const kind = classifyAdminError(error);
+    if (kind === 'not-installed') throw new AdminNotInstalled();
+    if (kind === 'denied') throw new Error('Not authorised.');
     throw error;
   }
   return (data ?? []) as StudentUsage[];
@@ -96,4 +95,4 @@ export async function fetchStudentUsage(): Promise<StudentUsage[]> {
 // Presentation helpers are re-exported from lib/adminLabels, which imports
 // nothing — so a test of "is this tutor dormant" does not have to construct a
 // Supabase client to find out.
-export { activityStatus, agoLabel, type ActivityStatus } from './adminLabels';
+export { activityStatus, agoLabel, classifyAdminError, type ActivityStatus } from './adminLabels';

@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { useAuth } from '../lib/auth';
 import {
-  isPlatformAdmin, fetchTutorUsage, fetchStudentUsage, activityStatus, agoLabel,
-  AdminNotInstalled, type TutorUsage, type StudentUsage,
+  checkAdminAccess, fetchTutorUsage, fetchStudentUsage, activityStatus, agoLabel,
+  AdminNotInstalled, type TutorUsage, type StudentUsage, type AdminAccess,
 } from '../lib/admin';
 import { humanTeachingTime } from '../lib/teachingTime';
 
@@ -20,7 +20,7 @@ type Tab = 'tutors' | 'students';
 
 export default function AdminView() {
   const auth = useAuth();
-  const [allowed, setAllowed] = useState<boolean | null>(null);
+  const [access, setAccess] = useState<AdminAccess | null>(null);
   const [tab, setTab] = useState<Tab>('tutors');
   const [tutors, setTutors] = useState<TutorUsage[]>([]);
   const [students, setStudents] = useState<StudentUsage[]>([]);
@@ -31,9 +31,9 @@ export default function AdminView() {
 
   useEffect(() => {
     if (auth.loading) return;
-    if (!auth.user) { setAllowed(false); return; }
+    if (!auth.user) { setAccess('no-auth'); return; }
     let cancelled = false;
-    void isPlatformAdmin().then(ok => { if (!cancelled) setAllowed(ok); });
+    void checkAdminAccess().then(a => { if (!cancelled) setAccess(a); });
     return () => { cancelled = true; };
   }, [auth.loading, auth.user]);
 
@@ -51,10 +51,10 @@ export default function AdminView() {
     }
   }, []);
 
-  useEffect(() => { if (allowed) void load(); }, [allowed, load]);
+  useEffect(() => { if (access === 'admin') void load(); }, [access, load]);
 
   // ── Not signed in ──
-  if (auth.loading || allowed === null) {
+  if (auth.loading || access === null) {
     return <Shell><p className="ml-admin-muted">Checking…</p></Shell>;
   }
 
@@ -87,10 +87,44 @@ export default function AdminView() {
     );
   }
 
-  // ── Signed in, but not an admin ──
+  // ── The database side was never installed ──
+  // Emphatically NOT "you do not have access". Telling the owner they lack
+  // permission to their own platform sends them hunting a bug that is not
+  // there; this is a setup step that has not been done.
+  if (access === 'not-installed') {
+    return (
+      <Shell>
+        <h2 className="ml-admin-setup-title">One setup step left</h2>
+        <p className="ml-admin-muted" style={{ lineHeight: 1.6 }}>
+          The admin functions are not in the database yet, so nothing can be read across tutors.
+          Open Supabase → SQL Editor and run:
+        </p>
+        <code className="ml-admin-code">supabase/migrations/004_platform_admin.sql</code>
+        <p className="ml-admin-muted" style={{ lineHeight: 1.6, marginTop: 14 }}>
+          Step 2 of that file has an email in it — make sure it is
+          <strong style={{ color: '#E2E8F0' }}> {auth.user.email}</strong>, the account you are signed
+          in with right now. Then reload this page.
+        </p>
+        <button className="ml-admin-btn" style={{ marginTop: 18 }} onClick={() => window.location.reload()}>
+          I have run it — check again
+        </button>
+      </Shell>
+    );
+  }
+
+  if (access === 'error') {
+    return (
+      <Shell>
+        <p className="ml-admin-muted">Could not reach the database to check access. Try again in a moment.</p>
+        <button className="ml-admin-btn" style={{ marginTop: 16 }} onClick={() => window.location.reload()}>Retry</button>
+      </Shell>
+    );
+  }
+
+  // ── Signed in, installed, and genuinely not an admin ──
   // Says only that this account cannot see it. Whether an admin page has
   // anything in it, and who the admins are, is not this page's news to give.
-  if (!allowed) {
+  if (access !== 'admin') {
     return (
       <Shell>
         <p className="ml-admin-muted">

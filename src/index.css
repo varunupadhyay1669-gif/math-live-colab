@@ -4018,3 +4018,16 @@ html, body, #root { background: var(--bg-primary); }
 .ml-admin-pill.s-active-this-month { background: rgba(59, 130, 246, 0.16); color: #93C5FD; }
 .ml-admin-pill.s-dormant           { background: rgba(245, 158, 11, 0.16); color: #FCD34D; }
 .ml-admin-pill.s-never-signed-in   { background: rgba(148, 163, 184, 0.16); color: #CBD5E1; }
+.ml-admin-setup-title { font-size: 18px; font-weight: 800; margin: 0 0 10px; color: #F1F5F9; }
+.ml-admin-code {
+  display: block;
+  margin-top: 12px;
+  padding: 10px 12px;
+  border-radius: 9px;
+  background: rgba(129, 140, 248, 0.10);
+  border: 1px solid rgba(129, 140, 248, 0.28);
+  color: #C7D2FE;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12.5px;
+  word-break: break-all;
+}

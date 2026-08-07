@@ -28,3 +28,30 @@ export function agoLabel(iso: string | null, now = Date.now()): string {
   const months = Math.round(days / 30);
   return months === 1 ? 'a month ago' : `${months} months ago`;
 }
+
+
+// ── Why the admin page is unavailable ────────────────────────────────
+//
+// "Not set up yet" and "not allowed" looked identical, so the owner — signed
+// in with the right account — was told they lacked access when the truth was
+// that a migration had not been run. Pure and tested against the payload the
+// live database actually returned.
+
+export type AdminErrorKind = 'not-installed' | 'denied' | 'error';
+
+export function classifyAdminError(e: unknown): AdminErrorKind {
+  if (!e || typeof e !== 'object') return 'error';
+  const err = e as { code?: string; message?: string; details?: string };
+  const code = err.code || '';
+  const text = `${err.message || ''} ${err.details || ''}`;
+
+  // PostgREST answers a missing RPC with PGRST202, and puts the explanation in
+  // `details` rather than `message`. Postgres raises 42883 when it is the one
+  // complaining. The old check looked for neither and matched nothing.
+  if (code === 'PGRST202' || code === '42883') return 'not-installed';
+  if (/could not find the function|does not exist|no matches were found|searched for the function/i.test(text)) {
+    return 'not-installed';
+  }
+  if (code === '42501' || /not authoris|not authoriz/i.test(text)) return 'denied';
+  return 'error';
+}
