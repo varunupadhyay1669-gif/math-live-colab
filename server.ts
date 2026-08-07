@@ -273,6 +273,15 @@ async function startServer() {
   const rooms = new Map<string, RoomData>();
 
   // ─── MEMORY MANAGEMENT ───
+  // How long a room with nobody in it stays in RAM before being written to the
+  // store and dropped. Long enough that stepping out of a lesson for a coffee
+  // costs nothing (the room is still warm), short enough that a day of
+  // back-to-back students does not accumulate.
+  // Env-tunable so the behaviour can actually be exercised in a test rather
+  // than asserted about — a 30-minute timer is not testable, and an untested
+  // eviction path is how a live room gets dropped.
+  const IDLE_EVICT_MS = Number(process.env.IDLE_EVICT_MS) || 30 * 60 * 1000;
+  const SWEEP_INTERVAL_MS = Number(process.env.SWEEP_INTERVAL_MS) || 10 * 60 * 1000;
   // Sweep every 10 minutes:
   //  - Rooms past their claim-aware TTL (24h anonymous OR 30d claimed)
   //  - Rooms where last student left > 2 hours ago AND no students currently connected
@@ -280,6 +289,7 @@ async function startServer() {
     const now = Date.now();
     const studentLeftExpiryMs = 2 * 60 * 60 * 1000; // 2 hours after last student leaves
     let deletedCount = 0;
+    let evictedCount = 0;
 
     for (const [roomId, room] of rooms.entries()) {
       // AUTONOMOUS: Claim-aware expiry. Anonymous rooms die at
@@ -307,10 +317,54 @@ async function startServer() {
       }
     }
 
+    // ── Idle-room eviction: memory should track lessons happening NOW ──
+    //
+    // Render restarted this service for exceeding its memory limit, which is
+    // what made joining unreliable and boards vanish mid-lesson. The cause is
+    // here: a room stays in RAM for its whole life — 24 hours anonymous, THIRTY
+    // DAYS once claimed — with nobody in it. And a room is not small: up to 50
+    // files at 2MB each, 8 explanations at 2MB, the last-run HTML, and a
+    // continuously-updated copy of the teacher's entire iframe DOM. A handful
+    // of taught-and-left rooms is enough to exhaust a small instance.
+    //
+    // Nothing needs them in memory once everyone has gone. The durable store
+    // already holds them and join_room already lazily restores on demand —
+    // that path is how a student opens a permanent class link after a
+    // cold start. So: persist, then drop. Memory becomes proportional to
+    // concurrent lessons instead of to everything ever taught.
+    for (const [roomId, room] of rooms.entries()) {
+      if (room.users.size > 0) continue;                       // someone is in it
+      if (room.pendingTeacherDisconnect) continue;             // inside the grace window
+      if (now - room.lastActivityAt < IDLE_EVICT_MS) continue; // still warm
+      const keep = roomHasContent(room);
+      // Persist BEFORE dropping, or eviction becomes deletion.
+      const done = keep ? saveSingleRoom(roomId, room) : Promise.resolve();
+      void done.then(() => {
+        // Re-check: someone may have joined during the write, which would
+        // lazily restore a STALE copy over their live room.
+        const still = rooms.get(roomId);
+        if (!still || still.users.size > 0) return;
+        if (still.pendingTeacherDisconnect) return;
+        rooms.delete(roomId);
+        evictedCount++;
+      }).catch(err => {
+        // A failed write means the only copy is the one in memory. Keep it.
+        console.warn(`Eviction skipped for ${roomId} — persist failed:`, err?.message || err);
+      });
+    }
+
     if (deletedCount > 0) {
       console.log(`🧹 Memory Sweep: Cleared ${deletedCount} expired rooms.`);
     }
-  }, 10 * 60 * 1000);
+    // evictedCount is incremented asynchronously (after each persist), so read
+    // it on the next tick rather than reporting zero every time.
+    setTimeout(() => {
+      if (evictedCount > 0) {
+        const mb = Math.round(process.memoryUsage().heapUsed / 1048576);
+        console.log(`💤 Evicted ${evictedCount} idle rooms to the store (heap now ${mb}MB, ${rooms.size} in memory)`);
+      }
+    }, 5000);
+  }, SWEEP_INTERVAL_MS);
 
   function updateRoomActivity(roomId: string) {
     const room = rooms.get(roomId);
@@ -3413,6 +3467,20 @@ Build a widget that teaches: ${safePrompt}`;
           io.to(roomId).emit('user_list', getRoomUserList(room));
           io.to(roomId).emit('user_left', { userId: socket.id, userName: user?.name || 'Unknown' });
 
+          // Room just emptied: release the transient caches immediately rather
+          // than holding them until eviction. mirrorBody is a full copy of the
+          // teacher's iframe DOM — the largest single thing a room carries, and
+          // updated on every mutation — and it is explicitly re-sent by the
+          // source on the next change, so keeping it for an empty room buys
+          // nothing and costs megabytes across a day of lessons.
+          if (room.users.size === 0) {
+            room.mirrorBody = null;
+            room.mirrorAttrs = null;
+            room.mirrorHead = null;
+            room.mirrorHash = null;
+            room.liveSnapshotHtml = null;
+          }
+
           if (room.teacherSocketId === socket.id) {
             // AUTONOMOUS: Grace period before declaring "teacher left".
             //
@@ -3432,7 +3500,10 @@ Build a widget that teaches: ${safePrompt}`;
             // within the grace window, the timer is cancelled and no
             // disconnect notification is ever sent. Truly-gone teachers
             // still get cleaned up, just delayed.
-            const TEACHER_DISCONNECT_GRACE_MS = 45_000;
+            // Tunable for tests: eviction deliberately skips a room inside the
+            // grace window, so a test that cannot shorten this window cannot
+            // reach the eviction path at all.
+            const TEACHER_DISCONNECT_GRACE_MS = Number(process.env.TEACHER_GRACE_MS) || 45_000;
             const expectedTeacherName = user?.name;
             const oldSocketId = socket.id;
             // Mark the slot as "pending-disconnect" but don't null it yet —
