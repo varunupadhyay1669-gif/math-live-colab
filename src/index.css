@@ -3884,3 +3884,137 @@ html, body, #root { background: var(--bg-primary); }
   color: #047857;
 }
 .ml-board-open .tb-btn-screen { height: 30px; }
+
+/* ══════════════════════════════════════════════════════════════════
+   MATHSLIVE ADMIN — its own surface, deliberately unlike the app
+   ══════════════════════════════════════════════════════════════════
+   Dark and plain, so it is never mistaken for a tutor's dashboard: what is on
+   this page belongs to nobody who teaches here. */
+.ml-admin {
+  min-height: 100vh;
+  background: #0B1020;
+  color: #E2E8F0;
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+.ml-admin-header {
+  display: flex;
+  align-items: center;
+  padding: 16px 24px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+.ml-admin-mark { font-size: 17px; font-weight: 800; letter-spacing: -0.02em; }
+.ml-admin-mark span { color: #818CF8; }
+.ml-admin-badge {
+  margin-left: 10px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(129, 140, 248, 0.16);
+  border: 1px solid rgba(129, 140, 248, 0.35);
+  color: #C7D2FE !important;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  vertical-align: middle;
+}
+.ml-admin-main { margin: 0 auto; padding: 28px 24px 60px; }
+.ml-admin-muted { color: #94A3B8; font-size: 14px; }
+.ml-admin-error { color: #FCA5A5; font-size: 13px; margin-top: 14px; line-height: 1.5; }
+.ml-admin-note { color: #64748B; font-size: 12px; margin-top: 18px; line-height: 1.6; }
+.ml-admin-strong { font-weight: 700; color: #F1F5F9; }
+.ml-admin-mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; color: #94A3B8; }
+
+.ml-admin-signin { display: flex; gap: 8px; }
+.ml-admin-signin input {
+  flex: 1;
+  padding: 10px 12px;
+  border-radius: 9px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.04);
+  color: #E2E8F0;
+  font-size: 14px;
+}
+.ml-admin-signin button,
+.ml-admin-btn {
+  padding: 9px 15px;
+  border-radius: 9px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.06);
+  color: #E2E8F0;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.ml-admin-signin button { background: #4F46E5; border-color: transparent; }
+.ml-admin-btn:hover:not(:disabled) { background: rgba(255, 255, 255, 0.12); }
+.ml-admin-btn:disabled { opacity: 0.55; cursor: progress; }
+
+.ml-admin-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 10px;
+  margin-bottom: 22px;
+}
+.ml-admin-stat {
+  padding: 14px 16px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+}
+.ml-admin-stat-value { font-size: 24px; font-weight: 800; letter-spacing: -0.02em; }
+.ml-admin-stat-label { font-size: 11.5px; color: #94A3B8; margin-top: 3px; font-weight: 600; }
+
+.ml-admin-tabs { display: flex; align-items: center; gap: 8px; margin-bottom: 14px; flex-wrap: wrap; }
+.ml-admin-tabs > button {
+  padding: 8px 14px;
+  border-radius: 9px;
+  border: 1px solid transparent;
+  background: none;
+  color: #94A3B8;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.ml-admin-tabs > button.is-on {
+  background: rgba(129, 140, 248, 0.14);
+  border-color: rgba(129, 140, 248, 0.34);
+  color: #C7D2FE;
+}
+
+/* Wide tables scroll inside their own box rather than the page. */
+.ml-admin-table-wrap {
+  overflow-x: auto;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+}
+.ml-admin-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.ml-admin-table th {
+  text-align: left;
+  padding: 10px 14px;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: #94A3B8;
+  background: rgba(255, 255, 255, 0.03);
+  white-space: nowrap;
+}
+.ml-admin-table td {
+  padding: 11px 14px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  white-space: nowrap;
+}
+.ml-admin-table tbody tr:hover td { background: rgba(255, 255, 255, 0.03); }
+
+.ml-admin-pill {
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.ml-admin-pill.s-active-this-week  { background: rgba(16, 185, 129, 0.16); color: #6EE7B7; }
+.ml-admin-pill.s-active-this-month { background: rgba(59, 130, 246, 0.16); color: #93C5FD; }
+.ml-admin-pill.s-dormant           { background: rgba(245, 158, 11, 0.16); color: #FCD34D; }
+.ml-admin-pill.s-never-signed-in   { background: rgba(148, 163, 184, 0.16); color: #CBD5E1; }

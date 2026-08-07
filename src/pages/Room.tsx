@@ -35,6 +35,7 @@ import { parseGoals } from "../lib/studentProfile";
 import LessonSwitcher from "../components/LessonSwitcher";
 import { boardHasContent } from "../lib/lessonNav";
 import { shouldReseedBoard, boardPieceCount } from "../lib/boardRecovery";
+import { TeachingClock, isTeaching } from "../lib/teachingTime";
 import type { ClassRow } from "../lib/classes";
 import type { SessionRow } from "../lib/sessions";
 import FeedbackToasts from "../components/FeedbackToasts";
@@ -421,6 +422,9 @@ export default function Room() {
   // call — its own peer connection, so none of the three can disturb another.
   // Live member list for handlers that must not re-subscribe on every change.
   const usersRef = useRef<UserInfo[]>([]);
+  // Counts only while a teacher and a student are BOTH here. Wall clock would
+  // bill the setup before she arrives and the room left open after she goes.
+  const teachingClockRef = useRef(new TeachingClock());
   const [screenShare, setScreenShare] = useState<{ id: string; name: string } | null>(null);
   const [screenStatus, setScreenStatus] = useState<ShareStatus>('idle');
   const [screenStream, setScreenStream] = useState<MediaStream | null>(null);
@@ -828,6 +832,9 @@ export default function Room() {
       setUsers(list);
       const before = usersRef.current;
       usersRef.current = list;
+      // Driven from membership rather than a timer, so it is exact at both
+      // edges. setPresence is idempotent — this fires constantly.
+      teachingClockRef.current.setPresence(isTeaching(list), Date.now());
       // A student who arrives mid-share gets their own connection, or they sit
       // looking at a lesson the tutor has already stopped teaching from.
       if (myScreenStreamRef.current) {
@@ -2188,10 +2195,40 @@ export default function Room() {
     const id = await saveLessonForDay({
       classId, topic, html: previewHtmlRef.current || null,
       whiteboard: whiteboardState, sessionId: currentSessionId,
+      taughtSeconds: teachingClockRef.current.total(Date.now()),
     });
     if (id) setCurrentSessionId(id);
     try { setMySessions(await listSessions(classId)); } catch { /* keep the stale list */ }
   }, [classId, whiteboardState, files, activeFileId, whiteboardMode, currentSessionId]);
+
+  // Save the lesson on a slow tick while teaching, and when the page is hidden.
+  //
+  // Until now a lesson only reached the student's history on an explicit click
+  // or a lesson switch, so a tutor who taught for an hour and closed the tab
+  // saved nothing — and the length of the lesson was never recorded at all.
+  // Two minutes is slow enough to be invisible to the database and frequent
+  // enough that a crash costs almost nothing.
+  const saveLessonRef = useRef<(() => Promise<void>) | null>(null);
+  useEffect(() => { saveLessonRef.current = saveCurrentLesson; }, [saveCurrentLesson]);
+  useEffect(() => {
+    if (!classId) return;
+    const tick = () => {
+      // Only while someone is actually being taught: an idle room re-writing
+      // the same row every two minutes is pure noise.
+      if (!isTeaching(usersRef.current)) return;
+      void saveLessonRef.current?.().catch(() => { /* offline; the next tick retries */ });
+    };
+    const id = setInterval(tick, 120_000);
+    // pagehide is what actually fires on a closing tab; unload gives no time
+    // for an async write and beforeunload is unreliable on mobile.
+    const onHide = () => { void saveLessonRef.current?.().catch(() => {}); };
+    window.addEventListener('pagehide', onHide);
+    document.addEventListener('visibilitychange', () => { if (document.hidden) onHide(); });
+    return () => {
+      clearInterval(id);
+      window.removeEventListener('pagehide', onHide);
+    };
+  }, [classId]);
 
   /** Wipe the live board for everyone, then replay a saved one onto it. */
   const loadLessonOntoBoard = useCallback((snap: any, html: string | null) => {
@@ -2793,7 +2830,12 @@ export default function Room() {
           // If today already has a saved lesson, this room is continuing it —
           // so saving writes back to that row instead of starting a second one.
           const today = findSessionForDay(rows, lessonDay(new Date().toISOString()));
-          if (today) setCurrentSessionId(today.id);
+          if (today) {
+            setCurrentSessionId(today.id);
+            // A reload mid-lesson must not restart the clock at zero, or a
+            // tutor who refreshes loses the hour they just taught.
+            teachingClockRef.current.resume(today.taught_seconds ?? 0);
+          }
         } catch { /* no history yet */ }
       } catch { /* not a registered class, or the columns aren't there yet */ }
     })();

@@ -18,6 +18,9 @@ export interface SessionRow {
   notes: string | null;
   whiteboard_snapshot: any | null;
   html_used: string | null;
+  /** Seconds with a teacher and >=1 student both present (migration 003).
+   *  Optional on the type: a database without the column simply omits it. */
+  taught_seconds?: number | null;
 }
 
 // The room_code → class id lookup (RLS: resolves only for the owning teacher).
@@ -85,14 +88,24 @@ export async function deleteSession(id: string): Promise<void> {
 // one updates it.
 
 export async function updateSession(id: string, input: {
-  topic?: string; html?: string | null; whiteboard?: unknown;
+  topic?: string; html?: string | null; whiteboard?: unknown; taughtSeconds?: number | null;
 }): Promise<void> {
   if (!supabase) throw new Error('Auth not configured');
   const patch: Record<string, unknown> = { ended_at: new Date().toISOString() };
   if (input.topic !== undefined) patch.topic = input.topic?.trim() || null;
   if (input.html !== undefined) patch.html_used = input.html;
   if (input.whiteboard !== undefined) patch.whiteboard_snapshot = input.whiteboard ?? null;
+  // Only ever grows within a lesson, so a later save cannot shorten it.
+  if (input.taughtSeconds !== undefined && input.taughtSeconds !== null) patch.taught_seconds = input.taughtSeconds;
   const { error } = await supabase.from('sessions').update(patch).eq('id', id);
+  // 42703 = the column is not there yet (migration 003 unrun). Saving the
+  // lesson matters more than recording its length, so retry without it.
+  if (error && (error as { code?: string }).code === '42703' && 'taught_seconds' in patch) {
+    delete patch.taught_seconds;
+    const retry = await supabase.from('sessions').update(patch).eq('id', id);
+    if (retry.error) throw retry.error;
+    return;
+  }
   if (error) throw error;
 }
 
@@ -109,6 +122,8 @@ export async function saveLessonForDay(input: {
   whiteboard?: unknown;
   /** Which lesson to write to; omit for today. */
   sessionId?: string | null;
+  /** Seconds actually taught so far — see lib/teachingTime. */
+  taughtSeconds?: number | null;
 }): Promise<string | null> {
   if (!supabase) throw new Error('Auth not configured');
   if (input.sessionId) {
@@ -123,5 +138,12 @@ export async function saveLessonForDay(input: {
   }
   await saveSession(input);
   const fresh = findSessionForDay(await listSessions(input.classId), today);
+  // saveSession INSERTs the columns it has always known about; the lesson's
+  // length is written straight after so a first save records it too, rather
+  // than only from the second save onwards.
+  if (fresh && input.taughtSeconds) {
+    try { await updateSession(fresh.id, { taughtSeconds: input.taughtSeconds }); }
+    catch { /* the lesson is saved; its length is the lesser loss */ }
+  }
   return fresh?.id ?? null;
 }

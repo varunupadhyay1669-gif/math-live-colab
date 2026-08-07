@@ -6,6 +6,7 @@
 import { lazy, Suspense } from 'react';
 import { BrowserRouter, Routes, Route, Link } from 'react-router-dom';
 import Home from './pages/Home';
+import AdminView from './pages/AdminView';
 import ErrorBoundary from './components/ErrorBoundary';
 import ShortcutsOverlay from './components/ShortcutsOverlay';
 import { AuthProvider } from './lib/auth';
@@ -115,6 +116,10 @@ export default function App() {
               {/* Quick-deploy standalone viewer: drop HTML → /p/:id shows the live page */}
               <Route path="/p/:pageId" element={<DeployView />} />
               {/* Catch-all 404 — must be last */}
+              {/* MathsLive Admin — its own surface, not a tutor tab. The real
+                  access gate is in Postgres (migration 004); this route being
+                  reachable tells an outsider nothing. */}
+              <Route path="/admin" element={<AdminView />} />
               <Route path="*" element={<NotFound />} />
             </Routes>
           </Suspense>
