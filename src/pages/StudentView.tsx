@@ -7,6 +7,7 @@ import { cleanDisplayName } from "../lib/displayName";
 import { stepLockScript } from "../lib/stepLockScript";
 import { setupAttentionDetection } from "../lib/attentionDetector";
 import { localTimezone } from "../lib/tz";
+import { socketAuth, isPasscodeError } from "../lib/passcode";
 import { ScreenPeer, screenShareSupported } from "../lib/screenShare";
 import ScreenSharePrompt from "../components/ScreenSharePrompt";
 import TeacherScreenView from "../components/TeacherScreenView";
@@ -586,7 +587,15 @@ export default function StudentView() {
   useEffect(() => {
     if (!roomId) { navigate("/"); return; }
 
-    const newSocket = io();
+    // The passcode rides on the handshake — the server refuses the connection
+    // without it, so this is the only place it needs to be presented.
+    const newSocket = io({ auth: socketAuth() });
+    newSocket.on('connect_error', (err) => {
+      // A refused handshake means the stored code is wrong or stale. Tell the
+      // gate so it can ask again, rather than leaving a room that silently
+      // never connects.
+      if (isPasscodeError(err)) window.dispatchEvent(new Event('mathslive:passcode-refused'));
+    });
     setSocket(newSocket);
 
     let cleanupAttention: (() => void) | null = null;

@@ -1321,6 +1321,46 @@ async function startServer() {
     }
   }, 30000);
 
+  // ─── SITE PASSCODE ───
+  //
+  // A single shared code that everyone — tutor and student — must present
+  // before the app will do anything. It exists because this account's monthly
+  // quota was exhausted by traffic the owner did not control, and resuming a
+  // suspended service without a gate simply hands the quota back to whoever
+  // logs in first.
+  //
+  // Checked at the SOCKET HANDSHAKE, not in the browser. A page that hides
+  // itself is not a gate: anyone can open the console, or point a socket
+  // client at the server, and the load lands all the same. Refusing the
+  // handshake means an unauthorised client cannot make the server do work at
+  // all — which is the entire point when the constraint is a usage quota.
+  //
+  // Unset = disabled, so local development and any deployment that does not
+  // want a gate are unaffected. Never hardcoded: a passcode in the repository
+  // is a passcode published to anyone who can read the repository.
+  const SITE_PASSCODE = (process.env.SITE_PASSCODE || '').trim();
+  const passcodeRequired = SITE_PASSCODE.length > 0;
+  if (passcodeRequired) {
+    console.log('🔒 Site passcode is ON — every connection must present it');
+  }
+
+  /** Constant-time-ish compare, so the check cannot be timed character by character. */
+  function passcodeOk(given: unknown): boolean {
+    if (!passcodeRequired) return true;
+    if (typeof given !== 'string' || given.length !== SITE_PASSCODE.length) return false;
+    let diff = 0;
+    for (let i = 0; i < SITE_PASSCODE.length; i++) diff |= given.charCodeAt(i) ^ SITE_PASSCODE.charCodeAt(i);
+    return diff === 0;
+  }
+
+  io.use((socket, next) => {
+    if (!passcodeRequired) return next();
+    const given = (socket.handshake.auth as { passcode?: string } | undefined)?.passcode;
+    if (passcodeOk(given)) return next();
+    // The client turns this exact message into the passcode prompt.
+    next(new Error('passcode_required'));
+  });
+
   io.on('connection', (socket) => {
     console.log('User connected:', socket.id);
 
@@ -3681,6 +3721,8 @@ Build a widget that teaches: ${safePrompt}`;
       // (instead of guessing whether a fix is live). Falls back to 'dev' locally.
       commit: (process.env.RENDER_GIT_COMMIT || process.env.GIT_COMMIT || 'dev').slice(0, 7),
       durableRooms: roomStore.kind === 'redis',
+      // Whether to show the prompt — never the code itself.
+      passcodeRequired,
       ts: Date.now(),
     });
   });
@@ -3701,6 +3743,9 @@ Build a widget that teaches: ${safePrompt}`;
     return id;
   }
   app.post('/api/publish', express.json({ limit: '6mb' }), async (req, res) => {
+    if (!passcodeOk(req.get('x-site-passcode') || (req.body as { passcode?: string } | undefined)?.passcode)) {
+      return res.status(401).json({ error: 'passcode_required' });
+    }
     try {
       const body = (req.body || {}) as { html?: unknown; name?: unknown };
       const html = typeof body.html === 'string' ? body.html : '';
@@ -3735,6 +3780,9 @@ Build a widget that teaches: ${safePrompt}`;
   // Students can fetch room HTML via plain HTTP if Socket.io delivery fails
   app.use(express.json());
   app.get('/api/room/:roomId/content', (req, res) => {
+    if (!passcodeOk(req.get('x-site-passcode') || (req.query.passcode as string | undefined))) {
+      return res.status(401).json({ error: 'passcode_required' });
+    }
     const { roomId } = req.params;
     if (!isValidRoomId(roomId)) {
       res.status(400).json({ error: 'Invalid room code' });

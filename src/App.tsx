@@ -7,6 +7,7 @@ import { lazy, Suspense } from 'react';
 import { BrowserRouter, Routes, Route, Link } from 'react-router-dom';
 import Home from './pages/Home';
 import AdminView from './pages/AdminView';
+import PasscodeGate from './components/PasscodeGate';
 import ErrorBoundary from './components/ErrorBoundary';
 import ShortcutsOverlay from './components/ShortcutsOverlay';
 import { AuthProvider } from './lib/auth';
@@ -102,6 +103,7 @@ export default function App() {
       <AuthProvider>
         <BrowserRouter>
           <Suspense fallback={<RouteFallback />}>
+            <PasscodeGate>
             <Routes>
               <Route path="/" element={<Home />} />
               <Route path="/dashboard" element={<Dashboard />} />
@@ -122,6 +124,7 @@ export default function App() {
               <Route path="/admin" element={<AdminView />} />
               <Route path="*" element={<NotFound />} />
             </Routes>
+            </PasscodeGate>
           </Suspense>
           {/* AUTONOMOUS: [ORDER-3 FRICTION] - Mounted once at the root so the
               `?` shortcut works on every page. Self-contained — no props. */}

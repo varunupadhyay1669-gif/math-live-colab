@@ -29,6 +29,14 @@ services:
       # NODE_HEAP_MB on a bigger instance (and MEMORY_BUDGET_MB with it).
       - key: NODE_HEAP_MB
         value: "256"
+      # ── Site access code ──
+      # One code everyone must present — tutor and student — before the server
+      # will do anything. Set the VALUE IN THE DASHBOARD, not here: a passcode
+      # committed to the repository is a passcode published to everyone who can
+      # read the repository. Leave it unset to turn the gate off.
+      # sync:false = "I set this in the dashboard; don't manage it from git."
+      - key: SITE_PASSCODE
+        sync: false
       # ── Durable rooms across ANY restart (redeploy / crash), not just idle ──
       # Keep-warm stops idle sleep; THESE make a class survive a real restart.
       # Create a free Upstash Redis DB at https://upstash.com (Redis → Create),

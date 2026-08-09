@@ -4031,3 +4031,57 @@ html, body, #root { background: var(--bg-primary); }
   font-size: 12.5px;
   word-break: break-all;
 }
+
+/* ── Site access code ──
+   Shown to everyone before the app is usable. Not the security boundary — the
+   server refuses the socket handshake without the code — but the door people
+   are meant to walk through. */
+.ml-gate {
+  position: fixed;
+  inset: 0;
+  z-index: 999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: #0B1020;
+}
+.ml-gate-card {
+  width: min(380px, 100%);
+  padding: 28px 26px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  box-shadow: 0 30px 70px -30px rgba(0, 0, 0, 0.8);
+  text-align: center;
+}
+.ml-gate-mark { font-size: 17px; font-weight: 800; color: #E2E8F0; letter-spacing: -0.02em; }
+.ml-gate-mark span { color: #818CF8; }
+.ml-gate-title { font-size: 17px; font-weight: 700; color: #F1F5F9; margin: 18px 0 8px; }
+.ml-gate-text { font-size: 13px; line-height: 1.6; color: #94A3B8; margin: 0 0 18px; }
+.ml-gate-input {
+  width: 100%;
+  padding: 12px 14px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.05);
+  color: #E2E8F0;
+  font-size: 17px;               /* 16px+ stops iOS zooming the page on focus */
+  text-align: center;
+  letter-spacing: 0.25em;
+}
+.ml-gate-input:focus { outline: 2px solid rgba(129, 140, 248, 0.55); outline-offset: 1px; }
+.ml-gate-error { color: #FCA5A5; font-size: 12.5px; margin: 12px 0 0; }
+.ml-gate-btn {
+  width: 100%;
+  margin-top: 14px;
+  padding: 12px;
+  border-radius: 10px;
+  border: none;
+  background: #4F46E5;
+  color: #fff;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.ml-gate-btn:disabled { opacity: 0.5; cursor: not-allowed; }

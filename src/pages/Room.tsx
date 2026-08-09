@@ -28,6 +28,7 @@ import { closestQuestionBlock, optionIndexOf, readCorrectness, summariseInteract
 import type { PackEvent, PackSurface, PackExplainerOutline, PackInteractive } from "../lib/packSchema";
 import { Narrator, narrationSupported, getNarrationChoice, setNarrationChoice } from "../lib/narration";
 import { localTimezone } from "../lib/tz";
+import { socketAuth, isPasscodeError } from "../lib/passcode";
 import { getClassByRoomCode } from "../lib/classes";
 import { ScreenPeer, shareFailureMessage, screenShareSupported, type ShareStatus } from "../lib/screenShare";
 import ScreenShareViewer from "../components/ScreenShareViewer";
@@ -742,7 +743,15 @@ export default function Room() {
   // ── Socket Connection ──
   useEffect(() => {
     if (!roomId) { navigate("/"); return; }
-    const newSocket = io();
+    // The passcode rides on the handshake — the server refuses the connection
+    // without it, so this is the only place it needs to be presented.
+    const newSocket = io({ auth: socketAuth() });
+    newSocket.on('connect_error', (err) => {
+      // A refused handshake means the stored code is wrong or stale. Tell the
+      // gate so it can ask again, rather than leaving a room that silently
+      // never connects.
+      if (isPasscodeError(err)) window.dispatchEvent(new Event('mathslive:passcode-refused'));
+    });
     setSocket(newSocket);
 
     newSocket.on("connect", () => {
