@@ -287,7 +287,12 @@ async function startServer() {
   // heap budget is deliberately well under it. Raise MEMORY_BUDGET_MB on a
   // larger instance.
   const MEMORY_POLICY: MemoryPolicy = {
-    budgetBytes: (Number(process.env.MEMORY_BUDGET_MB) || 380) * 1024 * 1024,
+    // Sized against the ACTUAL heap ceiling, not the container. The start
+    // script caps old-space at 256MB (a ~448MB total heap limit, leaving the
+    // rest of a 512MB container for code, buffers and native allocations).
+    // Shedding has to begin well before V8 is out of room, so the budget is
+    // the old-space cap, not the container size.
+    budgetBytes: (Number(process.env.MEMORY_BUDGET_MB) || 256) * 1024 * 1024,
     idleMs: IDLE_EVICT_MS,
   };
   // Re-read every sweep, so the window in force reflects the heap right now.

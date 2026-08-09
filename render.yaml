@@ -15,6 +15,20 @@ services:
         value: production
       - key: NODE_VERSION
         value: "20"
+      # ── THE reason this service kept dying ──
+      # Node sizes its heap from the MACHINE's memory, not the container's
+      # cgroup limit. On this 512MB instance V8 reported a 4288MB ceiling and
+      # grew happily past 512MB, at which point the container killed it. It
+      # never had a reason to collect aggressively, so no amount of
+      # application-level cleanup could get there first. Every "Ran out of
+      # memory (used over 512MB)" restart traces to this, and those restarts
+      # are what burned the monthly quota and suspended the account.
+      #
+      # 256MB of old-space reports a ~448MB total heap ceiling, leaving room in
+      # the container for code, buffers, stack and native allocations. Raise
+      # NODE_HEAP_MB on a bigger instance (and MEMORY_BUDGET_MB with it).
+      - key: NODE_HEAP_MB
+        value: "256"
       # ── Durable rooms across ANY restart (redeploy / crash), not just idle ──
       # Keep-warm stops idle sleep; THESE make a class survive a real restart.
       # Create a free Upstash Redis DB at https://upstash.com (Redis → Create),
