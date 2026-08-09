@@ -130,6 +130,12 @@ cat > /etc/systemd/system/mathslive.service <<UNITEOF
 Description=MathsLive
 After=network-online.target
 Wants=network-online.target
+# These belong in [Unit], NOT [Service]. Put in [Service] systemd logs
+# "Unknown key name ... ignoring" and the crash-loop protection silently does
+# nothing — a failing service then restarts every 5s forever. Caught by
+# systemd-analyze verify against a real Ubuntu, not by reading it.
+StartLimitBurst=5
+StartLimitIntervalSec=120
 
 [Service]
 Type=simple
@@ -141,9 +147,6 @@ EnvironmentFile=$APP_DIR/.env.production
 ExecStart=/usr/bin/node --max-old-space-size=\${NODE_HEAP_MB} $APP_DIR/node_modules/tsx/dist/cli.mjs $APP_DIR/server.ts
 Restart=always
 RestartSec=5
-# A crash loop should not spin forever burning the CPU.
-StartLimitBurst=5
-StartLimitIntervalSec=120
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=full
