@@ -3711,7 +3711,11 @@ Build a widget that teaches: ${safePrompt}`;
   // verify the server is alive (uptime monitoring, load balancer health
   // checks, manual debugging "is it up").
   // Returns 200 with a small JSON payload — cheap enough to hammer.
-  app.get('/healthz', (_req, res) => {
+  // Two paths for the same check. Some hosts reserve /healthz at their edge
+  // and answer it themselves — Google AI Studio returns its own 404 there — so
+  // the client would conclude the server was unreachable and skip the passcode
+  // prompt entirely. /api/healthz is under a prefix hosts leave alone.
+  app.get(['/healthz', '/api/healthz'], (_req, res) => {
     res.status(200).json({
       ok: true,
       uptime: process.uptime(),

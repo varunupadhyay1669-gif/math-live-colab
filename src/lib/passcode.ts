@@ -54,15 +54,19 @@ export function isPasscodeError(err: unknown): boolean {
 
 /** Does this deployment want one? Cheap, and never returns the code. */
 export async function passcodeIsRequired(): Promise<boolean> {
-  try {
-    const res = await fetch('/healthz', { cache: 'no-store' });
-    if (!res.ok) return false;
-    const body = await res.json();
-    return body?.passcodeRequired === true;
-  } catch {
-    // Offline or the server is down. Do not block the app on a guess — the
-    // socket will refuse anyway if a code is genuinely needed, and that path
-    // shows the prompt.
-    return false;
+  // Two paths, because some hosts answer /healthz themselves at the edge.
+  // Google AI Studio returns its own 404 there, which made this report "no
+  // server" and skip the prompt on a deployment that was running perfectly.
+  for (const path of ['/healthz', '/api/healthz']) {
+    try {
+      const res = await fetch(path, { cache: 'no-store' });
+      if (!res.ok) continue;
+      const body = await res.json();
+      if (typeof body?.passcodeRequired === 'boolean') return body.passcodeRequired;
+    } catch { /* try the next path */ }
   }
+  // Neither answered: offline, or the server is down. Do not block the app on
+  // a guess — if a code is genuinely needed the socket refuses, and that path
+  // brings the prompt up anyway.
+  return false;
 }
