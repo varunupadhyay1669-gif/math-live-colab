@@ -3,6 +3,7 @@ import { createServer as createViteServer } from 'vite';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
 import path from 'path';
+import { pressureFrom, idleWindowFor, describeMemory, type MemoryPolicy } from './src/lib/memoryGuard';
 import fs from 'fs';
 
 interface FileEntry {
@@ -281,6 +282,18 @@ async function startServer() {
   // than asserted about — a 30-minute timer is not testable, and an untested
   // eviction path is how a live room gets dropped.
   const IDLE_EVICT_MS = Number(process.env.IDLE_EVICT_MS) || 30 * 60 * 1000;
+  // What the JS heap may use before rooms start being shed. A Render free
+  // instance is 512MB for EVERYTHING — node itself, buffers, the heap — so the
+  // heap budget is deliberately well under it. Raise MEMORY_BUDGET_MB on a
+  // larger instance.
+  const MEMORY_POLICY: MemoryPolicy = {
+    budgetBytes: (Number(process.env.MEMORY_BUDGET_MB) || 380) * 1024 * 1024,
+    idleMs: IDLE_EVICT_MS,
+  };
+  // Re-read every sweep, so the window in force reflects the heap right now.
+  function currentIdleWindow(): number {
+    return idleWindowFor(pressureFrom(process.memoryUsage().heapUsed, MEMORY_POLICY), MEMORY_POLICY);
+  }
   const SWEEP_INTERVAL_MS = Number(process.env.SWEEP_INTERVAL_MS) || 10 * 60 * 1000;
   // Sweep every 10 minutes:
   //  - Rooms past their claim-aware TTL (24h anonymous OR 30d claimed)
@@ -290,6 +303,9 @@ async function startServer() {
     const studentLeftExpiryMs = 2 * 60 * 60 * 1000; // 2 hours after last student leaves
     let deletedCount = 0;
     let evictedCount = 0;
+    // Under memory pressure this collapses toward zero, so idle rooms are shed
+    // before the process is killed rather than after.
+    const idleWindow = currentIdleWindow();
 
     for (const [roomId, room] of rooms.entries()) {
       // AUTONOMOUS: Claim-aware expiry. Anonymous rooms die at
@@ -335,7 +351,7 @@ async function startServer() {
     for (const [roomId, room] of rooms.entries()) {
       if (room.users.size > 0) continue;                       // someone is in it
       if (room.pendingTeacherDisconnect) continue;             // inside the grace window
-      if (now - room.lastActivityAt < IDLE_EVICT_MS) continue; // still warm
+      if (now - room.lastActivityAt < idleWindow) continue;    // still warm
       const keep = roomHasContent(room);
       // Persist BEFORE dropping, or eviction becomes deletion.
       const done = keep ? saveSingleRoom(roomId, room) : Promise.resolve();
@@ -365,6 +381,48 @@ async function startServer() {
       }
     }, 5000);
   }, SWEEP_INTERVAL_MS);
+
+  // ── Memory watchdog ──
+  //
+  // The sweep above runs every ten minutes. A heap can go from comfortable to
+  // killed in far less than that — which is what happened here: repeated
+  // "exceeded its memory limit" restarts, and eventually a suspended service.
+  // This checks often and sheds empty rooms the moment pressure appears, so
+  // the process survives to keep teaching the lesson it is in the middle of.
+  //
+  // It NEVER touches an occupied room. Ending a lesson to save memory is not a
+  // fix, it is the outage arriving by another route.
+  let lastPressure: ReturnType<typeof pressureFrom> = 'ok';
+  setInterval(() => {
+    const heap = process.memoryUsage().heapUsed;
+    const pressure = pressureFrom(heap, MEMORY_POLICY);
+    if (pressure !== lastPressure) {
+      const how = pressure === 'ok' ? '🟢 memory back to normal' :
+                  pressure === 'high' ? '🟡 memory high — shedding idle rooms sooner' :
+                  '🔴 memory critical — shedding every idle room now';
+      console.warn(`${how}: ${describeMemory(heap, MEMORY_POLICY)}, ${rooms.size} rooms in memory`);
+      lastPressure = pressure;
+    }
+    if (pressure === 'ok') return;
+
+    const window = idleWindowFor(pressure, MEMORY_POLICY);
+    const now = Date.now();
+    let shed = 0;
+    for (const [roomId, room] of rooms.entries()) {
+      if (room.users.size > 0) continue;                    // NOT negotiable
+      if (room.pendingTeacherDisconnect) continue;          // teacher may be back
+      if (now - room.lastActivityAt < window) continue;
+      const keep = roomHasContent(room);
+      const done = keep ? saveSingleRoom(roomId, room) : Promise.resolve();
+      void done.then(() => {
+        const still = rooms.get(roomId);
+        if (!still || still.users.size > 0 || still.pendingTeacherDisconnect) return;
+        rooms.delete(roomId);
+      }).catch(() => { /* the only copy is the one in memory — keep it */ });
+      shed++;
+    }
+    if (shed > 0) console.warn(`💧 Shed ${shed} idle rooms under memory pressure`);
+  }, 30_000);
 
   function updateRoomActivity(roomId: string) {
     const room = rooms.get(roomId);
@@ -985,7 +1043,12 @@ async function startServer() {
   // bounded: 8 × 2MB is a sane ceiling for one lesson's worth of explainers.
   const MAX_EXPLANATIONS = 8;
   const MAX_QUIZ_QUESTION_LENGTH = 500;
-  const MAX_FILES_PER_ROOM = 50;
+  // 50 files at 2MB each allowed ONE room to hold 100MB — on an instance with
+  // 512MB for everything. That ceiling could never be honoured; a room that
+  // approached it took the whole service down, which is how this ended up
+  // suspended. Twelve is still more lessons than a room needs and caps the
+  // worst case at ~24MB. Raise MAX_FILES_PER_ROOM on a bigger instance.
+  const MAX_FILES_PER_ROOM = Number(process.env.MAX_FILES_PER_ROOM) || 12;
 
   function sanitizeString(str: unknown, maxLen: number): string {
     if (typeof str !== 'string') return '';
