@@ -37,6 +37,15 @@ services:
       # sync:false = "I set this in the dashboard; don't manage it from git."
       - key: SITE_PASSCODE
         sync: false
+      # ── Free-tier hours ──
+      # The keep-warm self-ping stops the instance sleeping, which costs ~730
+      # of the 750 free hours a month for ONE service — the reason this account
+      # hit its quota. Set KEEP_WARM=off to let it sleep between lessons
+      # (~120 hrs/mo for a few hours of teaching a day). The trade is a 20-60s
+      # cold start for whoever arrives first. Set the Upstash variables above
+      # BEFORE turning this off, or sleeping wipes live rooms.
+      - key: KEEP_WARM
+        value: "on"
       # ── Durable rooms across ANY restart (redeploy / crash), not just idle ──
       # Keep-warm stops idle sleep; THESE make a class survive a real restart.
       # Create a free Upstash Redis DB at https://upstash.com (Redis → Create),

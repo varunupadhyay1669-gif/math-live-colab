@@ -3854,8 +3854,26 @@ Build a widget that teaches: ${safePrompt}`;
   // ≈ 730 hrs/mo, within Render's 750-hr free allowance.)
   // NOTE: this only prevents IDLE sleep. A redeploy/crash still resets in-memory
   // rooms — set UPSTASH_REDIS_REST_URL + _TOKEN for rooms that survive restarts.
+  //
+  // ── AND the reason it must be switchable ──
+  // "One always-on free service ≈ 730 hrs/mo, within the 750-hr allowance" is
+  // a 2.7% margin, for ONE service, on an account that has five. Keeping warm
+  // therefore consumes essentially the whole monthly quota whether anyone
+  // teaches or not — which is how this account came to be suspended.
+  //
+  // Set KEEP_WARM=off to let the instance sleep between lessons. On a few
+  // hours of teaching a day that is ~120 hrs/mo instead of ~730. The cost is a
+  // 20-60s cold start for whoever arrives first, which is now a far softer
+  // landing than it used to be: an early student sees the waiting room and is
+  // admitted automatically once the server wakes, and with Upstash configured
+  // the rooms survive the sleep. Without Upstash, sleeping still wipes live
+  // rooms — set it before turning this off.
   const SELF_URL = (process.env.RENDER_EXTERNAL_URL || process.env.SELF_URL || '').replace(/\/$/, '');
-  if (process.env.NODE_ENV === 'production' && SELF_URL && typeof fetch === 'function') {
+  const keepWarmOn = (process.env.KEEP_WARM || 'on').toLowerCase() !== 'off';
+  if (!keepWarmOn) {
+    console.log('😴 Keep-warm OFF — the instance may sleep when idle (saves free-tier hours; expect a cold start)');
+  }
+  if (keepWarmOn && process.env.NODE_ENV === 'production' && SELF_URL && typeof fetch === 'function') {
     const KEEP_WARM_MS = 10 * 60 * 1000;
     setInterval(() => {
       fetch(`${SELF_URL}/healthz`).catch(() => { /* best-effort; ignore */ });
