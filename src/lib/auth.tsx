@@ -1,13 +1,12 @@
 import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
 import type { Session, User } from '@supabase/supabase-js';
 
-// SDK-free, build-time flag. We only dynamically import the Supabase client
-// (a sizeable chunk) when auth is actually enabled, so the no-login deployment
-// and every student device never download it. `import type` above is erased at
-// build time and does NOT pull the SDK into the bundle.
-const isAuthEnabled: boolean = Boolean(
-  import.meta.env.VITE_SUPABASE_URL && import.meta.env.VITE_SUPABASE_ANON_KEY,
-);
+// Read from the client module rather than from import.meta.env directly.
+// Credentials may have arrived at RUN time from the server, in which case the
+// build-time variables are empty and this flag would have said "no auth" on a
+// deployment that has a perfectly good database. initSupabase() has already
+// resolved by the time anything renders (see main.tsx).
+import { isAuthEnabled as authConfigured } from './supabase';
 
 interface AuthState {
   /** True when Supabase is configured (the two VITE_ env vars are set). */
@@ -27,6 +26,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   // Only "loading" when auth is enabled — otherwise resolve instantly so the
   // no-login app renders without delay.
+  const isAuthEnabled = authConfigured;
   const [loading, setLoading] = useState<boolean>(isAuthEnabled);
 
   useEffect(() => {

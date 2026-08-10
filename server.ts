@@ -3711,6 +3711,29 @@ Build a widget that teaches: ${safePrompt}`;
   // verify the server is alive (uptime monitoring, load balancer health
   // checks, manual debugging "is it up").
   // Returns 200 with a small JSON payload — cheap enough to hammer.
+  // ─── PUBLIC CLIENT CONFIG ───
+  //
+  // Vite substitutes import.meta.env at BUILD time, so a host that injects
+  // environment variables at run time ships a bundle with nothing in it. That
+  // is what happened on Google AI Studio: the app ran, but with no database,
+  // no login, no dashboard and no admin page — and setting the variables
+  // afterwards changed nothing, because the build had already happened.
+  //
+  // So the client can ask for them instead. Accepts either naming, since a
+  // host's variable list may not offer the VITE_ prefixed pair.
+  //
+  // ONLY the public pair is ever served. The anon key is designed to be shipped
+  // to browsers and is protected by row-level security. The service-role key
+  // bypasses RLS entirely and must never appear in this response — it is not
+  // read here at all, so it cannot be leaked by a future edit to this handler.
+  app.get('/api/config', (_req, res) => {
+    res.set('Cache-Control', 'no-store');
+    res.json({
+      supabaseUrl: process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || null,
+      supabaseAnonKey: process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY || null,
+    });
+  });
+
   // Two paths for the same check. Some hosts reserve /healthz at their edge
   // and answer it themselves — Google AI Studio returns its own 404 there — so
   // the client would conclude the server was unreachable and skip the passcode
