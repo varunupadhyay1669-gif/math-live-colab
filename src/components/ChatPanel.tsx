@@ -51,7 +51,7 @@ export default function ChatPanel({
       <div className="flex shrink-0 items-center justify-between px-3 py-3" style={{ borderBottom: "1px solid var(--border-subtle)" }}>
         <span className="ml-badge ml-badge-indigo">Chat</span>
         <button onClick={onToggle} className="ml-icon-btn ml-icon-btn-sm" aria-label="Close chat">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" aria-hidden="true">
             <path d="M18 6 6 18M6 6l12 12" />
           </svg>
         </button>
@@ -97,11 +97,18 @@ export default function ChatPanel({
             value={chatInput}
             onChange={(e) => setChatInput(e.target.value)}
             placeholder="Message..."
+            aria-label="Chat message"
             className="input-field text-[13px]"
             style={{ height: 36, padding: "0 12px" }}
           />
-          <button type="submit" className="ml-btn ml-btn-primary ml-btn-sm" aria-label="Send message">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+          <button
+            type="submit"
+            className="ml-btn ml-btn-primary ml-btn-sm"
+            aria-label="Send message"
+            disabled={!chatInput.trim()}
+            title={!chatInput.trim() ? "Type a message to send" : "Send message"}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
               <path d="m22 2-7 20-4-9-9-4 20-7Z" />
               <path d="M22 2 11 13" />
             </svg>
@@ -144,7 +151,7 @@ export default function ChatPanel({
       ) : (
         <div className="flex flex-col items-center gap-2 py-3">
           <button onClick={onToggle} className="ml-icon-btn relative" title="Chat" aria-label="Open chat">
-            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
               <path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z" />
             </svg>
             {unreadCount > 0 && (
