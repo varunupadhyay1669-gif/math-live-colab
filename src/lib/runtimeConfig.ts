@@ -38,6 +38,29 @@ export function validSupabaseUrl(value: unknown): value is string {
   }
 }
 
+/**
+ * Accept a bare project ref where a URL was expected.
+ *
+ * The Supabase dashboard shows the ref ("umskfpcvaiybdxlnpcck") prominently
+ * next to the URL, and pasting the ref into SUPABASE_URL is an easy mistake —
+ * it is the one that took the AI Studio deployment down, because createClient
+ * rejects it and throws during module evaluation.
+ *
+ * A ref is 20 lowercase letters with no dot, slash or protocol, so it cannot be
+ * confused with a URL or with anything else that belongs in this field. Rather
+ * than fail on a value whose intent is unambiguous, expand it.
+ */
+export function coerceSupabaseUrl(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const raw = value.trim();
+  if (raw === '') return null;
+  if (validSupabaseUrl(raw)) return raw;
+  if (/^[a-z]{20}$/.test(raw)) return `https://${raw}.supabase.co`;
+  // A host with no protocol — "umsk….supabase.co" — is also unambiguous.
+  if (/^[a-z0-9-]+\.supabase\.(co|in)$/.test(raw)) return `https://${raw}`;
+  return null;
+}
+
 function usableKey(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length > 20;
 }
@@ -54,11 +77,13 @@ export function resolveConfig(
   fetched?: { url?: unknown; anonKey?: unknown } | null,
 ): SupabaseConfig | null {
   // Build-time first: already in the bundle, no round trip.
-  if (validSupabaseUrl(build.url) && usableKey(build.anonKey)) {
-    return { url: build.url.trim(), anonKey: (build.anonKey as string).trim() };
+  const fromBuild = coerceSupabaseUrl(build.url);
+  if (fromBuild && usableKey(build.anonKey)) {
+    return { url: fromBuild, anonKey: (build.anonKey as string).trim() };
   }
-  if (fetched && validSupabaseUrl(fetched.url) && usableKey(fetched.anonKey)) {
-    return { url: fetched.url.trim(), anonKey: (fetched.anonKey as string).trim() };
+  const fromServer = fetched ? coerceSupabaseUrl(fetched.url) : null;
+  if (fromServer && usableKey(fetched?.anonKey)) {
+    return { url: fromServer, anonKey: (fetched!.anonKey as string).trim() };
   }
   // Half a configuration is not a configuration. Proceeding with one of the
   // two produces the crash this module exists to prevent.

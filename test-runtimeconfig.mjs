@@ -5,7 +5,7 @@
 // still evaluating. That takes down the WHOLE app — a tutor with no database
 // configured got a blank page instead of a working whiteboard.
 // node --import tsx test-runtimeconfig.mjs
-import { validSupabaseUrl, resolveConfig } from './src/lib/runtimeConfig.ts';
+import { validSupabaseUrl, resolveConfig, coerceSupabaseUrl } from './src/lib/runtimeConfig.ts';
 
 let pass = 0, fail = 0; const fails = [];
 const ok = (n) => { pass++; console.log(`  ✓ ${n}`); };
@@ -58,7 +58,29 @@ for (const junk of [null, undefined, {}, { url: null, anonKey: null }, { url: 'n
   assert(!threw && res === null, `junk response handled: ${JSON.stringify(junk)}`);
 }
 
-console.log('R7: "no database" is a valid state, not an error');
+console.log('R7: a bare project ref is accepted, because that is what broke the live site');
+// The AI Studio deployment had SUPABASE_URL="umskfpcvaiybdxlnpcck" — the ref
+// the dashboard shows right next to the URL. createClient rejected it and
+// threw during module evaluation, blanking the whole app.
+assert(coerceSupabaseUrl('umskfpcvaiybdxlnpcck') === 'https://umskfpcvaiybdxlnpcck.supabase.co',
+  'a bare ref becomes the project URL', String(coerceSupabaseUrl('umskfpcvaiybdxlnpcck')));
+assert(coerceSupabaseUrl('umskfpcvaiybdxlnpcck.supabase.co') === 'https://umskfpcvaiybdxlnpcck.supabase.co',
+  'and a host with no protocol gets one');
+assert(coerceSupabaseUrl(URL_OK) === URL_OK, 'a proper URL is passed through untouched');
+assert(resolveConfig({}, { url: 'umskfpcvaiybdxlnpcck', anonKey: KEY_OK })?.url === 'https://umskfpcvaiybdxlnpcck.supabase.co',
+  'and the whole resolve path accepts it end to end');
+
+console.log('R8: coercion does not turn junk into a URL');
+// The point is to rescue an unambiguous mistake, not to guess.
+assert(coerceSupabaseUrl('') === null, 'empty stays null');
+assert(coerceSupabaseUrl('undefined') === null, 'the string "undefined" is not a ref — it is 9 chars');
+assert(coerceSupabaseUrl('hello') === null, 'a short word is not a ref');
+assert(coerceSupabaseUrl('UMSKFPCVAIYBDXLNPCCK') === null, 'uppercase is not a ref');
+assert(coerceSupabaseUrl('umskfpcvaiybdxlnpcc1') === null, 'refs are letters — a digit means something else');
+assert(coerceSupabaseUrl('evil.example.com') === null, 'and an unrelated host is NOT turned into a Supabase URL');
+assert(coerceSupabaseUrl('javascript:alert(1)') === null, 'nor a javascript: URL');
+
+console.log('R9: "no database" is a valid state, not an error');
 // Rooms, the whiteboard and live sync all work with no account. Returning null
 // must mean "run without records", never "crash".
 assert(resolveConfig({}, null) === null, 'an unconfigured deployment resolves to null');
