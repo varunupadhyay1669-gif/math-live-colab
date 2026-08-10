@@ -77,9 +77,9 @@ export default function UserList({ users, attention, isTeacher, socket, roomId, 
                 {/* Peek at their real screen */}
                 {onPeek && (
                   <button onClick={() => onPeek(user.id, user.name)}
-                    className="text-[12px]" title="See this student's screen"
+                    className="text-[12px]" title={`See ${user.name}'s screen`} aria-label={`See ${user.name}'s screen`}
                     style={{ background: 'none', border: 'none', cursor: 'pointer', lineHeight: 1 }}>
-                    👁️
+                    <span aria-hidden="true">👁️</span>
                   </button>
                 )}
                 {/* Ask them to share their actual screen. Distinct from the
@@ -97,17 +97,19 @@ export default function UserList({ users, attention, isTeacher, socket, roomId, 
                 {onGrantControl && (
                   <button onClick={() => onGrantControl(holdsControl ? null : user.name)}
                     className="text-[12px]"
-                    title={holdsControl ? 'Take back control' : 'Give this student control'}
+                    title={holdsControl ? `Take back control from ${user.name}` : `Give control to ${user.name}`}
+                    aria-label={holdsControl ? `Take back control from ${user.name}` : `Give control to ${user.name}`}
                     style={{ background: 'none', border: 'none', cursor: 'pointer', lineHeight: 1, opacity: holdsControl ? 1 : 0.85 }}>
-                    {holdsControl ? '🔙' : '✋'}
+                    <span aria-hidden="true">{holdsControl ? '🔙' : '✋'}</span>
                   </button>
                 )}
                 {/* Kick */}
                 <button onClick={() => handleKick(user.id)}
                   className="text-[11px]"
                   style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', lineHeight: 1 }}
-                  title="Remove student">
-                  ✕
+                  title={`Remove ${user.name}`}
+                  aria-label={`Remove ${user.name}`}>
+                  <span aria-hidden="true">✕</span>
                 </button>
               </div>
             )}
