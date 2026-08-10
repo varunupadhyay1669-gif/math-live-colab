@@ -407,6 +407,7 @@ export default function Home() {
                       className="ml-dark-btn ml-dark-btn-primary"
                       onClick={sendMagicLink}
                       disabled={!loginEmail.trim() || sendingLink}
+                      title={!loginEmail.trim() ? "Enter your email address first" : sendingLink ? "Sending link..." : undefined}
                       style={{ width: "100%" }}
                     >
                       {sendingLink ? "Sending…" : "Email me a sign-in link"}
@@ -466,6 +467,7 @@ export default function Home() {
                 className="ml-dark-btn ml-dark-btn-primary"
                 onClick={createRoom}
                 disabled={!teacherName.trim()}
+                title={!teacherName.trim() ? "Enter what you are teaching today first" : undefined}
                 style={{ width: "100%" }}
               >
                 Create room
@@ -506,6 +508,7 @@ export default function Home() {
                 type="submit"
                 className="ml-dark-btn ml-dark-btn-primary"
                 disabled={!roomCode.trim() || !studentName.trim()}
+                title={!studentName.trim() ? "Enter your name first" : !roomCode.trim() ? "Enter a room code first" : undefined}
                 style={{ width: "100%" }}
               >
                 Join room

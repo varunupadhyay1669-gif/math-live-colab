@@ -173,6 +173,7 @@ export default function Dashboard() {
               className="ml-dark-btn ml-dark-btn-primary"
               onClick={handleCreate}
               disabled={!studentName.trim() || busy}
+              title={!studentName.trim() ? "Enter a student name first" : busy ? "Creating class..." : undefined}
               style={{ width: "100%" }}
             >
               {busy ? "Creating…" : "Create class"}
