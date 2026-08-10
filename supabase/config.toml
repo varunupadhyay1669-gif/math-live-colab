@@ -1,0 +1,28 @@
+# Supabase CLI project file.
+#
+# This exists so the Supabase GitHub integration recognises `supabase/` as a
+# project directory. Without it, connecting the repo either rejects the working
+# directory or connects and then fails on the first sync — the folder held
+# nothing but loose .sql files, which is not a CLI project.
+#
+# With the integration connected, anything added to supabase/migrations/ is
+# applied to the database on push. The four migrations already here
+# (001..004) become automatic rather than something to remember to paste into
+# the SQL editor.
+#
+# project_id is the project ref — the subdomain of the Supabase URL,
+# https://<ref>.supabase.co. It is not a secret; the same value is already in
+# the browser bundle as VITE_SUPABASE_URL.
+project_id = "umskfpcvaiybdxlnpcck"
+
+[db]
+# Must match the Postgres major version of the hosted project, or `db diff`
+# and local development produce migrations the real database rejects.
+# Check yours: Supabase dashboard -> Project Settings -> Infrastructure.
+major_version = 15
+
+[db.migrations]
+# The four files here were written to be run by hand in the SQL editor, so
+# they are named 001_… rather than with CLI timestamps. Listing them keeps
+# the order explicit and stops the CLI guessing.
+schema_paths = []
