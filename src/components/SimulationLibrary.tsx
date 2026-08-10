@@ -112,6 +112,7 @@ export default function SimulationLibrary({ isOpen, onClose, onLoad, currentHtml
                     {TOPICS.map(t => <option key={t} value={t}>{t}</option>)}
                   </select>
                   <button onClick={handleSave} disabled={!saveName.trim()} className="btn-primary text-[12px] disabled:opacity-40"
+                    title={!saveName.trim() ? "Enter a title to save" : "Save simulation"}
                     style={{ padding: '7px 14px' }}>Save</button>
                   <button onClick={() => setShowSaveForm(false)} className="btn text-[12px]"
                     style={{ padding: '7px 12px' }}>✕</button>
