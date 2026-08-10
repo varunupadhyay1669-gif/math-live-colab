@@ -156,6 +156,7 @@ export default function Dashboard() {
           {/* Create a class for a student */}
           <div className="ml-dark-form" style={{ marginBottom: 20 }}>
             <input
+              aria-label="Student name"
               className="ml-dark-input"
               placeholder="Student name — e.g. Drihan"
               value={studentName}
@@ -163,6 +164,7 @@ export default function Dashboard() {
               onKeyDown={(e) => e.key === "Enter" && handleCreate()}
             />
             <input
+              aria-label="Subject or note (optional)"
               className="ml-dark-input"
               placeholder="Subject / note (optional) — e.g. Algebra"
               value={label}
@@ -173,6 +175,7 @@ export default function Dashboard() {
               className="ml-dark-btn ml-dark-btn-primary"
               onClick={handleCreate}
               disabled={!studentName.trim() || busy}
+              title={!studentName.trim() ? "Enter a student name to create a class" : undefined}
               style={{ width: "100%" }}
             >
               {busy ? "Creating…" : "Create class"}
