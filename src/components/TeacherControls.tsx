@@ -139,26 +139,26 @@ export default function TeacherControls({
         {!whiteboardMode && (
           <>
             <button onClick={() => { onSetDrawMode(false); onSetLaserMode(false); onSetEraserMode('off'); onSetShapeTool('off'); }}
-              className={`tb-btn ${isCursor && eraserMode === 'off' && shapeTool === 'off' ? 'active' : ''}`} data-tip="Cursor">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              className={`tb-btn ${isCursor && eraserMode === 'off' && shapeTool === 'off' ? 'active' : ''}`} data-tip="Cursor" aria-label="Cursor">
+              <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M3 3l7.07 16.97 2.51-7.39 7.39-2.51z"/>
               </svg>
             </button>
             <button onClick={() => { onSetDrawMode(true); onSetPenType('transient'); onSetLaserMode(false); onSetEraserMode('off'); onSetShapeTool('off'); }}
-              className={`tb-btn ${isDraw && eraserMode === 'off' && shapeTool === 'off' ? 'active' : ''}`} data-tip="Draw (fades)">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              className={`tb-btn ${isDraw && eraserMode === 'off' && shapeTool === 'off' ? 'active' : ''}`} data-tip="Draw (fades)" aria-label="Draw (fades)">
+              <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M17 3a2.828 2.828 0 114 4L7.5 20.5 2 22l1.5-5.5z"/>
               </svg>
             </button>
             <button onClick={() => { onSetDrawMode(true); onSetPenType('permanent'); onSetLaserMode(false); onSetEraserMode('off'); onSetShapeTool('off'); }}
-              className={`tb-btn ${isInk && eraserMode === 'off' && shapeTool === 'off' ? 'active' : ''}`} data-tip="Ink (permanent)">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              className={`tb-btn ${isInk && eraserMode === 'off' && shapeTool === 'off' ? 'active' : ''}`} data-tip="Ink (permanent)" aria-label="Ink (permanent)">
+              <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M12 19l7-7 3 3-7 7-3-3z"/><path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z"/>
               </svg>
             </button>
             <button onClick={() => { onSetLaserMode(true); onSetDrawMode(false); onSetEraserMode('off'); onSetShapeTool('off'); }}
-              className={`tb-btn ${laserMode ? 'active-rose' : ''}`} data-tip="Laser pointer">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              className={`tb-btn ${laserMode ? 'active-rose' : ''}`} data-tip="Laser pointer" aria-label="Laser pointer">
+              <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <circle cx="12" cy="12" r="3"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/>
               </svg>
             </button>
@@ -176,6 +176,7 @@ export default function TeacherControls({
               }}
               className={`tb-btn ${eraserMode !== 'off' ? 'active' : ''}`}
               data-tip={eraserMode !== 'off' ? 'Eraser on — click to turn off' : 'Eraser'}
+              aria-label={eraserMode !== 'off' ? 'Eraser on — click to turn off' : 'Eraser'}
               aria-pressed={eraserMode !== 'off'}
             >
               {/* AUTONOMOUS: Classic two-tone rubber eraser silhouette.
@@ -186,7 +187,7 @@ export default function TeacherControls({
                   monochrome (currentColor) so it tints with the active
                   state, but the inner divider line keeps the
                   "two-material rubber eraser" silhouette. */}
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M19 13l-7.5 7.5a2 2 0 0 1-2.83 0L4.5 16.33a2 2 0 0 1 0-2.83L13.5 4.5a2 2 0 0 1 2.83 0L19.5 7.67a2 2 0 0 1 0 2.83Z" fill="currentColor" fillOpacity="0.18" />
                 <path d="m9 11 4 4" />
               </svg>
@@ -234,9 +235,10 @@ export default function TeacherControls({
                 }}
                 className={`tb-btn ${shapeTool === s.id ? 'active' : ''}`}
                 data-tip={s.tip}
+                aria-label={s.tip}
                 aria-pressed={shapeTool === s.id}
               >
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <svg aria-hidden="true" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   {s.icon}
                 </svg>
               </button>
