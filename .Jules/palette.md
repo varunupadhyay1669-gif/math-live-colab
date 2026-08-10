@@ -1,0 +1,3 @@
+## 2024-05-16 - Icon-Only Button Accessibility with Custom Tooltips
+**Learning:** When using custom `data-tip` attributes for tooltips on icon-only buttons, screen readers do not automatically read the tooltip as a label (unlike standard `title` attributes). If `aria-label` is missing, the button is inaccessible to screen readers. Additionally, inner SVG elements can create redundant announcements or focus issues if not hidden from screen readers.
+**Action:** Always add an explicit `aria-label` to icon-only buttons, especially those using custom tooltip attributes like `data-tip`. Furthermore, always add `aria-hidden="true"` to the inner `<svg>` elements of these buttons to ensure screen reader focus is clear and non-redundant.
