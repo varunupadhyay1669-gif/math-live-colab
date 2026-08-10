@@ -74,6 +74,7 @@ export default function StepGate({ socket, roomId, mode, step, onSave, onClose, 
                 🚧 Add Gate — Step {step}
               </h3>
               <button onClick={onClose}
+                aria-label="Close gate dialog"
                 style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '18px' }}>✕</button>
             </div>
 
