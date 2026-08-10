@@ -95,6 +95,7 @@ export default function SimulationLibrary({ isOpen, onClose, onLoad, currentHtml
             <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>{items.length} saved simulations</p>
           </div>
           <button onClick={onClose}
+            aria-label="Close"
             style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '20px' }}>✕</button>
         </div>
 
@@ -114,6 +115,7 @@ export default function SimulationLibrary({ isOpen, onClose, onLoad, currentHtml
                   <button onClick={handleSave} disabled={!saveName.trim()} className="btn-primary text-[12px] disabled:opacity-40"
                     style={{ padding: '7px 14px' }}>Save</button>
                   <button onClick={() => setShowSaveForm(false)} className="btn text-[12px]"
+                    aria-label="Cancel save"
                     style={{ padding: '7px 12px' }}>✕</button>
                 </div>
               </div>
