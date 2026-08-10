@@ -3538,7 +3538,7 @@ export default function Room() {
 
           <button onClick={toggleRecording}
             className={`btn-icon hidden sm:inline-flex ${isRecording ? 'active-rose' : ''}`}
-            data-tip={isRecording ? 'Stop Recording' : 'Record'}>
+            data-tip={isRecording ? 'Stop Recording' : 'Record'} aria-label={isRecording ? 'Stop Recording' : 'Record'}>
             {isRecording ? (
               <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="none"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
             ) : (
