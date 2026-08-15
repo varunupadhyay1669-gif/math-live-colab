@@ -1,4 +1,4 @@
-import { supabase } from './supabase';
+import { getSupabase } from './supabase';
 
 // A "class" is one student's permanent room: a stable room_code (the
 // /live/<code> link) owned by the signed-in teacher. Row-Level Security on the
@@ -56,6 +56,7 @@ function randSuffix(): string {
 }
 
 export async function listClasses(): Promise<ClassRow[]> {
+  const supabase = await getSupabase();
   if (!supabase) return [];
   const { data, error } = await supabase
     .from('classes')
@@ -67,6 +68,7 @@ export async function listClasses(): Promise<ClassRow[]> {
 }
 
 export async function createClass(studentName: string, label?: string): Promise<ClassRow> {
+  const supabase = await getSupabase();
   if (!supabase) throw new Error('Auth not configured');
   const { data: userData } = await supabase.auth.getUser();
   const teacher_id = userData.user?.id;
@@ -97,6 +99,7 @@ export async function updateClass(
     textbook?: string | null;
   },
 ): Promise<void> {
+  const supabase = await getSupabase();
   if (!supabase) return;
   const { error } = await supabase.from('classes').update(fields).eq('id', id);
   if (error) throw isMissingColumn(error) ? new ProfileColumnsMissing() : error;
@@ -104,6 +107,7 @@ export async function updateClass(
 
 /** One student by their room code. RLS means this resolves only for the owner. */
 export async function getClassByRoomCode(roomCode: string): Promise<ClassRow | null> {
+  const supabase = await getSupabase();
   if (!supabase) return null;
   const { data, error } = await supabase.from('classes').select('*').eq('room_code', roomCode).maybeSingle();
   if (error) throw error;
@@ -111,6 +115,7 @@ export async function getClassByRoomCode(roomCode: string): Promise<ClassRow | n
 }
 
 export async function deleteClass(id: string): Promise<void> {
+  const supabase = await getSupabase();
   if (!supabase) return;
   const { error } = await supabase.from('classes').delete().eq('id', id);
   if (error) throw error;
@@ -119,6 +124,7 @@ export async function deleteClass(id: string): Promise<void> {
 // Best-effort "last opened" stamp so the dashboard can sort by recency. Never
 // blocks opening the room if it fails.
 export async function touchClass(roomCode: string): Promise<void> {
+  const supabase = await getSupabase();
   if (!supabase) return;
   try {
     await supabase.from('classes').update({ last_opened_at: new Date().toISOString() }).eq('room_code', roomCode);

@@ -1,4 +1,4 @@
-import { supabase } from './supabase';
+import { getSupabase } from './supabase';
 import { classifyAdminError } from './adminLabels';
 
 // MathsLive Admin — reading across every tutor.
@@ -57,6 +57,7 @@ export class AdminNotInstalled extends Error {
 export type AdminAccess = 'admin' | 'denied' | 'not-installed' | 'no-auth' | 'error';
 
 export async function checkAdminAccess(): Promise<AdminAccess> {
+  const supabase = await getSupabase();
   if (!supabase) return 'no-auth';
   const { data, error } = await supabase.rpc('is_platform_admin');
   if (error) return classifyAdminError(error);
@@ -69,6 +70,7 @@ export async function isPlatformAdmin(): Promise<boolean> {
 }
 
 export async function fetchTutorUsage(): Promise<TutorUsage[]> {
+  const supabase = await getSupabase();
   if (!supabase) throw new Error('Auth is not configured');
   const { data, error } = await supabase.rpc('admin_tutor_usage');
   if (error) {
@@ -81,6 +83,7 @@ export async function fetchTutorUsage(): Promise<TutorUsage[]> {
 }
 
 export async function fetchStudentUsage(): Promise<StudentUsage[]> {
+  const supabase = await getSupabase();
   if (!supabase) throw new Error('Auth is not configured');
   const { data, error } = await supabase.rpc('admin_student_usage');
   if (error) {

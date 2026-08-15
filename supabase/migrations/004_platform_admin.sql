@@ -79,27 +79,47 @@ begin
     raise exception 'not authorised' using errcode = '42501';
   end if;
 
+  -- Each side is aggregated BEFORE the join, and this is not a style choice.
+  -- Joining classes and sessions to the same user in one query fans out: every
+  -- lesson is repeated once per student, so a tutor with 57 students and 14
+  -- lessons reported 798. The multiplier is exactly the student count, which
+  -- makes the number look plausible rather than obviously broken — it read as
+  -- a thriving platform. taught_seconds was inflated the same way.
   return query
+  with cls as (
+    select teacher_id, count(*)::bigint as students
+    from public.classes
+    group by teacher_id
+  ),
+  ses as (
+    select
+      teacher_id,
+      count(*)::bigint as lessons,
+      count(*) filter (where started_at > now() - interval '30 days')::bigint as lessons_30d,
+      count(*) filter (where started_at > now() - interval '7 days')::bigint  as lessons_7d,
+      max(started_at) as last_lesson,
+      -- Real teaching time (migration 003): seconds with a teacher and a
+      -- student both in the room. Null on lessons taught before that existed,
+      -- and summing nulls yields null rather than a misleading zero.
+      sum(taught_seconds)::bigint as taught_seconds
+    from public.sessions
+    group by teacher_id
+  )
   select
     u.id,
     u.email::text,
     u.created_at,
     u.last_sign_in_at,
-    count(distinct c.id),
-    count(s.id),
-    count(s.id) filter (where s.started_at > now() - interval '30 days'),
-    count(s.id) filter (where s.started_at > now() - interval '7 days'),
-    max(s.started_at),
-    -- Real teaching time (migration 003): seconds with a teacher and a student
-    -- both in the room. Null on lessons taught before that existed, and
-    -- summing nulls yields null rather than a misleading zero.
-    sum(s.taught_seconds)::bigint
+    coalesce(cls.students, 0),
+    coalesce(ses.lessons, 0),
+    coalesce(ses.lessons_30d, 0),
+    coalesce(ses.lessons_7d, 0),
+    ses.last_lesson,
+    ses.taught_seconds
   from auth.users u
-  left join public.classes  c on c.teacher_id = u.id
-  left join public.sessions s on s.teacher_id = u.id
-  group by u.id, u.email, u.created_at, u.last_sign_in_at
-  order by count(s.id) filter (where s.started_at > now() - interval '30 days') desc,
-           count(s.id) desc;
+  left join cls on cls.teacher_id = u.id
+  left join ses on ses.teacher_id = u.id
+  order by coalesce(ses.lessons_30d, 0) desc, coalesce(ses.lessons, 0) desc;
 end;
 $$;
 

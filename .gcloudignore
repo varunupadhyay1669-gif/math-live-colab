@@ -1,0 +1,47 @@
+# What NOT to upload when deploying to Cloud Run.
+#
+# Cloud Run source deploys tar up the working directory and ship it to Cloud
+# Build. Without this file that upload includes 49 test and stress scripts plus
+# every design document — none of which the running server can execute or
+# serve. They cost upload time and build time on every single deploy.
+#
+# IMPORTANT: the presence of this file makes gcloud ignore .gitignore entirely,
+# so anything .gitignore used to exclude has to be repeated here. node_modules
+# is the one that matters: omitting it would upload tens of thousands of files
+# and the build reinstalls them from package-lock.json anyway.
+
+.git/
+.gitignore
+node_modules/
+dist/
+build/
+coverage/
+.rooms/
+*.log
+.DS_Store
+
+# Secrets. These must never reach a build context — the real values are
+# supplied as runtime environment variables by the host.
+.env
+.env.*
+!.env.example
+
+# Tests and verification harnesses. Run locally and in CI, never in production.
+test-*.mjs
+stress*.mjs
+verify-*.mjs
+*.test.ts
+*.test.tsx
+
+# Documentation. Useful to humans reading the repo, dead weight in an image.
+*.md
+!README.md
+docs/
+
+# Deployment recipes for OTHER hosts — irrelevant to this one.
+deploy/
+render.yaml
+
+# Database migrations are applied through the Supabase dashboard or CLI, not
+# by the server at boot, so the image has no use for them.
+supabase/

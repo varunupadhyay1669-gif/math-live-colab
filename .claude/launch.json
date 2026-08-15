@@ -2,9 +2,9 @@
   "version": "0.0.1",
   "configurations": [
     {
-      "name": "mathslive",
-      "runtimeExecutable": "npx",
-      "runtimeArgs": ["tsx", "server.ts"],
+      "name": "mathslive-prod",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "start"],
       "port": 4000
     }
   ]

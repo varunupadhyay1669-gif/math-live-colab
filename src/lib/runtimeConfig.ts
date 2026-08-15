@@ -90,6 +90,51 @@ export function resolveConfig(
   return null;
 }
 
+/**
+ * Whether a usable credential pair was found.
+ *
+ * This flag lives HERE, in a module that imports nothing heavy, rather than
+ * next to the Supabase client. Reading it from the client module meant that
+ * merely asking "is auth switched on?" pulled @supabase/supabase-js — 210 kB,
+ * 55 kB gzipped — into the entry bundle, so every student on an iPad
+ * downloaded and parsed the whole auth SDK before the first pixel, to render a
+ * page with no login on it. auth.tsx was already careful to import the client
+ * lazily; this one static import defeated that.
+ */
+export let authConfigured = false;
+
+let configPromise: Promise<SupabaseConfig | null> | null = null;
+let resolved: SupabaseConfig | null = null;
+
+/**
+ * Resolve credentials once. Cheap: no SDK, at most one small fetch.
+ *
+ * Safe to call repeatedly — the work happens on the first call and every later
+ * caller awaits the same promise.
+ */
+export function initConfig(): Promise<SupabaseConfig | null> {
+  if (configPromise) return configPromise;
+  configPromise = (async () => {
+    const fromBuild = {
+      url: import.meta.env.VITE_SUPABASE_URL,
+      anonKey: import.meta.env.VITE_SUPABASE_ANON_KEY,
+    };
+    // Only ask the server when the build had nothing — saves a request on
+    // every normal deployment.
+    let config = resolveConfig(fromBuild, null);
+    if (!config) config = resolveConfig(fromBuild, await fetchRuntimeConfig());
+    resolved = config;
+    authConfigured = config !== null;
+    return config;
+  })();
+  return configPromise;
+}
+
+/** The resolved pair, or null. Meaningful only after initConfig() settles. */
+export function resolvedConfig(): SupabaseConfig | null {
+  return resolved;
+}
+
 /** Ask the server. Never throws — an unreachable server just means no auth. */
 export async function fetchRuntimeConfig(): Promise<{ url?: string; anonKey?: string } | null> {
   try {

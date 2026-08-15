@@ -1,4 +1,4 @@
-import { supabase } from './supabase';
+import { getSupabase } from './supabase';
 // The day helpers are pure and live in lessonNav, which imports nothing —
 // keeping them here would drag the Supabase client into every test that only
 // wants to know what a lesson is called.
@@ -25,6 +25,7 @@ export interface SessionRow {
 
 // The room_code → class id lookup (RLS: resolves only for the owning teacher).
 export async function findClassIdByRoomCode(roomCode: string): Promise<string | null> {
+  const supabase = await getSupabase();
   if (!supabase) return null;
   const { data, error } = await supabase.from('classes').select('id').eq('room_code', roomCode).maybeSingle();
   if (error || !data) return null;
@@ -38,6 +39,7 @@ export async function saveSession(input: {
   whiteboard?: any;
   startedAt?: string;
 }): Promise<void> {
+  const supabase = await getSupabase();
   if (!supabase) throw new Error('Auth not configured');
   const { data: userData } = await supabase.auth.getUser();
   const teacher_id = userData.user?.id;
@@ -55,6 +57,7 @@ export async function saveSession(input: {
 }
 
 export async function listSessions(classId: string): Promise<SessionRow[]> {
+  const supabase = await getSupabase();
   if (!supabase) return [];
   const { data, error } = await supabase
     .from('sessions')
@@ -67,6 +70,7 @@ export async function listSessions(classId: string): Promise<SessionRow[]> {
 }
 
 export async function getSession(id: string): Promise<SessionRow | null> {
+  const supabase = await getSupabase();
   if (!supabase) return null;
   const { data, error } = await supabase.from('sessions').select('*').eq('id', id).maybeSingle();
   if (error || !data) return null;
@@ -74,6 +78,7 @@ export async function getSession(id: string): Promise<SessionRow | null> {
 }
 
 export async function deleteSession(id: string): Promise<void> {
+  const supabase = await getSupabase();
   if (!supabase) return;
   const { error } = await supabase.from('sessions').delete().eq('id', id);
   if (error) throw error;
@@ -90,6 +95,7 @@ export async function deleteSession(id: string): Promise<void> {
 export async function updateSession(id: string, input: {
   topic?: string; html?: string | null; whiteboard?: unknown; taughtSeconds?: number | null;
 }): Promise<void> {
+  const supabase = await getSupabase();
   if (!supabase) throw new Error('Auth not configured');
   const patch: Record<string, unknown> = { ended_at: new Date().toISOString() };
   if (input.topic !== undefined) patch.topic = input.topic?.trim() || null;
@@ -125,6 +131,7 @@ export async function saveLessonForDay(input: {
   /** Seconds actually taught so far — see lib/teachingTime. */
   taughtSeconds?: number | null;
 }): Promise<string | null> {
+  const supabase = await getSupabase();
   if (!supabase) throw new Error('Auth not configured');
   if (input.sessionId) {
     await updateSession(input.sessionId, input);

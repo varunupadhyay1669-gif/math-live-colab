@@ -1,12 +1,16 @@
 import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
 import type { Session, User } from '@supabase/supabase-js';
 
-// Read from the client module rather than from import.meta.env directly.
-// Credentials may have arrived at RUN time from the server, in which case the
-// build-time variables are empty and this flag would have said "no auth" on a
-// deployment that has a perfectly good database. initSupabase() has already
-// resolved by the time anything renders (see main.tsx).
-import { isAuthEnabled as authConfigured } from './supabase';
+// Read the resolved flag rather than import.meta.env directly. Credentials may
+// have arrived at RUN time from the server, in which case the build-time
+// variables are empty and this flag would have said "no auth" on a deployment
+// with a perfectly good database. initConfig() has already resolved by the time
+// anything renders (see main.tsx).
+//
+// Imported from runtimeConfig, NOT from ./supabase. Both export this flag, but
+// ./supabase carries the client; importing the flag from there pulled the whole
+// auth SDK into the entry bundle and undid the lazy import below.
+import { authConfigured } from './runtimeConfig';
 
 interface AuthState {
   /** True when Supabase is configured (the two VITE_ env vars are set). */
@@ -36,9 +40,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
     let active = true;
     let unsub: (() => void) | undefined;
-    // Lazy chunk — fetched only because auth is enabled.
+    // Lazy chunk — fetched only because auth is enabled. getSupabase() awaits
+    // the client being built rather than reading whatever `supabase` happens to
+    // hold right now: the first paint no longer waits for the SDK, so reading
+    // the binding directly could catch a null mid-construction and report "not
+    // signed in" to a teacher who is.
     import('./supabase')
-      .then(({ supabase }) => {
+      .then(({ getSupabase }) => getSupabase())
+      .then((supabase) => {
         if (!active) return;
         if (!supabase) {
           setLoading(false);
@@ -65,7 +74,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const signInWithEmail = useCallback(async (email: string): Promise<{ error?: string }> => {
-    const { supabase } = await import('./supabase');
+    const { getSupabase } = await import('./supabase');
+    const supabase = await getSupabase();
     if (!supabase) return { error: 'Auth not configured' };
     const { error } = await supabase.auth.signInWithOtp({
       email: email.trim(),
@@ -77,7 +87,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const signOut = useCallback(async () => {
-    const { supabase } = await import('./supabase');
+    const { getSupabase } = await import('./supabase');
+    const supabase = await getSupabase();
     if (!supabase) return;
     await supabase.auth.signOut();
   }, []);

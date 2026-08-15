@@ -1,5 +1,4 @@
 import express from 'express';
-import { createServer as createViteServer } from 'vite';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
 import path from 'path';
@@ -3158,9 +3157,22 @@ Build a widget that teaches: ${safePrompt}`;
     // screen forever. Kept under Socket.IO's 5MB maxHttpBufferSize so the frame
     // actually reaches the wire; the source separately warns the teacher when a
     // page approaches this size.
-    const MAX_MIRROR_FRAME = 4 * 1024 * 1024;
+    //
+    // 3MB, not 4MB, and measured against body + head + attrs rather than body
+    // alone. Socket.IO's maxHttpBufferSize (5MB) counts BYTES of the whole
+    // encoded message; `.length` counts UTF-16 characters of one field. A maths
+    // lesson is full of non-ASCII — π, ≤, ×, √, ≈, − — and each of those costs
+    // 2–3 bytes in UTF-8. So a frame that passed a 4MB character check could
+    // encode well past 5MB, and Socket.IO drops an oversized frame by KILLING
+    // the connection: the student's screen freezes and they get bounced, with
+    // nothing in the UI explaining why.
+    const MAX_MIRROR_FRAME = 3 * 1024 * 1024;
     socket.on('mirror_dom', ({ roomId, body, scrollX, scrollY, attrs, head, h }: { roomId: string; body: string; scrollX?: number; scrollY?: number; attrs?: string; head?: string | null; h?: string }) => {
-      if (typeof roomId !== 'string' || typeof body !== 'string' || body.length > MAX_MIRROR_FRAME) return;
+      if (typeof roomId !== 'string' || typeof body !== 'string') return;
+      const frameChars = body.length
+        + (typeof head === 'string' ? head.length : 0)
+        + (typeof attrs === 'string' ? attrs.length : 0);
+      if (frameChars > MAX_MIRROR_FRAME) return;
       const room = rooms.get(roomId);
       if (!isMember(room, socket.id) || room.users.get(socket.id)?.role !== 'teacher') return;
       room.mirrorBody = body;
@@ -3848,8 +3860,17 @@ Build a widget that teaches: ${safePrompt}`;
     });
   });
 
-  // Vite middleware for development
+  // Vite middleware for development.
+  //
+  // Imported HERE rather than at the top of the file, and that placement is
+  // load-bearing. A top-level `import { createServer } from 'vite'` is
+  // evaluated on every boot, so production pulled in the entire bundler —
+  // rollup, the esbuild binary, the plugin graph — purely to skip past it one
+  // line later. On a scale-to-zero host that cost is paid on every cold start,
+  // by a real student waiting for the room to open, and it forced vite to stay
+  // a production dependency so the runtime image carried the toolchain too.
   if (process.env.NODE_ENV !== 'production') {
+    const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: 'spa',

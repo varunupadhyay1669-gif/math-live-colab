@@ -84,9 +84,12 @@ export default function StudentView() {
   // ── Core State ──
   const [socket, setSocket] = useState<Socket | null>(null);
   const [connected, setConnected] = useState(false);
-  // The lesson document handed to the iframe via srcdoc (see the build effect
-  // below for why this is not a blob: URL). Truthy = there is a lesson to show.
-  const [lessonDoc, setLessonDoc] = useState("");
+  // blob: URL of the lesson document handed to the iframe (see the build effect
+  // below for why this is a blob URL and not srcdoc). Truthy = a lesson to show.
+  const [lessonUrl, setLessonUrl] = useState("");
+  // The URL the iframe is currently showing, so the build effect can revoke the
+  // one it REPLACES rather than the one it just created.
+  const lessonUrlRef = useRef<string | null>(null);
   // Has the teacher's screen actually been painted into the shell yet?
   // A follower shell has the lesson's own scripts stripped, so a lesson that
   // builds its page in JS shows NOTHING until the first mirrored frame lands.
@@ -546,9 +549,16 @@ export default function StudentView() {
     showNotification(next ? '📖 Shared view: pan and zoom mirror both sides' : '🔓 Independent view: your canvas moves only for you');
   };
 
+  // Release the document still on screen when the student leaves the room.
+  // Separate from the build effect, which deliberately only ever revokes the
+  // document it replaced.
+  useEffect(() => () => {
+    if (lessonUrlRef.current) URL.revokeObjectURL(lessonUrlRef.current);
+  }, []);
+
   // ── Build iframe URL ──
   useEffect(() => {
-    if (!currentHtml) { setLessonDoc(""); setMirrorPainted(false); return; }
+    if (!currentHtml) { setLessonUrl(""); setMirrorPainted(false); return; }
     setMirrorPainted(false);   // a rebuilt shell is blank again until repainted
     // Mark iframe as not ready while we rebuild it
     iframeReadyRef.current = false;
@@ -567,18 +577,35 @@ export default function StudentView() {
     } else {
       content = scripts + content;
     }
-    // Handed to the iframe as `srcdoc`, NOT a blob: URL.
+    // Handed to the iframe as a blob: URL — the same mechanism the teacher's
+    // own iframe uses (Room.tsx). Keeping the two sides symmetrical matters.
     //
-    // A blob URL has to be revoked, and this effect re-runs whenever the
-    // lesson or the seed changes — which happens twice in quick succession on
-    // a normal join (html lands, then the seed). On a fast desktop the first
-    // document is already loaded when its URL is revoked, so nothing shows;
-    // on a slower device the load is still in flight and revoking blanks the
-    // frame permanently. That is exactly the reported symptom on an iPad:
-    // whiteboard fine, ink over the lesson fine, lesson itself white.
-    // srcdoc has no lifetime to get wrong, and WebKit treats it as a plain
-    // same-origin document.
-    setLessonDoc(content);
+    // This was srcdoc for a while, to dodge a revoke race: the effect re-runs
+    // whenever the lesson or the seed changes — twice in quick succession on a
+    // normal join (html lands, then the seed) — and revoking a URL whose load
+    // was still in flight blanked the frame permanently on slower devices.
+    //
+    // But srcdoc traded that bug for a worse one. WebKit is far less tolerant
+    // of a multi-megabyte srcdoc than of a blob: URL, and lessons run to the
+    // 2MB file cap. The teacher, on a blob URL, saw the lesson fine; the
+    // student on an iPad got a white rectangle. Whiteboard unaffected, because
+    // it is not an iframe — which is exactly how it was reported.
+    //
+    // So: blob URL, and fix the revoke race properly instead of avoiding it.
+    // Only the PREVIOUS document is ever revoked, never the one just handed
+    // over, and only after a delay long enough that no load can still be using
+    // it. A stale blob is a few hundred KB held a minute longer; a revoked
+    // live one is a blank screen for the rest of the lesson.
+    const url = URL.createObjectURL(new Blob([content], { type: 'text/html' }));
+    const previous = lessonUrlRef.current;
+    lessonUrlRef.current = url;
+    setLessonUrl(url);
+    if (previous) {
+      // Deliberately NOT cleared on re-run. If this effect fires again before
+      // the timer elapses, that older URL still needs releasing, and cancelling
+      // the timer would leak it for the whole session.
+      setTimeout(() => URL.revokeObjectURL(previous), 60_000);
+    }
     // Keyed on randomSeed too: a new lesson baseline reseeds, and the iframe
     // must rebuild so the sim picks up the matching seed from question one.
   }, [currentHtml, randomSeed]);
@@ -1422,7 +1449,7 @@ export default function StudentView() {
     syncEpochRef.current += 1;
     // Reset iframe readiness when content source changes — the new iframe needs to fire onLoad
     iframeReadyRef.current = false;
-  }, [lessonDoc, showTempContent, whiteboardMode]);
+  }, [lessonUrl, showTempContent, whiteboardMode]);
 
 
   // ── Push interaction mode to iframe ──
@@ -1435,7 +1462,7 @@ export default function StudentView() {
     // LIVE MIRROR: same gate controls whether the follower may forward its input
     // to the teacher's authoritative lesson (drive) or is a pure view-only mirror.
     postToIframe({ type: 'SET_MIRROR_INTERACT', allowed: canInteract });
-  }, [canInteract, lessonDoc, postToIframe]);
+  }, [canInteract, lessonUrl, postToIframe]);
 
   // ── Scroll lock ──
   // A view-only student in a "Linked" room stays where the teacher put them —
@@ -1448,7 +1475,7 @@ export default function StudentView() {
   useEffect(() => { scrollLockedRef.current = scrollLocked; }, [scrollLocked]);
   useEffect(() => {
     postToIframe({ type: 'SET_MIRROR_SCROLLLOCK', locked: scrollLocked });
-  }, [scrollLocked, lessonDoc, postToIframe]);
+  }, [scrollLocked, lessonUrl, postToIframe]);
 
   // ── Challenge Timer Countdown ──
   useEffect(() => {
@@ -1470,14 +1497,14 @@ export default function StudentView() {
   // ── Push scroll sync state to iframe ──
   useEffect(() => {
     postToIframe({ type: 'SET_SCROLL_SYNC', enabled: scrollSyncEnabled });
-  }, [scrollSyncEnabled, lessonDoc, postToIframe]);
+  }, [scrollSyncEnabled, lessonUrl, postToIframe]);
 
   // ── Step sync to iframe ──
   useEffect(() => {
     if (currentStep < 999) {
       postToIframe({ type: 'SET_STEP', step: currentStep });
     }
-  }, [currentStep, lessonDoc, postToIframe]);
+  }, [currentStep, lessonUrl, postToIframe]);
 
   // ── Handlers ──
   const submitQuizAnswer = () => {
@@ -1798,11 +1825,11 @@ export default function StudentView() {
           ) : whiteboardMode ? (
             // Whiteboard rendered above (always mounted; isActive controls visibility)
             null
-          ) : lessonDoc ? (
+          ) : lessonUrl ? (
             <>
               <iframe
                 ref={iframeRef}
-                srcDoc={lessonDoc}
+                src={lessonUrl}
                 className="w-full h-full border-none"
                 style={{ background: '#ffffff' }}
                 onLoad={handleIframeLoad}
@@ -1918,7 +1945,7 @@ export default function StudentView() {
               The toolbar lets the student opt in to drawing; until
               they activate a tool, taps still pass through to the
               simulation. */}
-          {!whiteboardMode && !showTempContent && lessonDoc && canAnnotate && (
+          {!whiteboardMode && !showTempContent && lessonUrl && canAnnotate && (
             <div
               role="toolbar"
               aria-label="Annotation tools"
@@ -2079,7 +2106,7 @@ export default function StudentView() {
           {/* Student Reactions Bar */}
           <StudentReactions
             socket={socket} roomId={roomId!} studentName={studentName}
-            isPaused={isPaused} visible={!!lessonDoc}
+            isPaused={isPaused} visible={!!lessonUrl}
           />
 
           {/* Floating Reactions */}
