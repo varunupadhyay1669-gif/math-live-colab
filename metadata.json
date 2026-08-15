@@ -1,5 +1,6 @@
 {
-  "name": "Collaborative Sandbox",
-  "description": "A real-time collaborative platform where users can upload and interact with HTML simulations together.",
-  "requestFramePermissions": []
+  "name": "Math Live",
+  "description": "Live interactive maths teaching platform with real-time synchronized HTML simulations, whiteboard, and student interaction.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

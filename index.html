@@ -1,6 +1,34 @@
 <!doctype html>
 <html lang="en">
   <head>
+    <script>
+      (function() {
+        try {
+          var _f = window.fetch;
+          var setter = function(v) { _f = v; };
+          var getter = function() { return _f; };
+          try {
+            Object.defineProperty(window, 'fetch', {
+              get: getter,
+              set: setter,
+              configurable: true,
+              enumerable: true
+            });
+          } catch (e1) {
+            if (window.Window && window.Window.prototype) {
+              try {
+                Object.defineProperty(window.Window.prototype, 'fetch', {
+                  get: getter,
+                  set: setter,
+                  configurable: true,
+                  enumerable: true
+                });
+              } catch (e2) {}
+            }
+          }
+        } catch (e) {}
+      })();
+    </script>
     <meta charset="UTF-8" />
     <!-- AUTONOMOUS: iPad/iOS — disable browser pinch-zoom and double-tap
          zoom so the canvas owns all gesture input. Without

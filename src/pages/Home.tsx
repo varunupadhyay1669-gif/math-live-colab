@@ -57,6 +57,7 @@ export default function Home() {
   const [sendingLink, setSendingLink] = useState(false);
   const [linkSent, setLinkSent] = useState(false);
   const [loginError, setLoginError] = useState<string | null>(null);
+  const [teacherSubMode, setTeacherSubMode] = useState<"login" | "quick">("login");
 
   const sendMagicLink = async () => {
     const email = loginEmail.trim();
@@ -64,12 +65,14 @@ export default function Home() {
     setSendingLink(true);
     setLoginError(null);
     try {
+      if (!auth.enabled) {
+        setLoginError('Supabase is not connected yet. Please add VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY (or SUPABASE_URL and SUPABASE_ANON_KEY) in app Settings → Environment Variables.');
+        return;
+      }
       const { error } = await auth.signInWithEmail(email);
       if (error) setLoginError(error);
       else setLinkSent(true);
     } catch {
-      // Lazy-chunk load failure (flaky network) or unexpected reject — without
-      // this catch the button stayed disabled on "Sending…" forever.
       setLoginError('Could not reach the sign-in service. Check your connection and try again.');
     } finally {
       setSendingLink(false);
@@ -209,10 +212,29 @@ export default function Home() {
               Maths<span className="accent">Live</span>
             </span>
           </div>
-          <span className="ml-dark-pill">
-            <span className="dot" />
-            Live
-          </span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            {auth.user ? (
+              <button
+                className="ml-dark-btn ml-dark-btn-glass"
+                onClick={() => navigate('/dashboard')}
+                style={{ fontSize: 13, padding: '5px 14px' }}
+              >
+                Dashboard ({auth.user.email})
+              </button>
+            ) : (
+              <button
+                className="ml-dark-btn ml-dark-btn-glass"
+                onClick={() => { setMode('teacher'); setTeacherSubMode('login'); }}
+                style={{ fontSize: 13, padding: '5px 14px' }}
+              >
+                Sign in with email
+              </button>
+            )}
+            <span className="ml-dark-pill">
+              <span className="dot" />
+              Live
+            </span>
+          </div>
         </header>
 
         {/* Center */}
@@ -368,62 +390,7 @@ export default function Home() {
           {/* Teacher form */}
           {mode === "teacher" && (
             <div className="ml-dark-form">
-              {/* Auth gate: when Supabase is configured, teachers must sign in
-                  before creating rooms. When it's off, this whole block is
-                  skipped and the form behaves exactly as before. Students are
-                  never affected — they use /live/:id and never reach here. */}
-              {auth.enabled && !auth.user ? (
-                auth.loading ? (
-                  <div className="ml-dark-input" style={{ textAlign: "center", opacity: 0.7 }}>
-                    Checking sign-in…
-                  </div>
-                ) : linkSent ? (
-                  <div style={{ textAlign: "center", lineHeight: 1.6, padding: "8px 0" }}>
-                    <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 6 }}>Check your inbox ✉️</div>
-                    <p style={{ fontSize: 13, opacity: 0.8 }}>
-                      We sent a sign-in link to <strong>{loginEmail}</strong>. Open it on this
-                      device to continue.
-                    </p>
-                    <button
-                      className="ml-dark-btn ml-dark-btn-ghost"
-                      onClick={() => { setLinkSent(false); setLoginError(null); }}
-                      style={{ width: "100%", marginTop: 8 }}
-                    >
-                      Use a different email
-                    </button>
-                  </div>
-                ) : (
-                  <>
-                    <input
-                      type="email"
-                      autoFocus
-                      className="ml-dark-input"
-                      placeholder="you@example.com"
-                      value={loginEmail}
-                      onChange={(e) => setLoginEmail(e.target.value)}
-                      onKeyDown={(e) => e.key === "Enter" && sendMagicLink()}
-                    />
-                    <button
-                      className="ml-dark-btn ml-dark-btn-primary"
-                      onClick={sendMagicLink}
-                      disabled={!loginEmail.trim() || sendingLink}
-                      style={{ width: "100%" }}
-                    >
-                      {sendingLink ? "Sending…" : "Email me a sign-in link"}
-                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                        <path d="M5 12h14M13 6l6 6-6 6" />
-                      </svg>
-                    </button>
-                    {loginError && (
-                      <p style={{ color: "#F87171", fontSize: 12.5, textAlign: "center" }}>{loginError}</p>
-                    )}
-                    <p style={{ fontSize: 12.5, opacity: 0.7, textAlign: "center", lineHeight: 1.5 }}>
-                      Teachers sign in to manage their classes. Students don't
-                      sign in — they just open the link you share.
-                    </p>
-                  </>
-                )
-              ) : auth.enabled && auth.user ? (
+              {auth.user ? (
                 <div style={{ textAlign: "center", lineHeight: 1.6, padding: "8px 0" }}>
                   <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 8 }}>You're signed in ✓</div>
                   <p style={{ fontSize: 13, opacity: 0.75, marginBottom: 10 }}>Taking you to your classes…</p>
@@ -447,32 +414,102 @@ export default function Home() {
                 </div>
               ) : (
                 <>
-              <input
-                autoFocus
-                className="ml-dark-input"
-                placeholder="What are you teaching today?"
-                value={teacherName}
-                onChange={(e) => setTeacherName(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && createRoom()}
-              />
-              <input
-                className="ml-dark-input ml-dark-input-mono"
-                placeholder="Permanent room code (optional) — e.g. varun-grade5"
-                value={classCode}
-                onChange={(e) => setClassCode(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && createRoom()}
-              />
-              <button
-                className="ml-dark-btn ml-dark-btn-primary"
-                onClick={createRoom}
-                disabled={!teacherName.trim()}
-                style={{ width: "100%" }}
-              >
-                Create room
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                  <path d="M5 12h14M13 6l6 6-6 6" />
-                </svg>
-              </button>
+                  <div style={{ display: "flex", gap: 6, marginBottom: 14 }}>
+                    <button
+                      type="button"
+                      className={`ml-dark-btn ${teacherSubMode === "login" ? "ml-dark-btn-primary" : "ml-dark-btn-ghost"}`}
+                      onClick={() => setTeacherSubMode("login")}
+                      style={{ flex: 1, padding: "6px 10px", fontSize: 12.5 }}
+                    >
+                      ✉️ Teacher Sign In
+                    </button>
+                    <button
+                      type="button"
+                      className={`ml-dark-btn ${teacherSubMode === "quick" ? "ml-dark-btn-primary" : "ml-dark-btn-ghost"}`}
+                      onClick={() => setTeacherSubMode("quick")}
+                      style={{ flex: 1, padding: "6px 10px", fontSize: 12.5 }}
+                    >
+                      ⚡ Instant Session
+                    </button>
+                  </div>
+
+                  {teacherSubMode === "login" ? (
+                    linkSent ? (
+                      <div style={{ textAlign: "center", lineHeight: 1.6, padding: "8px 0" }}>
+                        <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 6 }}>Check your inbox ✉️</div>
+                        <p style={{ fontSize: 13, opacity: 0.8 }}>
+                          We sent a sign-in link to <strong>{loginEmail}</strong>. Open it on this device to continue.
+                        </p>
+                        <button
+                          className="ml-dark-btn ml-dark-btn-ghost"
+                          onClick={() => { setLinkSent(false); setLoginError(null); }}
+                          style={{ width: "100%", marginTop: 8 }}
+                        >
+                          Use a different email
+                        </button>
+                      </div>
+                    ) : (
+                      <>
+                        <input
+                          type="email"
+                          autoFocus
+                          className="ml-dark-input"
+                          placeholder="you@example.com"
+                          value={loginEmail}
+                          onChange={(e) => setLoginEmail(e.target.value)}
+                          onKeyDown={(e) => e.key === "Enter" && sendMagicLink()}
+                        />
+                        <button
+                          className="ml-dark-btn ml-dark-btn-primary"
+                          onClick={sendMagicLink}
+                          disabled={!loginEmail.trim() || sendingLink}
+                          style={{ width: "100%" }}
+                        >
+                          {sendingLink ? "Sending…" : "Email me a sign-in link"}
+                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                            <path d="M5 12h14M13 6l6 6-6 6" />
+                          </svg>
+                        </button>
+                        {loginError && (
+                          <div style={{ color: "#F87171", fontSize: 12.5, textAlign: "center", lineHeight: 1.4, padding: "6px 8px", background: "rgba(248, 113, 113, 0.12)", borderRadius: 6 }}>
+                            {loginError}
+                          </div>
+                        )}
+                        <p style={{ fontSize: 12, opacity: 0.7, textAlign: "center", lineHeight: 1.5 }}>
+                          Enter your email to sign in or register as a teacher.
+                        </p>
+                      </>
+                    )
+                  ) : (
+                    <>
+                      <input
+                        autoFocus
+                        className="ml-dark-input"
+                        placeholder="What are you teaching today?"
+                        value={teacherName}
+                        onChange={(e) => setTeacherName(e.target.value)}
+                        onKeyDown={(e) => e.key === "Enter" && createRoom()}
+                      />
+                      <input
+                        className="ml-dark-input ml-dark-input-mono"
+                        placeholder="Permanent room code (optional) — e.g. varun-grade5"
+                        value={classCode}
+                        onChange={(e) => setClassCode(e.target.value)}
+                        onKeyDown={(e) => e.key === "Enter" && createRoom()}
+                      />
+                      <button
+                        className="ml-dark-btn ml-dark-btn-primary"
+                        onClick={createRoom}
+                        disabled={!teacherName.trim()}
+                        style={{ width: "100%" }}
+                      >
+                        Create room
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                          <path d="M5 12h14M13 6l6 6-6 6" />
+                        </svg>
+                      </button>
+                    </>
+                  )}
                 </>
               )}
               <div className="ml-dark-back-row">
