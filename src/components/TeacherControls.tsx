@@ -258,13 +258,13 @@ export default function TeacherControls({
           <span style={{ fontSize: '11.5px' }}>{scrollSyncEnabled ? 'Linked' : 'Free'}</span>
         </button>
 
-        <button onClick={onForceSync} className="tb-btn" data-tip="Force sync all students">
+        <button onClick={onForceSync} className="tb-btn" aria-label="Force sync all students" data-tip="Force sync all students">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
             <polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/>
           </svg>
         </button>
 
-        <button onClick={onResetView} className="tb-btn" data-tip="Scroll everyone to top">
+        <button onClick={onResetView} className="tb-btn" aria-label="Scroll everyone to top" data-tip="Scroll everyone to top">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
             <line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/>
           </svg>
@@ -273,18 +273,18 @@ export default function TeacherControls({
         <div className="toolbar-divider" />
 
         {/* ── Zoom Controls (synced to all students) ── */}
-        <button onClick={onZoomOut} className="tb-btn" data-tip="Zoom out (synced)" disabled={zoomLevel <= 0.5}>
+        <button onClick={onZoomOut} className="tb-btn" aria-label="Zoom out (synced)" data-tip="Zoom out (synced)" disabled={zoomLevel <= 0.5}>
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
             <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="8" y1="11" x2="14" y2="11"/>
           </svg>
         </button>
         <button onClick={onZoomReset} className={`tb-btn-label ${zoomLevel !== 1 ? 'active' : ''}`}
-          data-tip="Click to reset to 100%" style={{ minWidth: '52px' }}>
+          aria-label="Click to reset to 100%" data-tip="Click to reset to 100%" style={{ minWidth: '52px' }}>
           <span style={{ fontSize: '11.5px', fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>
             {Math.round(zoomLevel * 100)}%
           </span>
         </button>
-        <button onClick={onZoomIn} className="tb-btn" data-tip="Zoom in (synced)" disabled={zoomLevel >= 3}>
+        <button onClick={onZoomIn} className="tb-btn" aria-label="Zoom in (synced)" data-tip="Zoom in (synced)" disabled={zoomLevel >= 3}>
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
             <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/>
           </svg>
