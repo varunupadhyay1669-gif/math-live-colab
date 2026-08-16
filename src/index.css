@@ -3276,7 +3276,40 @@ html, body, #root { background: var(--bg-primary); }
   box-shadow: none;
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
+
+  /* The toolbar is a flex row with no wrapping, so on a narrower window the
+     last buttons — Class pack, XP, Pause — used to fall off the right edge and
+     become UNREACHABLE. Not merely hard to see: there was no overflow-x, so
+     there was nothing to scroll, and no amount of dragging brought them back.
+     A tutor mid-lesson simply could not export the class pack.
+
+     Wrapping is deliberately NOT the fix: a second row costs vertical space in
+     the one bar that sits above the lesson, which is the opposite of what the
+     top bar needed. Scrolling keeps the height fixed and makes everything
+     reachable. */
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  overflow-y: hidden;
+  /* Stop a horizontal swipe at either end from turning into browser
+     back/forward navigation — on a trackpad that would leave the room. */
+  overscroll-behavior-x: contain;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin;
 }
+/* Without this the flex row SQUASHES the buttons to fit instead of overflowing,
+   so nothing scrolls and the icons distort as the window narrows. */
+.teacher-toolbar > * { flex-shrink: 0; }
+
+/* A visible (if slim) scrollbar. The buttons being off-screen is only half the
+   problem — the other half is not knowing there is anything to scroll to. */
+.teacher-toolbar::-webkit-scrollbar { height: 6px; }
+.teacher-toolbar::-webkit-scrollbar-track { background: transparent; }
+.teacher-toolbar::-webkit-scrollbar-thumb {
+  background: rgba(15, 23, 42, 0.18);
+  border-radius: 3px;
+}
+.teacher-toolbar::-webkit-scrollbar-thumb:hover { background: rgba(15, 23, 42, 0.32); }
+
 .toolbar-divider { height: 18px; background: var(--border-default); margin: 0 5px; }
 
 /* ── Toolbar buttons: compact + flat ── */
