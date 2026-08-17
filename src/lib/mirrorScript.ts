@@ -280,9 +280,42 @@ export const mirrorScript = `
       return out;
     }
     var canvasTimer = null, hadCanvas = false;
-    function canvasTick() {
+    // Last frame sent per canvas, so an UNCHANGED canvas is not re-sent.
+    //
+    // This tick runs every 120ms — about 8 times a second — and used to post
+    // every canvas every time, changed or not. The whiteboard is a canvas, and
+    // so is any Three.js or animated lesson, which meant a completely static
+    // board still streamed ~8 full WebP images per second to every student for
+    // the whole lesson. At tens of KB per image (plus 33% for base64) that is
+    // 150–350 KB/s per student, or roughly 400MB–1GB per lesson-hour. It was
+    // the dominant share of a 3.93 GB WebSocket bill.
+    //
+    // The DOM path beside it has always been content-deduped; the pixel path
+    // simply never got the same treatment. Comparing the encoded string is
+    // exact — identical pixels encode identically — and costs one string
+    // compare against a network send.
+    //
+    // Keyed by selector rather than array position: canvases can be added or
+    // removed mid-lesson, and an index-based cache would silently compare one
+    // canvas against another and either send needlessly or, worse, skip a real
+    // change. Cleared on resync so a student asking for a fresh copy always
+    // gets whole frames back rather than being told nothing changed.
+    var lastCanvasData = Object.create(null);
+    function canvasTick(force) {
       var cv = captureCanvases();
-      if (cv.length) { hadCanvas = true; post({ type: 'SYNC_MIRROR_CANVAS', canvases: cv }); }
+      if (!cv.length) return;
+      hadCanvas = true;
+      var changed = [];
+      for (var i = 0; i < cv.length; i++) {
+        var c = cv[i];
+        if (force || lastCanvasData[c.sel] !== c.data) {
+          lastCanvasData[c.sel] = c.data;
+          changed.push(c);
+        }
+      }
+      // Nothing moved — say nothing. This is the whole saving.
+      if (!changed.length) return;
+      post({ type: 'SYNC_MIRROR_CANVAS', canvases: changed });
     }
     // Start the pixel channel the moment a canvas EXISTS — not only at two
     // fixed moments during boot. A 3D lesson typically creates its canvas
@@ -354,7 +387,12 @@ export const mirrorScript = `
     window.addEventListener('message', function (e) {
       var d = e.data; if (!d || !d.type) return;
       if (d.type === 'MIRROR_INPUT') applyForwardedInput(d);
-      else if (d.type === 'MIRROR_REQUEST') sendSnapshot(true); // late-join / reconnect → force full snapshot
+      // Late-join / reconnect / "Force sync" → force a full snapshot AND a full
+      // set of canvas frames. The pixel channel only sends what changed, so a
+      // student arriving mid-lesson in front of a canvas that happens to be
+      // still would otherwise receive nothing at all and sit on a blank frame
+      // until something moved. force=true bypasses the dedup for exactly this.
+      else if (d.type === 'MIRROR_REQUEST') { sendSnapshot(true); canvasTick(true); }
       else if (d.type === 'SET_MIRROR_ROLE' && d.role !== 'source') { /* role flip handled by parent via rebuild */ }
     });
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', activate); else activate();
