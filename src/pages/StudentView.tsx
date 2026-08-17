@@ -1293,7 +1293,14 @@ export default function StudentView() {
     iframeRef.current?.contentWindow?.postMessage({ type: 'SET_MIRROR_INTERACT', allowed: canInteractRef.current }, '*');
     // ...and the scroll lock, so a reloading student is locked from frame one
     // instead of being briefly free to scroll away.
-    iframeRef.current?.contentWindow?.postMessage({ type: 'SET_MIRROR_SCROLLLOCK', locked: scrollSyncEnabled && !canInteractRef.current }, '*');
+    //
+    // Read from scrollLockedRef rather than recomputing the rule here. This
+    // line used to carry its own copy — `scrollSyncEnabled && !canInteractRef
+    // .current` — and a duplicated rule is how the original bug survived: the
+    // effect below was corrected while this one, which fires on EVERY iframe
+    // load, kept re-pushing the old answer and quietly undid it at the start of
+    // every lesson. One rule, one place: see scrollPolicy.ts.
+    iframeRef.current?.contentWindow?.postMessage({ type: 'SET_MIRROR_SCROLLLOCK', locked: scrollLockedRef.current }, '*');
     // Re-send current state
     iframeRef.current?.contentWindow?.postMessage({ type: 'SET_SCROLL_SYNC', enabled: scrollSyncEnabled }, '*');
     if (currentStep < 999) {
