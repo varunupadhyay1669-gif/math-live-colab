@@ -1465,12 +1465,31 @@ export default function StudentView() {
   }, [canInteract, lessonUrl, postToIframe]);
 
   // ── Scroll lock ──
-  // A view-only student in a "Linked" room stays where the teacher put them —
-  // they can't scroll off mid-explanation. The teacher opens it up either by
-  // unlinking scroll (look around freely) or by granting interaction (they're
-  // driving, so they need their own scroll). Teacher-driven scrolling is
-  // unaffected either way.
-  const scrollLocked = scrollSyncEnabled && !canInteract;
+  // Who may scroll is a question about PERMISSION, so it depends only on
+  // permission. A student who may not drive the lesson may not scroll it
+  // either; grant them interaction and they can, because now they are driving.
+  //
+  // This used to also depend on scrollSyncEnabled — the "Linked" toggle:
+  //
+  //     const scrollLocked = scrollSyncEnabled && !canInteract;
+  //
+  // which conflated two unrelated ideas and produced three separate faults the
+  // tutor hit in one lesson:
+  //
+  //   * With Linked OFF, a view-only student was unlocked and scrolled away
+  //     mid-explanation — the exact thing the lock exists to prevent.
+  //   * Revoking interaction did not reliably re-lock them, because whether it
+  //     re-locked depended on a toggle that has nothing to do with permission.
+  //   * A driving student's scroll never reached the teacher. The follower's
+  //     scroll listener bails out early while scrollLocked is true, so the
+  //     student→teacher scroll channel — which is fully implemented, all the
+  //     way to window.scrollTo on the teacher's own lesson — was being
+  //     suppressed before it could send anything.
+  //
+  // "Linked" keeps its own, narrower meaning: whether the TEACHER's scrolling
+  // is pushed out to the students. That is the toggle's name and the only
+  // behaviour it should govern.
+  const scrollLocked = !canInteract;
   const scrollLockedRef = useRef(scrollLocked);
   useEffect(() => { scrollLockedRef.current = scrollLocked; }, [scrollLocked]);
   useEffect(() => {
