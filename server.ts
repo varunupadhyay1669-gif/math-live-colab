@@ -482,7 +482,20 @@ async function startServer() {
       currentStep: 1,
       gates: {},
       scrollSyncEnabled: true,
-      studentInteractionAllowed: false, // View-only by default
+      // Students may click and scroll the lesson from the moment they join.
+      //
+      // This was false — view-only until the tutor explicitly granted it — and
+      // that default cost more than it protected. A student on an iPad could
+      // not press a single button in a worksheet, could not scroll to read the
+      // bottom of a question, and had no way to ask; the tutor had to notice
+      // and grant it every lesson, for every student, before anything worked.
+      //
+      // The guarantee it bought (everyone is looking at exactly what I am) is
+      // still available and still one click away: the interaction toggle turns
+      // it off per room, and "Linked" additionally pins scrolling to the
+      // tutor's. Defaulting to participation and switching to lockstep when
+      // needed is the right way round for a one-to-one maths lesson.
+      studentInteractionAllowed: true,
       teacherScreenOn: false,
       password: null,
       pendingSyncStudents: new Set(),
@@ -900,7 +913,12 @@ async function startServer() {
     room.currentStep = raw.currentStep || 1;
     room.gates = raw.gates || {};
     room.scrollSyncEnabled = raw.scrollSyncEnabled !== false;
-    room.studentInteractionAllowed = !!raw.studentInteractionAllowed;
+    // `!== false`, not `!!`. A room saved before interaction defaulted to on
+    // has no such field, and `!!undefined` would restore it view-only — so a
+    // tutor's existing class would silently keep the old locked behaviour
+    // while new rooms behaved differently. A tutor who deliberately switched
+    // interaction OFF stored an explicit false, and that is still honoured.
+    room.studentInteractionAllowed = raw.studentInteractionAllowed !== false;
     room.password = raw.password || null;
     room.scores = raw.scores || {};
     room.revision = raw.revision || 0;
