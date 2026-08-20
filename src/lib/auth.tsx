@@ -40,6 +40,24 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
     let active = true;
     let unsub: (() => void) | undefined;
+    // Never let a third-party service strand the whole app.
+    //
+    // getSession() below can hang rather than fail: with an expired token it
+    // goes to the network to refresh, and if Supabase is slow, throttled or
+    // over quota that request may never settle. Nothing else clears `loading`,
+    // so every auth-gated page — the dashboard, a student's page, /admin —
+    // sat on "Loading…" indefinitely with no message and no way out. That is
+    // indistinguishable from the app being broken.
+    //
+    // After this deadline we give up waiting and render as signed-out. The
+    // session, if it does arrive later, still lands via onAuthStateChange and
+    // the UI corrects itself. Showing a sign-in button a few seconds early is
+    // a small wrong; a permanent spinner is a much larger one.
+    const settle = () => { if (active) setLoading(false); };
+    const watchdog = setTimeout(() => {
+      console.warn('Auth did not resolve in time — rendering as signed out.');
+      settle();
+    }, 8000);
     // Lazy chunk — fetched only because auth is enabled. getSupabase() awaits
     // the client being built rather than reading whatever `supabase` happens to
     // hold right now: the first paint no longer waits for the SDK, so reading
@@ -50,14 +68,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       .then((supabase) => {
         if (!active) return;
         if (!supabase) {
-          setLoading(false);
+          settle();
           return;
         }
-        supabase.auth.getSession().then(({ data }) => {
-          if (!active) return;
-          setSession(data.session);
-          setLoading(false);
-        });
+        // .catch is not optional here. Without it a rejected getSession()
+        // left `loading` true forever — the outer .catch below never sees it,
+        // because this promise was not returned into that chain.
+        supabase.auth.getSession()
+          .then(({ data }) => {
+            if (!active) return;
+            setSession(data.session);
+          })
+          .catch((err) => {
+            console.error('Could not read the saved session:', err);
+          })
+          .finally(settle);
         const { data: sub } = supabase.auth.onAuthStateChange((_event, s) => {
           setSession(s);
         });
@@ -65,10 +90,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       })
       .catch((err) => {
         console.error('Failed to load auth:', err);
-        if (active) setLoading(false);
+        settle();
       });
     return () => {
       active = false;
+      clearTimeout(watchdog);
       unsub?.();
     };
   }, []);
