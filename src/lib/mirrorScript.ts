@@ -301,14 +301,27 @@ export const mirrorScript = `
     // change. Cleared on resync so a student asking for a fresh copy always
     // gets whole frames back rather than being told nothing changed.
     var lastCanvasData = Object.create(null);
+    // Periodic keyframe. Dedup means a STILL canvas is sent once; if that one
+    // frame is lost — dropped in transit, or arriving before the DOM snapshot
+    // that carries the canvas element — the student is left with an empty box
+    // and nothing ever corrects it. The follower asks for a resync when it
+    // notices, but it cannot notice a frame that never arrived at all.
+    //
+    // So: every 40 ticks (~5s) send whole frames regardless. For a still scene
+    // that is 0.2 frames/sec against the 8/sec this replaced — the bandwidth
+    // win is kept almost entirely — and it makes a lost frame self-correcting
+    // rather than permanent.
+    var KEYFRAME_EVERY = 40;
+    var canvasTicks = 0;
     function canvasTick(force) {
       var cv = captureCanvases();
       if (!cv.length) return;
       hadCanvas = true;
+      var keyframe = force || (++canvasTicks % KEYFRAME_EVERY === 0);
       var changed = [];
       for (var i = 0; i < cv.length; i++) {
         var c = cv[i];
-        if (force || lastCanvasData[c.sel] !== c.data) {
+        if (keyframe || lastCanvasData[c.sel] !== c.data) {
           lastCanvasData[c.sel] = c.data;
           changed.push(c);
         }
@@ -634,14 +647,55 @@ export const mirrorScript = `
     // between the swap and the next ~120ms canvas tick.
     if (lastCanvasList) paintCanvases(lastCanvasList);
   }
+  // Ask for a fresh full frame, at most once every few seconds. A miss usually
+  // means the DOM snapshot carrying this canvas has not landed yet, so a burst
+  // of requests would all fail for the same reason; one, then wait.
+  var lastCanvasRescueAt = 0;
+  function rescueCanvases(why) {
+    var now = Date.now();
+    if (now - lastCanvasRescueAt < 3000) return;
+    lastCanvasRescueAt = now;
+    try { console.warn('[mirror] canvas not painted (' + why + ') — asking for a resync'); } catch (e) {}
+    post({ type: 'MIRROR_STALE' });
+  }
+
   function paintCanvases(list) {
     lastCanvasList = list;
     for (var i = 0; i < list.length; i++) {
       (function (item) {
         var c = findElement(item.sel);
-        if (!c || !c.getContext) return;
+        // The canvas this frame belongs to is not in our DOM yet.
+        //
+        // Routine for a 3D lesson: Three.js appends renderer.domElement from
+        // JavaScript, so the element only reaches us once the DOM snapshot
+        // containing it arrives — and the pixels may well get here first.
+        //
+        // This used to be a silent early return, survivable only because
+        // frames arrived ~8 times a second, so the next one landed 120ms later.
+        // Now that unchanged frames are skipped, a STILL 3D scene sends exactly
+        // one frame; drop it and the student stares at an empty canvas for the
+        // rest of the lesson while the rest of the page mirrors perfectly. That
+        // is precisely how this was reported: "they see everything, but the
+        // simulation is not showing".
+        if (!c || !c.getContext) { rescueCanvases('element ' + item.sel + ' not found'); return; }
         var img = new Image();
-        img.onload = function () { try { if (c.width !== item.w) c.width = item.w; if (c.height !== item.h) c.height = item.h; c.getContext('2d').drawImage(img, 0, 0); } catch (e) {} };
+        img.onload = function () {
+          try {
+            if (c.width !== item.w) c.width = item.w;
+            if (c.height !== item.h) c.height = item.h;
+            var ctx = c.getContext('2d');
+            // Null when something already took a webgl context on this element:
+            // a canvas only ever grants one kind. Nothing can be drawn here, so
+            // say so rather than failing mute.
+            if (!ctx) { rescueCanvases('no 2d context on ' + item.sel); return; }
+            ctx.drawImage(img, 0, 0);
+          } catch (e) {
+            rescueCanvases('draw failed: ' + (e && e.name));
+          }
+        };
+        // A corrupt or truncated data URL fires onerror, never onload. Left
+        // unhandled that was another way to sit on a blank canvas in silence.
+        img.onerror = function () { rescueCanvases('frame failed to decode'); };
         img.src = item.data;
       })(list[i]);
     }
