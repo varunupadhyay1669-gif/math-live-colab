@@ -1852,11 +1852,21 @@ export default function Room() {
   // must be locked out (otherwise two drivers diverge). presenterMode +
   // interaction-allowed both follow "am I the sole writer right now" = no
   // student holds control.
-  const teacherIsSoleWriter = !controlHolderName;
   useEffect(() => {
-    postToIframe({ type: 'SET_INTERACTION_MODE', allowed: teacherIsSoleWriter });
-    postToIframe({ type: 'SET_PRESENTER_MODE', enabled: teacherIsSoleWriter });
-  }, [iframeUrl, teacherIsSoleWriter, postToIframe]);
+    // The source iframe is ALWAYS the presenter, whoever is driving.
+    //
+    // These used to follow "is the teacher the sole writer", so handing a
+    // student control put this iframe into the legacy engine's blocked state —
+    // where it cancels every click, input and pointer event at capture phase.
+    // The student's forwarded taps are dispatched into this same document, so
+    // they were cancelled too, and "you have control" meant nothing worked.
+    //
+    // Blocking the wrong thing, at the wrong level: this is the one running copy
+    // of the lesson, and control decides who may FORWARD input to it — which the
+    // server already enforces — not whether the lesson may receive any.
+    postToIframe({ type: 'SET_INTERACTION_MODE', allowed: true });
+    postToIframe({ type: 'SET_PRESENTER_MODE', enabled: true });
+  }, [iframeUrl, postToIframe]);
 
   useEffect(() => {
     // syncEpoch must mirror the student-side dependency set so the two counters
@@ -1954,11 +1964,11 @@ export default function Room() {
 
   // ── Push scroll sync state to iframe ──
   useEffect(() => {
-    // presenterMode follows sole-writer (see the SET_INTERACTION_MODE effect):
-    // a teacher who handed off control is a mirror, not the presenter.
-    postToIframe({ type: 'SET_PRESENTER_MODE', enabled: teacherIsSoleWriter });
+    // Scroll sync only. Presenter mode is set once, above, and stays true — a
+    // duplicated rule is how the original block survived: this effect re-asserted
+    // the old answer on every scroll-sync change and quietly undid the fix.
     postToIframe({ type: 'SET_SCROLL_SYNC', enabled: scrollSyncEnabled });
-  }, [scrollSyncEnabled, iframeUrl, teacherIsSoleWriter, postToIframe]);
+  }, [scrollSyncEnabled, iframeUrl, postToIframe]);
 
   // ── Zoom: push to iframe when level changes ──
   useEffect(() => {

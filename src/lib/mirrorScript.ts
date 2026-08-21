@@ -368,21 +368,99 @@ export const mirrorScript = `
     }
 
     // Apply a follower's forwarded input onto the REAL lesson, then re-stream.
+    // Turn the follower's fractions back into a real point on OUR layout.
+    // Falls back to the element's centre, which is right for a button and the
+    // best available guess for anything that sent no coordinates.
+    function pointOn(el, d) {
+      var r;
+      try { r = el.getBoundingClientRect(); } catch (e) { r = null; }
+      if (!r) return { x: 0, y: 0 };
+      var fx = (typeof d.fx === 'number' && isFinite(d.fx)) ? d.fx : 0.5;
+      var fy = (typeof d.fy === 'number' && isFinite(d.fy)) ? d.fy : 0.5;
+      return { x: r.left + fx * r.width, y: r.top + fy * r.height };
+    }
+
+    // Every gesture a browser makes is a pointer event AND a mouse event, and
+    // libraries pick one: OrbitControls r128+ listens only for pointer events,
+    // older and simpler sims only for mouse. Sending both, pointer first (native
+    // ordering), is what makes a forwarded gesture indistinguishable from a hand.
+    function dispatchPointerPair(el, type, mouseType, pt, opts) {
+      var base = {
+        bubbles: true, cancelable: true, view: window, composed: true,
+        clientX: pt.x, clientY: pt.y, screenX: pt.x, screenY: pt.y,
+        button: 0, buttons: opts && opts.buttons != null ? opts.buttons : 1,
+      };
+      try {
+        var pe = {};
+        for (var k in base) pe[k] = base[k];
+        pe.pointerId = 1;
+        pe.pointerType = (opts && opts.pointerType) || 'mouse';
+        pe.isPrimary = true;
+        el.dispatchEvent(new PointerEvent(type, pe));
+      } catch (e) { /* no PointerEvent here — the mouse event below still lands */ }
+      try { el.dispatchEvent(new MouseEvent(mouseType, base)); } catch (e) {}
+    }
+
+    // The element a forwarded drag is anchored to, so moves and the release go
+    // where the press did even after the pointer has left it.
+    var forwardedDragEl = null;
+
     function applyForwardedInput(d) {
       applyingInput = true;
+      // A forwarded tap is a REMOTE action, not a local one. The legacy replay
+      // engine shares this document and cancels local input at capture phase
+      // whenever this iframe is in a blocked state — which is exactly what
+      // handing a student control does. Without this the student's taps were
+      // swallowed before the lesson's own handler ever ran, and "you have
+      // control" meant nothing worked. Optional: absent, we just dispatch.
+      var guard = null;
+      try { guard = window.__mathsliveRemote || null; } catch (e) {}
+      if (guard && guard.enter) { try { guard.enter(); } catch (e) {} }
       try {
         if (d.kind === 'scroll') { lastForwardedScrollAt = Date.now(); window.scrollTo(d.scrollX || 0, d.scrollY || 0); }
+        else if (d.kind === 'pointermove' || d.kind === 'pointerup') {
+          // Anchored to where the press landed — see forwardedDragEl.
+          var anchor = forwardedDragEl || (d.path ? findElement(d.path) : null);
+          if (anchor) {
+            var mp = pointOn(anchor, d);
+            if (d.kind === 'pointermove') {
+              dispatchPointerPair(anchor, 'pointermove', 'mousemove', mp, { pointerType: d.pointerType, buttons: 1 });
+            } else {
+              dispatchPointerPair(anchor, 'pointerup', 'mouseup', mp, { pointerType: d.pointerType, buttons: 0 });
+              forwardedDragEl = null;
+            }
+          }
+        }
         else {
           var el = d.path ? findElement(d.path) : null;
           if (el) {
-            if (d.kind === 'click') { if (el.click) el.click(); else el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window })); }
-            else if (d.kind === 'input') { try { el.value = d.value; } catch (e) {} el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); }
-            else if (d.kind === 'pointerdown') { try { el.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true, view: window })); } catch (e) {} el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window })); }
-            else if (d.kind === 'wheel') { el.dispatchEvent(new WheelEvent('wheel', { bubbles: true, cancelable: true, view: window, deltaY: d.deltaY || 0 })); }
+            var pt = pointOn(el, d);
+            if (d.kind === 'click') {
+              // With coordinates, so a lesson that reads clientX/clientY — a
+              // number line, a graph, "tap where it lands" — gets the point the
+              // student actually touched. el.click() carries none, which is why
+              // those taps used to land in the wrong place.
+              dispatchPointerPair(el, 'pointerdown', 'mousedown', pt, { pointerType: d.pointerType, buttons: 1 });
+              dispatchPointerPair(el, 'pointerup', 'mouseup', pt, { pointerType: d.pointerType, buttons: 0 });
+              try { el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window, composed: true, clientX: pt.x, clientY: pt.y, button: 0 })); }
+              catch (e) { if (el.click) el.click(); }
+            }
+            else if (d.kind === 'input') {
+              try { el.value = d.value; } catch (e) {}
+              el.dispatchEvent(new Event('input', { bubbles: true }));
+              el.dispatchEvent(new Event('change', { bubbles: true }));
+            }
+            else if (d.kind === 'pointerdown') {
+              forwardedDragEl = el;
+              dispatchPointerPair(el, 'pointerdown', 'mousedown', pt, { pointerType: d.pointerType, buttons: 1 });
+            }
+            else if (d.kind === 'wheel') { el.dispatchEvent(new WheelEvent('wheel', { bubbles: true, cancelable: true, view: window, deltaY: d.deltaY || 0, clientX: pt.x, clientY: pt.y })); }
             else if (d.kind === 'key') { document.dispatchEvent(new KeyboardEvent('keydown', { key: d.key, bubbles: true })); }
+            else if (d.kind === 'keyup') { document.dispatchEvent(new KeyboardEvent('keyup', { key: d.key, bubbles: true })); }
           }
         }
       } catch (e) {}
+      if (guard && guard.exit) { try { guard.exit(); } catch (e) {} }
       applyingInput = false;
       scheduleSnapshot();
     }
@@ -738,17 +816,85 @@ export const mirrorScript = `
   }
 
   // Forward the follower's own input to the source (only when allowed to drive).
+  // WHERE on the element, not just which element.
+  //
+  // A path alone is enough for a button, and useless for everything a maths
+  // lesson is actually made of: a number line, a graph, a "tap where the ball
+  // lands". Those read clientX/clientY, and a forwarded tap that carried no
+  // position landed wherever el.click() happens to put it — which is nowhere in
+  // particular. Fractions of the target's own box travel correctly between two
+  // screens of different sizes; the source multiplies them back out against its
+  // own layout.
+  //
+  // Deliberately NOT clamped to 0..1: a drag that starts on a canvas and
+  // continues past its edge is normal (that is how OrbitControls is used), and
+  // the fraction stays meaningful outside the box.
+  function boxFraction(el, clientX, clientY) {
+    try {
+      var r = el.getBoundingClientRect();
+      if (!r || !r.width || !r.height) return null;
+      return { fx: (clientX - r.left) / r.width, fy: (clientY - r.top) / r.height };
+    } catch (e) { return null; }
+  }
+
   function fwd(kind, e, extra) {
     if (applyingDom || !allow) return;
     var p = getElementPath(e.target);
     var msg = { type: 'SYNC_MIRROR_INPUT', kind: kind, path: p };
+    var f = (typeof e.clientX === 'number') ? boxFraction(e.target, e.clientX, e.clientY) : null;
+    if (f) { msg.fx = f.fx; msg.fy = f.fy; }
     if (extra) for (var k in extra) msg[k] = extra[k];
     post(msg);
   }
+
+  // A drag is three things, not one.
+  //
+  // Only pointerdown was ever forwarded — no move, no up. So a drag never
+  // happened: a 3D scene could not be rotated, a slider could not be dragged,
+  // and drag-and-drop did nothing. Worse, a lone pointerdown on OrbitControls
+  // left the TEACHER's camera stuck mid-drag until they moved their own mouse.
+  //
+  // The anchor is the element the pointer went DOWN on, and every later move and
+  // the up are measured against it — because a drag routinely leaves the element
+  // it started on, and re-resolving the target each frame would send the moves
+  // to whatever happened to be under the finger.
+  var dragAnchorPath = null, dragPointerId = null, lastMoveSentAt = 0;
+
   document.addEventListener('click', function (e) { fwd('click', e); }, true);
   document.addEventListener('input', function (e) { fwd('input', e, { value: e.target && e.target.value }); }, true);
   document.addEventListener('change', function (e) { fwd('input', e, { value: e.target && e.target.value }); }, true);
-  document.addEventListener('pointerdown', function (e) { fwd('pointerdown', e); }, true);
+  document.addEventListener('pointerdown', function (e) {
+    if (applyingDom || !allow) return;
+    dragAnchorPath = getElementPath(e.target);
+    dragPointerId = e.pointerId;
+    fwd('pointerdown', e, { pointerType: e.pointerType, isPrimary: e.isPrimary !== false });
+  }, true);
+  document.addEventListener('pointermove', function (e) {
+    if (applyingDom || !allow || dragAnchorPath === null) return;
+    if (dragPointerId !== null && e.pointerId !== dragPointerId) return;
+    // ~33/s. Enough for a smooth rotation, far under the relay's rate limit,
+    // and the source coalesces them into its own frame anyway.
+    var now = Date.now();
+    if (now - lastMoveSentAt < 30) return;
+    lastMoveSentAt = now;
+    var el = findElement(dragAnchorPath);
+    var f = el ? boxFraction(el, e.clientX, e.clientY) : null;
+    post({ type: 'SYNC_MIRROR_INPUT', kind: 'pointermove', path: dragAnchorPath,
+           fx: f ? f.fx : 0, fy: f ? f.fy : 0, pointerType: e.pointerType });
+  }, { capture: true, passive: true });
+  function endDrag(e) {
+    if (applyingDom || !allow || dragAnchorPath === null) return;
+    var el = findElement(dragAnchorPath);
+    var f = (el && typeof e.clientX === 'number') ? boxFraction(el, e.clientX, e.clientY) : null;
+    post({ type: 'SYNC_MIRROR_INPUT', kind: 'pointerup', path: dragAnchorPath,
+           fx: f ? f.fx : 0, fy: f ? f.fy : 0, pointerType: e.pointerType });
+    dragAnchorPath = null; dragPointerId = null;
+  }
+  document.addEventListener('pointerup', endDrag, true);
+  // A pointer that is cancelled (the browser took over the gesture, the finger
+  // left the surface) must still release the source's drag, or its camera stays
+  // held down with nobody holding it.
+  document.addEventListener('pointercancel', endDrag, true);
   document.addEventListener('wheel', function (e) { if (applyingDom || !allow) return; var p = getElementPath(e.target); post({ type: 'SYNC_MIRROR_INPUT', kind: 'wheel', path: p, deltaY: e.deltaY }); }, { capture: true, passive: true });
   document.addEventListener('keydown', function (e) { if (applyingDom || !allow) return; post({ type: 'SYNC_MIRROR_INPUT', kind: 'key', key: e.key }); }, true);
 

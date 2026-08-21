@@ -15,6 +15,22 @@ export const injectedSyncScript = `
     function enterRemote() { remoteDepth++; }
     function exitRemote() { remoteDepth = Math.max(0, remoteDepth - 1); }
 
+    // The mirror agent shares this document and dispatches real pointer and
+    // click events onto the lesson when a student drives it. Those events are
+    // indistinguishable from a local hand here, so blockLocalInteraction below
+    // cancelled them at capture phase whenever this iframe was in a blocked
+    // state — which is exactly what happens when the teacher hands a student
+    // control. "You have control" then meant the student's taps were swallowed
+    // before the lesson ever saw them.
+    //
+    // Exposed rather than guessed at: the mirror wraps its dispatch in these,
+    // so a forwarded tap is treated as remote (which it is). Optional by
+    // design — when this engine is eventually removed from the source iframe,
+    // the mirror simply finds nothing here and dispatches directly.
+    try {
+      window.__mathsliveRemote = { enter: enterRemote, exit: exitRemote };
+    } catch (e) {}
+
     var interactionBlocked = false;
     var presenterMode = false;
     var lockedWindowX = 0;

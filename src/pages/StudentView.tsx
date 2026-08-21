@@ -1392,6 +1392,12 @@ export default function StudentView() {
             // student's scroll reached the teacher with no coordinates, so the
             // teacher's view never moved with them.
             scrollX: e.data.scrollX, scrollY: e.data.scrollY,
+            // WHERE on the element, as fractions of its box. Same lesson as the
+            // scroll fields above, and the same failure: a field the mirror
+            // sends but this relay does not copy is a field the teacher never
+            // sees. Without these, every forwarded tap landed at the centre of
+            // its target — so a tap at 25% of a number line read as 50.
+            fx: e.data.fx, fy: e.data.fy, pointerType: e.data.pointerType,
           },
         });
         return;
