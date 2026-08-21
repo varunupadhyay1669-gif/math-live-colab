@@ -30,7 +30,7 @@ import { Narrator, narrationSupported, getNarrationChoice, setNarrationChoice } 
 import { localTimezone } from "../lib/tz";
 import { socketAuth, isPasscodeError, refusePasscode } from "../lib/passcode";
 import { getClassByRoomCode } from "../lib/classes";
-import { ScreenPeer, shareFailureMessage, screenShareSupported, type ShareStatus } from "../lib/screenShare";
+import { ScreenPeer, shareFailureMessage, screenShareSupported, displayCaptureOptions, type ShareStatus } from "../lib/screenShare";
 import ScreenShareViewer from "../components/ScreenShareViewer";
 import { parseGoals } from "../lib/studentProfile";
 import LessonSwitcher from "../components/LessonSwitcher";
@@ -590,10 +590,21 @@ export default function Room() {
   // its next onLoad must pull + replay the journal to catch up (see
   // handleIframeLoad). Only this transition trips it, so normal join / reconnect
   // / live flow is untouched.
+  // The away->back journal replay is gone with the unmount that made it
+  // necessary. The lesson iframe now stays mounted underneath the whiteboard and
+  // the explanation, so returning to it means making it visible again -- there is
+  // no fresh sim booted on the home screen, and nothing to replay forward.
+  //
+  // That matters beyond the lost position: replay was the drift mechanism.
+  // Re-applying a journal of clicks against a rebuilt DOM is what put the
+  // teacher and the class on different questions in the first place, and it
+  // could only ever be as good as the journal. Not rebuilding beats replaying.
+  //
+  // lessonCatchupRef survives for the self-heal path (resyncLesson bumps
+  // iframeRebuildNonce and forces a REAL remount); only this transition stops
+  // arming it.
   useEffect(() => {
-    const away = whiteboardMode || showTempContent;
-    if (prevAwayRef.current && !away) lessonCatchupRef.current = true;
-    prevAwayRef.current = away;
+    prevAwayRef.current = whiteboardMode || showTempContent;
   }, [whiteboardMode, showTempContent]);
 
   const applySessionState = useCallback((state: any) => {
@@ -1622,6 +1633,39 @@ export default function Room() {
     }
   }, [scrollSyncEnabled, stepLockEnabled, currentStep, zoomLevel, controlHolderName, socket, whiteboardMode, showTempContent, roomId]);
 
+  // ── Which surface is on screen ──
+  //
+  // The lesson iframe is mounted for the whole session now, so "hidden" means
+  // visually hidden, not unmounted. Two lesson documents can therefore be alive
+  // at once (the lesson, still running, underneath an explanation) and exactly
+  // one of them is the class's authoritative view.
+  //
+  // iframeRef keeps the meaning it has everywhere else in this file -- "the
+  // surface the lesson plumbing talks to" -- and is pointed at the active one
+  // rather than being handed to whichever happened to be the only one mounted.
+  // The relay handler already drops anything whose e.source is not
+  // iframeRef.current.contentWindow, so the hidden lesson cannot leak a single
+  // frame to students just by continuing to run.
+  const lessonHidden = whiteboardMode || showTempContent;
+  const lessonFrameRef = useRef<HTMLIFrameElement | null>(null);
+  const tempFrameRef = useRef<HTMLIFrameElement | null>(null);
+
+  const handleSurfaceLoad = useCallback((el: HTMLIFrameElement | null, isActive: boolean) => {
+    // A hidden surface finishing a load is not our channel. Without this, a
+    // lesson reload behind an open explanation would flush the queue into the
+    // wrong document and re-point every subsequent message at it.
+    if (!isActive) return;
+    iframeRef.current = el;
+    handleIframeLoad();
+  }, [handleIframeLoad]);
+
+  // Switching surfaces does not necessarily reload anything -- coming back to a
+  // lesson that never went away fires no load event at all -- so the pointer is
+  // also set here, on the switch itself.
+  useEffect(() => {
+    iframeRef.current = showTempContent ? tempFrameRef.current : lessonFrameRef.current;
+  }, [showTempContent, whiteboardMode, tempContentUrl, iframeUrl]);
+
   // ── Mirror iframe onLoad: behave like a passive student view ──
   const handleMirrorLoad = useCallback(() => {
     mirrorReadyRef.current = true;
@@ -2431,7 +2475,7 @@ export default function Room() {
       return;
     }
     try {
-      const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
+      const stream = await navigator.mediaDevices.getDisplayMedia(displayCaptureOptions());
       myScreenStreamRef.current = stream;
       setMyScreenOn(true);
       // The browser's own "Stop sharing" bar is what most people reach for.
@@ -4123,24 +4167,23 @@ export default function Room() {
                 </div>
               )}
 
-              {showTempContent && tempContent && tempContentUrl ? (
-                // Temporary explanation content overlay — uses same ref so scroll sync works
-                <iframe
-                  ref={iframeRef}
-                  src={tempContentUrl}
-                  className="w-full h-full border-none"
-                  style={{ background: '#ffffff' }}
-                  onLoad={handleIframeLoad}
-                  sandbox={LESSON_IFRAME_SANDBOX}
-                  allow={LESSON_IFRAME_ALLOW}
-                  allowFullScreen
-                />
-              ) : whiteboardMode ? (
-                /* Whiteboard is rendered above (always mounted). When
-                   active, this branch is empty so we don't double-up. */
-                null
-              ) : iframeUrl ? (
-                <div className="w-full h-full flex">
+              {/* LESSON SURFACE — mounted for the whole session, exactly like
+                  <Whiteboard> above and for exactly the same reason.
+                  It used to share a ternary with the whiteboard and the
+                  explanation, so opening either one UNMOUNTED it and destroyed
+                  the running sim: a teacher on question 5 who showed an
+                  explainer came back to question 1, every time.
+                  Hidden with visibility rather than display:none, so the layout
+                  box survives the round trip and every canvas inside it keeps
+                  its measured size — a display:none iframe comes back at zero
+                  width until something fires a resize, which is how a 3D scene
+                  returns blank. */}
+              {iframeUrl && (
+                <div
+                  className="w-full h-full flex"
+                  style={lessonHidden ? { visibility: 'hidden', pointerEvents: 'none' } : undefined}
+                  aria-hidden={lessonHidden || undefined}
+                >
                   <div className={dualView ? "relative flex-1 border-r border-gray-300" : "relative w-full h-full"}>
                     {dualView && (
                       <div className="absolute top-2 left-2 z-10 px-2 py-0.5 rounded text-xs font-semibold"
@@ -4148,9 +4191,9 @@ export default function Room() {
                         Teacher View
                       </div>
                     )}
-                    <iframe ref={iframeRef} src={iframeUrl} className="w-full h-full border-none"
+                    <iframe ref={lessonFrameRef} src={iframeUrl} className="w-full h-full border-none"
                       style={{ background: '#ffffff' }}
-                      onLoad={handleIframeLoad}
+                      onLoad={() => handleSurfaceLoad(lessonFrameRef.current, !lessonHidden)}
                       sandbox={LESSON_IFRAME_SANDBOX}
                       allow={LESSON_IFRAME_ALLOW}
                       allowFullScreen />
@@ -4172,7 +4215,29 @@ export default function Room() {
                     </div>
                   )}
                 </div>
-              ) : (
+              )}
+
+              {/* EXPLANATION — an overlay ON TOP of the still-running lesson,
+                  no longer a replacement for it. It carries the same script trio
+                  as the lesson, so while it is showing it is the authoritative
+                  mirror source and the lesson underneath is ignored (the relay
+                  drops anything that is not the active surface). */}
+              {showTempContent && tempContent && tempContentUrl && (
+                <div style={{ position: 'absolute', inset: 0, zIndex: 6 }}>
+                  <iframe
+                    ref={tempFrameRef}
+                    src={tempContentUrl}
+                    className="w-full h-full border-none"
+                    style={{ background: '#ffffff' }}
+                    onLoad={() => handleSurfaceLoad(tempFrameRef.current, true)}
+                    sandbox={LESSON_IFRAME_SANDBOX}
+                    allow={LESSON_IFRAME_ALLOW}
+                    allowFullScreen
+                  />
+                </div>
+              )}
+
+              {!iframeUrl && !showTempContent && !whiteboardMode && (
                 /* Empty room — let the teacher pick a starting surface.
                    Whiteboard for a blank shared canvas; HTML to upload an
                    interactive simulation. The teacher can switch any time

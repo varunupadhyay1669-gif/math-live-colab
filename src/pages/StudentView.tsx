@@ -8,7 +8,7 @@ import { stepLockScript } from "../lib/stepLockScript";
 import { setupAttentionDetection } from "../lib/attentionDetector";
 import { localTimezone } from "../lib/tz";
 import { socketAuth, isPasscodeError, refusePasscode, apiFetch } from "../lib/passcode";
-import { ScreenPeer, screenShareSupported } from "../lib/screenShare";
+import { ScreenPeer, screenShareSupported, displayCaptureOptions } from "../lib/screenShare";
 import ScreenSharePrompt from "../components/ScreenSharePrompt";
 import TeacherScreenView from "../components/TeacherScreenView";
 import { sounds } from "../lib/sounds";
@@ -155,7 +155,7 @@ export default function StudentView() {
       return;
     }
     try {
-      const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
+      const stream = await navigator.mediaDevices.getDisplayMedia(displayCaptureOptions());
       const peer = new ScreenPeer({
         send: (signal) => socketRef.current?.emit('screen_signal', { roomId, signal }),
         onState: (s) => { if (s === 'failed' || s === 'closed') endShare(true); },
@@ -1338,6 +1338,29 @@ export default function StudentView() {
     }
   }, [scrollSyncEnabled, currentStep, zoomLevel]);
 
+  // ── Which surface is on screen ──
+  //
+  // Twin of the teacher's. The lesson shell stays mounted underneath the
+  // whiteboard and the explanation so returning to it shows the last frame the
+  // teacher sent, instantly, instead of a blank shell waiting to be repainted.
+  // iframeRef keeps its meaning everywhere else and is pointed at the active
+  // surface here.
+  const lessonHidden = whiteboardMode || showTempContent;
+  const lessonFrameRef = useRef<HTMLIFrameElement | null>(null);
+  const tempFrameRef = useRef<HTMLIFrameElement | null>(null);
+
+  const handleSurfaceLoad = useCallback((el: HTMLIFrameElement | null, isActive: boolean) => {
+    if (!isActive) return;   // a hidden surface loading is not our channel
+    iframeRef.current = el;
+    handleIframeLoad();
+  }, [handleIframeLoad]);
+
+  // Coming back to a surface that never went away fires no load event, so the
+  // pointer is set on the switch itself as well.
+  useEffect(() => {
+    iframeRef.current = showTempContent ? tempFrameRef.current : lessonFrameRef.current;
+  }, [showTempContent, whiteboardMode, tempContentDoc, lessonUrl]);
+
   // Re-push zoom when level changes
   useEffect(() => {
     postToIframe({ type: 'REMOTE_ZOOM', zoom: zoomLevel });
@@ -1493,7 +1516,7 @@ export default function StudentView() {
   // delivered. The server broadcasts sync_full_state on EVERY join, which is
   // exactly what recomputes lessonUrl: one student joining went and froze
   // another student, mid-lesson, with no error anywhere.
-  const mountedSurface = whiteboardMode ? null : showTempContent ? tempContentDoc : lessonUrl;
+  const mountedSurface = whiteboardMode ? null : showTempContent ? tempContentDoc : lessonUrl;   // the ACTIVE document
   useEffect(() => {
     iframeReadyRef.current = false;
   }, [mountedSurface]);
@@ -1876,29 +1899,22 @@ export default function StudentView() {
             </div>
           )}
 
-          {showTempContent && tempContent && tempContentDoc ? (
-            // Temporary explanation content overlay — uses same ref so scroll sync works
-            <iframe
-              ref={iframeRef}
-              srcDoc={tempContentDoc}
-              className="w-full h-full border-none"
-              style={{ background: '#ffffff' }}
-              onLoad={handleIframeLoad}
-              sandbox={LESSON_IFRAME_SANDBOX}
-              allow={LESSON_IFRAME_ALLOW}
-              allowFullScreen
-            />
-          ) : whiteboardMode ? (
-            // Whiteboard rendered above (always mounted; isActive controls visibility)
-            null
-          ) : lessonUrl ? (
-            <>
+          {/* LESSON SURFACE — mounted for the whole session (see <Whiteboard>
+              above, same reasoning). Hidden with visibility, not display:none,
+              so the layout box and every canvas size inside it survive a trip
+              through the whiteboard or an explanation. */}
+          {lessonUrl && (
+            <div
+              className="w-full h-full relative"
+              style={lessonHidden ? { visibility: 'hidden', pointerEvents: 'none' } : undefined}
+              aria-hidden={lessonHidden || undefined}
+            >
               <iframe
-                ref={iframeRef}
+                ref={lessonFrameRef}
                 src={lessonUrl}
                 className="w-full h-full border-none"
                 style={{ background: '#ffffff' }}
-                onLoad={handleIframeLoad}
+                onLoad={() => handleSurfaceLoad(lessonFrameRef.current, !lessonHidden)}
                 sandbox={LESSON_IFRAME_SANDBOX}
                 allow={LESSON_IFRAME_ALLOW}
                 allowFullScreen
@@ -1960,8 +1976,27 @@ export default function StudentView() {
                   }}
                 />
               )}
-            </>
-          ) : (
+            </div>
+          )}
+
+          {/* EXPLANATION — an overlay on top of the lesson shell, which stays
+              mounted underneath holding the teacher's last painted frame. */}
+          {showTempContent && tempContent && tempContentDoc && (
+            <div style={{ position: 'absolute', inset: 0, zIndex: 6 }}>
+              <iframe
+                ref={tempFrameRef}
+                srcDoc={tempContentDoc}
+                className="w-full h-full border-none"
+                style={{ background: '#ffffff' }}
+                onLoad={() => handleSurfaceLoad(tempFrameRef.current, true)}
+                sandbox={LESSON_IFRAME_SANDBOX}
+                allow={LESSON_IFRAME_ALLOW}
+                allowFullScreen
+              />
+            </div>
+          )}
+
+          {!lessonUrl && !showTempContent && !whiteboardMode && (
             <div className="flex items-center justify-center h-full" style={{ background: 'var(--bg-primary)' }}>
               <div className="text-center animate-slide-up p-12 rounded-2xl"
                 style={{ background: 'var(--bg-card)', border: '1px solid var(--border-subtle)', boxShadow: 'var(--shadow-lg)' }}>

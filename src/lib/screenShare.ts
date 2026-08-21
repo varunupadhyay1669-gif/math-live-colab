@@ -25,6 +25,34 @@ export function screenShareSupported(nav: Partial<Navigator> = navigator): boole
   return typeof md?.getDisplayMedia === 'function';
 }
 
+/**
+ * Capture options for every getDisplayMedia call in the app.
+ *
+ * selfBrowserSurface: 'include' is the important one, and it is not a nicety.
+ * Chrome defaults it to 'exclude', which means the tab you are calling FROM is
+ * deliberately left out of the picker. So a tutor pressing "My screen" inside
+ * MathsLive was shown every window and tab except MathsLive itself — the one
+ * thing they were trying to show. There is no way to reach it from that dialog;
+ * the browser has already removed it. Nothing in the UI can explain that away,
+ * which is why it read as a missing feature.
+ *
+ * surfaceSwitching: 'include' lets them change which tab or window is being
+ * shared from the browser's own bar, without stopping and re-picking (and
+ * without every student's connection being torn down and rebuilt).
+ *
+ * Both are ignored by browsers that do not know them, so this is safe to send
+ * everywhere.
+ */
+export function displayCaptureOptions(): DisplayMediaStreamOptions {
+  return {
+    video: true,
+    audio: false,
+    // Not in every TS lib version yet; the values are from the spec.
+    selfBrowserSurface: 'include',
+    surfaceSwitching: 'include',
+  } as DisplayMediaStreamOptions;
+}
+
 /** A plain-English reason, for the teacher's panel — never a raw DOM error. */
 export function shareFailureMessage(e: unknown, studentName: string): string {
   const name = (e as { name?: string })?.name;
