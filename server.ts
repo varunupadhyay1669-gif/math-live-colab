@@ -2025,14 +2025,18 @@ Build a widget that teaches: ${safePrompt}`;
         // journal (pristine boot + full replay) is the primary late-join
         // mechanism and must survive snapshots. Only real content baselines
         // (upload / run / switch / restore / force / reset) clear it.
-        if (isForceSync) {
-          // Force IS a new baseline (everyone rebuilds from this snapshot):
-          // pre-force events are baked into it, so the journal restarts.
-          room.lastRunHtml = html;
-          const file = room.files.find(f => f.id === room.activeFileId);
-          if (file) file.html = html;
-          resetEventJournal(room);
-        }
+        // A force used to REWRITE the lesson here — lastRunHtml and the saved
+        // file both replaced by a serialized DOM, and every client rebuilt from
+        // it. That is what made the button that promises to fix things reset the
+        // class: the lesson's scripts re-run against an already-rendered page, so
+        // a quiz returns to question 1 and a lesson that appends its canvas on
+        // load ends up with two.
+        //
+        // In the mirror model a resync means "send my screen again", which is a
+        // keyframe from the source — never a new lesson. The snapshot is still
+        // stored as liveSnapshotHtml above (a fallback boot state), but it is no
+        // longer allowed to become the lesson.
+        if (isForceSync) resetEventJournal(room);
       }
       const revision = bumpRevision(room);
       // What a client should boot from right now: pristine when a journal will
@@ -2042,10 +2046,10 @@ Build a widget that teaches: ${safePrompt}`;
       const deliverHtml = (hasCanvas || replayableNow) ? (room.lastRunHtml || getSourceHtml(room) || html) : html;
 
       if (isForceSync) {
-        // Genuine force-sync: every client re-renders (full iframe rebuild, so
-        // the sim's scripts re-run from a clean state).
+        // State only — no dom_snapshot, so no client rebuilds its iframe. The
+        // teacher's source pushes a fresh keyframe (see the force_sync handler),
+        // which is what actually brings a stale student back.
         broadcastFullState(roomId, room, 'force_sync', requestId);
-        io.to(roomId).emit('dom_snapshot', { fileId: room.activeFileId, html: deliverHtml, revision, requestId });
       } else {
         // Snapshot-ack triggered by a join/retry: ONLY the late-joining
         // students need this HTML. Existing students stay in sync through the
@@ -2076,6 +2080,9 @@ Build a widget that teaches: ${safePrompt}`;
 
       const requestId = `force-${socket.id}-${Date.now()}`;
       if (room.teacherSocketId) {
+        // The real work: tell the source to send a full frame, which every
+        // follower paints. Cheap, immediate, and it cannot restart anything.
+        io.to(room.teacherSocketId).emit('mirror_request', {});
         io.to(room.teacherSocketId).emit('request_html_sync', { requestId, reason: 'force_sync' });
         logSync('snapshot_request', { roomId, revision: room.revision, requestId, role: 'teacher', socketId: socket.id, reason: 'force_sync' });
       } else {
@@ -3293,6 +3300,19 @@ Build a widget that teaches: ${safePrompt}`;
     // encode well past 5MB, and Socket.IO drops an oversized frame by KILLING
     // the connection: the student's screen freezes and they get bounced, with
     // nothing in the UI explaining why.
+    // Only the SEATED teacher may stream the class's screen.
+    //
+    // Checking the role alone was not enough. When a teacher opens the room in a
+    // second tab, the new socket takes the seat and the old one is told it has
+    // been replaced — but it stays in room.users as a teacher until it actually
+    // disconnects, and its lesson iframe keeps running and keeps streaming. Two
+    // independent lessons then fed the same students, and the class flickered
+    // between them.
+    function isMirrorSource(room: RoomData | undefined, socketId: string): boolean {
+      if (!isMember(room, socketId)) return false;
+      return room!.teacherSocketId === socketId && room!.users.get(socketId)?.role === 'teacher';
+    }
+
     const MAX_MIRROR_FRAME = 3 * 1024 * 1024;
     socket.on('mirror_dom', ({ roomId, body, scrollX, scrollY, attrs, head, h }: { roomId: string; body: string; scrollX?: number; scrollY?: number; attrs?: string; head?: string | null; h?: string }) => {
       if (typeof roomId !== 'string' || typeof body !== 'string') return;
@@ -3301,7 +3321,7 @@ Build a widget that teaches: ${safePrompt}`;
         + (typeof attrs === 'string' ? attrs.length : 0);
       if (frameChars > MAX_MIRROR_FRAME) return;
       const room = rooms.get(roomId);
-      if (!isMember(room, socket.id) || room.users.get(socket.id)?.role !== 'teacher') return;
+      if (!isMirrorSource(room, socket.id)) return;
       room.mirrorBody = body;
       // Cache the full styling envelope too, so a late joiner served from cache
       // renders with the same body attributes and runtime CSS as everyone else.
@@ -3316,7 +3336,7 @@ Build a widget that teaches: ${safePrompt}`;
       if (typeof roomId !== 'string' || typeof h !== 'string') return;
       if (!checkRateLimit(socket.id, true)) return;
       const room = rooms.get(roomId);
-      if (!isMember(room, socket.id) || room.users.get(socket.id)?.role !== 'teacher') return;
+      if (!isMirrorSource(room, socket.id)) return;
       room.mirrorHash = h;
       socket.to(roomId).emit('mirror_ping', { h });
     });
@@ -3324,14 +3344,14 @@ Build a widget that teaches: ${safePrompt}`;
       if (typeof roomId !== 'string' || !Array.isArray(canvases)) return;
       if (!checkRateLimit(socket.id, true)) return;
       const room = rooms.get(roomId);
-      if (!isMember(room, socket.id) || room.users.get(socket.id)?.role !== 'teacher') return;
+      if (!isMirrorSource(room, socket.id)) return;
       socket.to(roomId).emit('mirror_canvas', { canvases });
     });
     socket.on('mirror_scroll', ({ roomId, scrollX, scrollY }: { roomId: string; scrollX?: number; scrollY?: number }) => {
       if (typeof roomId !== 'string') return;
       if (!checkRateLimit(socket.id, true)) return;
       const room = rooms.get(roomId);
-      if (!isMember(room, socket.id) || room.users.get(socket.id)?.role !== 'teacher') return;
+      if (!isMirrorSource(room, socket.id)) return;
       // Respect the teacher's scroll-sync ("Linked") toggle. Without this the
       // mirror dragged every student to the teacher's scroll position even when
       // the teacher had explicitly UNLINKED scrolling — the toggle did nothing.
@@ -3457,10 +3477,15 @@ Build a widget that teaches: ${safePrompt}`;
       if (!requireTeacher(room, socket.id)) return;
       if (typeof studentId !== 'string' || !room.users.has(studentId)) return;
       emitSessionState(studentId, roomId, room, 'force_sync', `resync-${studentId}-${Date.now()}`);
-      const html = room.liveSnapshotHtml || room.lastRunHtml || getSourceHtml(room);
-      if (html) {
-        io.to(studentId).emit('dom_snapshot', { fileId: room.activeFileId, html, revision: room.revision, requestId: `resync-${Date.now()}` });
+      // Serve the cached frame straight away, then ask the source for a fresh
+      // one. Pushing a dom_snapshot here rebuilt the student's iframe, which
+      // restarted the lesson on their screen — the opposite of catching up.
+      if (room.mirrorBody) {
+        io.to(studentId).emit('mirror_dom', {
+          body: room.mirrorBody, attrs: room.mirrorAttrs, head: room.mirrorHead, h: room.mirrorHash,
+        });
       }
+      if (room.teacherSocketId) io.to(room.teacherSocketId).emit('mirror_request', {});
       logSync('resync_student', { roomId, revision: room.revision, socketId: studentId });
     });
 
@@ -3494,6 +3519,7 @@ Build a widget that teaches: ${safePrompt}`;
       if (!requireTeacher(room, socket.id)) return;
       const bm = room.bookmarks.find(b => b.id === bookmarkId);
       if (!bm) return;
+      const previousHtml = room.lastRunHtml;
       // Rewind canonical state. The bookmark keeps its own deep copies, so we
       // hand out fresh clones — restoring twice must work.
       room.lastRunHtml = bm.html;
@@ -3508,8 +3534,18 @@ Build a widget that teaches: ${safePrompt}`;
       // client; the run_preview rebroadcast rebuilds every iframe from the
       // bookmarked HTML (clean script re-run — same as Force Sync).
       broadcastFullState(roomId, room, 'restore');
-      if (bm.html) {
+      // Only rebuild the lesson when the bookmark actually holds a DIFFERENT
+      // lesson. Re-pushing identical HTML restarted a running simulation from
+      // the top for the whole class — so restoring a bookmark to get the
+      // whiteboard back also threw away the question everyone was on.
+      //
+      // A running simulation cannot be rewound by replacing its markup; the
+      // whiteboard, annotations and step CAN be, and those are what a bookmark
+      // is really for.
+      if (bm.html && bm.html !== previousHtml) {
         io.to(roomId).emit('run_preview', { fileId: room.activeFileId, html: bm.html, revision });
+      } else if (room.teacherSocketId) {
+        io.to(room.teacherSocketId).emit('mirror_request', {});
       }
       io.to(roomId).emit('step_changed', { step: room.currentStep, revision });
       logSync('bookmark_restore', { roomId, revision, reason: bm.name });

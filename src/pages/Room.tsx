@@ -668,7 +668,12 @@ export default function Room() {
     if (typeof state.claimed === 'boolean') setClaimed(state.claimed);
     if (state.claimedBy !== undefined) setClaimedBy(state.claimedBy);
     if (typeof state.expiresAt === 'number') setExpiresAt(state.expiresAt);
-    const html = state.effectiveHtml || state.liveSnapshotHtml || state.lastRunHtml || state.sourceHtml;
+    // The teacher's iframe IS the lesson, so it boots from the pristine source —
+    // never from a serialized DOM. A snapshot has already-rendered markup in it;
+    // running the lesson's scripts over that re-initialises a quiz to question 1
+    // and gives a lesson that appends its canvas on load a second canvas. The
+    // snapshot remains a fine boot state for a FOLLOWER, which runs no scripts.
+    const html = state.lastRunHtml || state.sourceHtml || state.effectiveHtml;
     if (html) {
       setHtmlCode(state.sourceHtml || html);
       setSimPreviewHtml(html);
@@ -1646,7 +1651,11 @@ export default function Room() {
   // The relay handler already drops anything whose e.source is not
   // iframeRef.current.contentWindow, so the hidden lesson cannot leak a single
   // frame to students just by continuing to run.
-  const lessonHidden = whiteboardMode || showTempContent;
+  // A tab that has lost the teacher's seat must stop streaming. The server now
+  // refuses its frames anyway, but leaving the lesson mounted keeps a second
+  // simulation running, burning CPU and firing timers, for a tab whose only
+  // remaining job is to say it was replaced.
+  const lessonHidden = whiteboardMode || showTempContent || teacherReplaced;
   const lessonFrameRef = useRef<HTMLIFrameElement | null>(null);
   const tempFrameRef = useRef<HTMLIFrameElement | null>(null);
 
@@ -1790,10 +1799,16 @@ export default function Room() {
       // remount + full-journal catch-up so the teacher snaps back onto the
       // student's real screen. Rate-limited inside forceLessonResync. Must NOT
       // fall through to the interaction relay (it's not a real interaction).
-      if (type === 'SYNC_REPLAY_MISS') {
-        forceLessonResync('remote-click missed: ' + (e.data.path || '?'));
-        return;
-      }
+      // A replayed click that could not find its target used to remount this
+      // iframe and replay the whole journal again — rate-limited to once per 4s
+      // but with no ceiling, so a lesson the journal could never reproduce
+      // rebuilt itself every four seconds, pushing a different screen to the
+      // class each time. That is the best candidate for the "sometimes weird
+      // things happen" nobody could reproduce.
+      //
+      // In the mirror model there is nothing to repair here: this iframe IS the
+      // lesson, and it cannot be out of step with itself. Drop the signal.
+      if (type === 'SYNC_REPLAY_MISS') return;
 
       // Only relay actual SYNC_ interaction events
       if (type.startsWith('SYNC_')) {

@@ -1125,7 +1125,7 @@ export const injectedSyncScript = `
           // build. Leaving them in the serialized snapshot meant force-sync
           // wrote them into the saved file, and each rebuild stacked another
           // copy (N duplicate message listeners after N force-syncs).
-          var injected = htmlClone.querySelectorAll('#mathslive-sync-script, #mathslive-steplock-script');
+          var injected = htmlClone.querySelectorAll('#mathslive-sync-script, #mathslive-steplock-script, #mathslive-mirror-script');
           injected.forEach(function(script) { script.parentNode && script.parentNode.removeChild(script); });
         } catch(ignore) {}
         window.parent.postMessage({

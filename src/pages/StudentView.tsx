@@ -37,12 +37,14 @@ import Whiteboard from "../components/Whiteboard";
 // teacher — the class of "student stuck on the map / wrong quiz question" bugs
 // becomes structurally impossible. A driving student's input is forwarded to the
 // teacher's authoritative lesson and the resulting DOM streams back.
-// Escape hatch: localStorage.mathslive_sync === 'replay' falls back to the
-// classic input-replay engine (no redeploy needed) if a specific lesson ever
-// misbehaves under mirroring.
-const MIRROR_MODE = (() => {
-  try { return localStorage.getItem('mathslive_sync') !== 'replay'; } catch { return true; }
-})();
+// The mirror is the sync model, full stop.
+//
+// This used to read localStorage.mathslive_sync — a per-device escape hatch back
+// to the old replay engine. Invisible, persistent, and per-device: set once on a
+// student's iPad during some past debugging and that student drifts from the
+// class forever, with nothing in the UI to explain it and no way for the tutor
+// to see it. A sync model is a property of the room, not of a browser.
+const MIRROR_MODE = true;
 
 // ── Types ──
 interface FileEntry {
