@@ -272,7 +272,19 @@ export default function Room() {
   // Memoize blob URL to prevent iframe from reloading on every render
   const tempContentUrl = useMemo(() => {
     if (!tempContent) return null;
-    const scripts = seededSyncScript(randomSeed) + stepLockScript;
+    // The SAME script trio the main lesson gets, and the mirror source is the
+    // part that matters. Without it an explanation was never mirrored at all:
+    // the teacher ran one copy, every student ran their own, and the classic
+    // replay engine was the only thing holding them together. A stateful
+    // explainer — a six-question ladder, a stepper, anything remembering where
+    // it is — diverged the moment anyone touched it or joined late. Measured on
+    // a six-question quiz opened as an explanation: teacher on Q3, one student
+    // on Q1, another on Q4, all in the same class at the same moment.
+    //
+    // Only one lesson iframe is mounted at a time (this one replaces the
+    // lesson's while it is showing), so there is exactly one source streaming
+    // and no crosstalk between the two.
+    const scripts = seededSyncScript(randomSeed) + stepLockScript + mirrorScriptFor('source');
     let content = tempContent.html;
     if (content.includes("<head>")) {
       content = content.replace("<head>", "<head>" + scripts);
@@ -1510,8 +1522,22 @@ export default function Room() {
 
   // ── Helper: safely post message to iframe (queues if not ready) ──
   const postToIframe = useCallback((msg: any) => {
-    if (iframeReadyRef.current && iframeRef.current?.contentWindow) {
-      iframeRef.current.contentWindow.postMessage(msg, '*');
+    const win = iframeRef.current?.contentWindow;
+    // See the student-side twin of this: a load event we never saw must not mute
+    // the iframe permanently. Ask the document whether it is loaded rather than
+    // trusting a flag that nothing is coming to re-set.
+    let ready = iframeReadyRef.current;
+    if (!ready && win) {
+      try { ready = iframeRef.current?.contentDocument?.readyState === 'complete'; } catch { ready = false; }
+      if (ready) {
+        iframeReadyRef.current = true;
+        const stalled = pendingMessagesRef.current;
+        pendingMessagesRef.current = [];
+        for (const m of stalled) win.postMessage(m, '*');
+      }
+    }
+    if (ready && win) {
+      win.postMessage(msg, '*');
     } else {
       // Cap pending queue to prevent memory leak
       if (pendingMessagesRef.current.length < 500) {
@@ -1779,8 +1805,16 @@ export default function Room() {
     // to drift the teacher's epoch ahead of the student's, after which all
     // student interaction events were silently dropped.
     syncEpochRef.current += 1;
-    iframeReadyRef.current = false;
   }, [iframeUrl, showTempContent, whiteboardMode]);
+
+  // Readiness tracks the MOUNTED iframe, not the dependency set the epoch needs.
+  // An iframeUrl change while an explanation is showing was clearing the flag for
+  // an iframe that is not on screen and will not load again -- after which every
+  // REQUEST_HTML and interaction-mode push queued instead of being delivered.
+  const mountedSurface = whiteboardMode ? null : showTempContent ? tempContentUrl : iframeUrl;
+  useEffect(() => {
+    iframeReadyRef.current = false;
+  }, [mountedSurface]);
 
 
   // Mirror iframe readiness must reset when the mirror is created/destroyed

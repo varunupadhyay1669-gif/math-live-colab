@@ -308,8 +308,14 @@ export default function StudentView() {
   // the lesson document: no object URL means no revoke to race the load.
   const tempContentDoc = useMemo(() => {
     if (!tempContent) return null;
-    const scripts = seededSyncScript(randomSeed) + stepLockScript;
-    let content = tempContent.html;
+    // Built exactly like the lesson shell above, and for the same reason: an
+    // explanation that runs its own scripts is a second, independent instance,
+    // not a view of the teacher's. Two students who each clicked once ended up
+    // on different questions of the same explainer, with no way back.
+    const scripts = MIRROR_MODE
+      ? mirrorScriptFor('follower')
+      : seededSyncScript(randomSeed) + stepLockScript;
+    let content = MIRROR_MODE ? stripLessonScripts(tempContent.html) : tempContent.html;
     if (content.includes("<head>")) {
       content = content.replace("<head>", "<head>" + scripts);
     } else {
@@ -1268,8 +1274,25 @@ export default function StudentView() {
 
   // ── Helper: safely post message to iframe (queues if not ready) ──
   const postToIframe = useCallback((msg: any) => {
-    if (iframeReadyRef.current && iframeRef.current?.contentWindow) {
-      iframeRef.current.contentWindow.postMessage(msg, '*');
+    const win = iframeRef.current?.contentWindow;
+    // A load event we never saw must not mute this student for the rest of the
+    // lesson. "Ready" is only ever a proxy for "the document exists and has
+    // finished loading" — so when the flag is false, ASK the document instead
+    // of assuming the worst. Without this, one missed onLoad meant every mirror
+    // frame went to the pending queue and the student sat frozen on whatever
+    // question was on screen at the time, while the rest of the class moved on.
+    let ready = iframeReadyRef.current;
+    if (!ready && win) {
+      try { ready = iframeRef.current?.contentDocument?.readyState === 'complete'; } catch { ready = false; }
+      if (ready) {
+        iframeReadyRef.current = true;
+        const stalled = pendingMessagesRef.current;
+        pendingMessagesRef.current = [];
+        for (const m of stalled) win.postMessage(m, '*');
+      }
+    }
+    if (ready && win) {
+      win.postMessage(msg, '*');
     } else {
       // Cap pending queue to prevent memory leak
       if (pendingMessagesRef.current.length < 500) {
@@ -1457,9 +1480,23 @@ export default function StudentView() {
 
   useEffect(() => {
     syncEpochRef.current += 1;
-    // Reset iframe readiness when content source changes — the new iframe needs to fire onLoad
-    iframeReadyRef.current = false;
   }, [lessonUrl, showTempContent, whiteboardMode]);
+
+  // Readiness belongs to the iframe that is actually MOUNTED, which is why this
+  // is separate from the epoch above (the epoch must keep the teacher's exact
+  // dependency set to stay in lock-step; readiness must not).
+  //
+  // Clearing readiness on any of those three used to mute the student outright.
+  // While an explanation is showing, the lesson iframe is not mounted -- so a
+  // lessonUrl recompute cleared the flag for a document that was never going to
+  // fire onLoad again, and from then on every mirror frame was queued instead of
+  // delivered. The server broadcasts sync_full_state on EVERY join, which is
+  // exactly what recomputes lessonUrl: one student joining went and froze
+  // another student, mid-lesson, with no error anywhere.
+  const mountedSurface = whiteboardMode ? null : showTempContent ? tempContentDoc : lessonUrl;
+  useEffect(() => {
+    iframeReadyRef.current = false;
+  }, [mountedSurface]);
 
 
   // ── Push interaction mode to iframe ──
