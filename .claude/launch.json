@@ -4,7 +4,19 @@
     {
       "name": "mathslive-prod",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "start"],
+      "runtimeArgs": [
+        "run",
+        "start"
+      ],
+      "port": 4000
+    },
+    {
+      "name": "mathslive-dev",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "run",
+        "dev"
+      ],
       "port": 4000
     }
   ]

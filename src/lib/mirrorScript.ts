@@ -43,9 +43,31 @@ export const mirrorScript = `
     while (el && el.nodeType === 1) {
       var sel = el.nodeName.toLowerCase();
       if (el.id) { sel += '#' + esc(el.id); path.unshift(sel); break; }
-      var sib = el, nth = 1;
-      while ((sib = sib.previousElementSibling)) nth++;
-      sel += ':nth-child(' + nth + ')';
+      // nth-OF-TYPE, not nth-child, and the distinction is the whole bug.
+      //
+      // The two sides do not hold identical DOMs: the follower has the lesson's
+      // <script> tags stripped, because running the lesson twice is exactly
+      // what the mirror exists to prevent. nth-child counts EVERY element, so
+      // removing a script renumbers every sibling after it.
+      //
+      // A real lesson (a Three.js bus simulation) did this:
+      //
+      //   teacher body: div, div, div, script, canvas   canvas = nth-child(5)
+      //   student body: div, div, div, canvas           canvas = nth-child(4)
+      //
+      // The teacher sent "body > canvas:nth-child(5)", which on the student
+      // addressed nothing at all. The page mirrored perfectly and the 3D scene
+      // never appeared. It only bites when an element sits AFTER a <script> in
+      // the same parent — which is precisely where a renderer.domElement
+      // appended to document.body ends up.
+      //
+      // nth-of-type counts only siblings of the same tag, so scripts coming and
+      // going cannot renumber a canvas. This also fixes the mirror image of the
+      // fault: a student's forwarded click carried a path computed on the
+      // stripped DOM and was resolved against the teacher's unstripped one.
+      var sib = el, nth = 1, tag = el.nodeName;
+      while ((sib = sib.previousElementSibling)) { if (sib.nodeName === tag) nth++; }
+      sel += ':nth-of-type(' + nth + ')';
       path.unshift(sel);
       el = el.parentNode;
       if (el && el.nodeName === 'BODY') { path.unshift('body'); break; }
@@ -263,7 +285,7 @@ export const mirrorScript = `
             // canvases with no visible quality loss at these sizes. A browser
             // that doesn't support WebP silently returns PNG from toDataURL,
             // so this is safe to request unconditionally.
-            out.push({ sel: getElementPath(c), w: c.width, h: c.height, data: c.toDataURL('image/webp', 0.6) });
+            out.push({ sel: getElementPath(c), idx: i, w: c.width, h: c.height, data: c.toDataURL('image/webp', 0.6) });
           } catch (e) {
             // A canvas that has drawn a cross-origin image is "tainted":
             // toDataURL throws SecurityError forever. Previously swallowed, so
@@ -659,11 +681,25 @@ export const mirrorScript = `
     post({ type: 'MIRROR_STALE' });
   }
 
+  // Last resort when the selector will not resolve. The source counts canvases
+  // in document order and sends that index next to the path; stripping <script>
+  // tags never removes or reorders a canvas, so the Nth canvas here is the Nth
+  // canvas there even when the two DOMs disagree about everything else.
+  //
+  // This sits behind the nth-of-type fix in getElementPath rather than replacing
+  // it: it also covers a teacher and a student left on different builds by a
+  // mid-lesson deploy, and any future markup difference nobody has thought of.
+  function canvasByIndex(i) {
+    if (typeof i !== 'number' || i < 0) return null;
+    var all = document.querySelectorAll('canvas');
+    return i < all.length ? all[i] : null;
+  }
+
   function paintCanvases(list) {
     lastCanvasList = list;
     for (var i = 0; i < list.length; i++) {
       (function (item) {
-        var c = findElement(item.sel);
+        var c = findElement(item.sel) || canvasByIndex(item.idx);
         // The canvas this frame belongs to is not in our DOM yet.
         //
         // Routine for a 3D lesson: Three.js appends renderer.domElement from
