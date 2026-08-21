@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { LESSON_IFRAME_SANDBOX, LESSON_IFRAME_ALLOW } from "../lib/iframeAttrs";
+import { apiFetch } from "../lib/passcode";
 
 // Standalone viewer for a quick-deploy page (drop HTML on the landing page →
 // /p/:id). It renders the REAL uploaded HTML with scripts intact — the visitor
@@ -26,7 +27,10 @@ export default function DeployView() {
     setState({ status: "loading" });
     (async () => {
       try {
-        const res = await fetch(`/api/room/${pageId}/content`, { headers: { Accept: "application/json" } });
+        // Passcode-gated, like every endpoint that hands out lesson HTML. Sent
+        // without the code this answered 401 and the visitor got a bare status
+        // number with nothing they could do about it.
+        const res = await apiFetch(`/api/room/${pageId}/content`, { headers: { Accept: "application/json" } });
         if (cancelled) return;
         if (res.status === 404 || res.status === 204) { setState({ status: "missing" }); return; }
         if (!res.ok) { setState({ status: "error", message: `Couldn't load this page (${res.status}).` }); return; }

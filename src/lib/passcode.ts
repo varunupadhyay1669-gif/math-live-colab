@@ -70,3 +70,43 @@ export async function passcodeIsRequired(): Promise<boolean> {
   // brings the prompt up anyway.
   return false;
 }
+
+/** The event that brings the prompt back up. */
+export const PASSCODE_REFUSED = 'mathslive:passcode-refused';
+
+export interface PasscodeRefusedDetail {
+  /** True when a code was stored and rejected; false when none was ever entered. */
+  hadCode: boolean;
+}
+
+/**
+ * fetch() for the endpoints the server gates, with the passcode attached.
+ *
+ * Three HTTP endpoints do real work and check the passcode: quick-deploy
+ * publish, the /p/:id viewer, and the student's content fallback. Every one of
+ * them called plain fetch(), so none of them ever sent the code and all three
+ * returned 401 the moment a SITE_PASSCODE was set. Quick deploy was the visible
+ * casualty — "Deploy now" answered with the raw string passcode_required and no
+ * way to supply one, because the gate only ever listened to the socket.
+ *
+ * Attaching the header is the fix; re-arming the gate on a refusal is what turns
+ * the remaining cases (no code stored, or a stale one) into a prompt instead of
+ * a dead end.
+ */
+export function refusePasscode(): void {
+  const detail: PasscodeRefusedDetail = { hadCode: !!storedPasscode() };
+  window.dispatchEvent(new CustomEvent(PASSCODE_REFUSED, { detail }));
+}
+
+export async function apiFetch(input: string, init: RequestInit = {}): Promise<Response> {
+  const res = await fetch(input, {
+    ...init,
+    headers: { ...(init.headers as Record<string, string> | undefined), ...passcodeHeaders() },
+  });
+  if (res.status === 401) {
+    // Read a COPY: the caller still needs to consume the body itself.
+    const body = await res.clone().json().catch(() => null) as { error?: string } | null;
+    if (body?.error === 'passcode_required') refusePasscode();
+  }
+  return res;
+}

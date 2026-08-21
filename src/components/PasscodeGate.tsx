@@ -1,5 +1,8 @@
 import { useEffect, useState, type ReactNode, type FormEvent } from 'react';
-import { passcodeIsRequired, storedPasscode, rememberPasscode, forgetPasscode } from '../lib/passcode';
+import {
+  passcodeIsRequired, storedPasscode, rememberPasscode, forgetPasscode,
+  PASSCODE_REFUSED, type PasscodeRefusedDetail,
+} from '../lib/passcode';
 
 // The passcode prompt.
 //
@@ -25,18 +28,25 @@ export default function PasscodeGate({ children }: Props) {
     return () => { cancelled = true; };
   }, []);
 
-  // A refused handshake anywhere in the app means the stored code is wrong or
-  // stale — drop it and ask again, rather than leaving someone staring at a
-  // room that silently never connects.
+  // A refusal anywhere in the app — the socket handshake, or one of the gated
+  // HTTP endpoints — means we need a code we do not have. Ask for it, rather
+  // than leaving someone staring at a room that silently never connects or a
+  // button that answers with an error code.
   useEffect(() => {
-    const onRefused = () => {
+    const onRefused = (e: Event) => {
+      // Two different situations wear the same 401, and telling someone their
+      // code was rejected when they were never asked for one sends them looking
+      // for a mistake they did not make.
+      const hadCode = (e as CustomEvent<PasscodeRefusedDetail>).detail?.hadCode ?? true;
       forgetPasscode();
       setEntered('');
-      setError('That code was not accepted. Try again.');
+      setError(hadCode
+        ? 'That code was not accepted. Try again.'
+        : 'This site needs an access code before it can do that.');
       setRequired(true);
     };
-    window.addEventListener('mathslive:passcode-refused', onRefused);
-    return () => window.removeEventListener('mathslive:passcode-refused', onRefused);
+    window.addEventListener(PASSCODE_REFUSED, onRefused);
+    return () => window.removeEventListener(PASSCODE_REFUSED, onRefused);
   }, []);
 
   // Still asking the server, or no gate on this deployment.

@@ -3,8 +3,39 @@ import { useNavigate } from "react-router-dom";
 import { v4 as uuidv4 } from "uuid";
 import { savedBoards, templates, type SavedBoard, type LessonTemplate } from "../lib/prefs";
 import { useAuth } from "../lib/auth";
+import { apiFetch } from "../lib/passcode";
 
 type Mode = null | "teacher" | "student" | "deploy";
+
+// The server answers with machine-readable codes; a person should never be
+// shown one. "passcode_required" appearing verbatim under the Deploy button —
+// with no field to type a passcode into — is what sent someone looking for a
+// bug in their HTML.
+function deployErrorText(code: unknown, status: number): string {
+  if (typeof code === "string" && code) {
+    if (code === "passcode_required") return "This site needs an access code — enter it above and deploy again.";
+    // Anything else the server chose to word for a human (size limits, empty
+    // HTML) is already a sentence; pass it through rather than burying it.
+    if (/[ .]/.test(code)) return code;
+  }
+  return `Deploy failed (${status}).`;
+}
+
+// Where a half-written deploy waits out the passcode prompt.
+//
+// The prompt replaces the whole app while it is up, so the Home page unmounts
+// and takes any pasted HTML with it. Losing a lesson you just pasted because
+// you were asked for a code is a poor trade; this survives it. sessionStorage,
+// not localStorage — it belongs to this tab and this sitting.
+const DEPLOY_DRAFT = "mathslive:deploy-draft";
+function readDeployDraft(): { html: string; name: string } {
+  try {
+    const raw = sessionStorage.getItem(DEPLOY_DRAFT);
+    if (!raw) return { html: "", name: "" };
+    const d = JSON.parse(raw) as { html?: unknown; name?: unknown };
+    return { html: typeof d.html === "string" ? d.html : "", name: typeof d.name === "string" ? d.name : "" };
+  } catch { return { html: "", name: "" }; }
+}
 
 // Tiny "5m ago" / "2h ago" / "yesterday" helper. Avoid depending on a
 // date library for one little label.
@@ -82,12 +113,20 @@ export default function Home() {
 
   // ── Quick Deploy: drop HTML → instant shareable page (no login, 24h) ──
   const [deployTab, setDeployTab] = useState<"paste" | "upload">("paste");
-  const [deployHtml, setDeployHtml] = useState("");
-  const [deployName, setDeployName] = useState("");
+  const [deployHtml, setDeployHtml] = useState(() => readDeployDraft().html);
+  const [deployName, setDeployName] = useState(() => readDeployDraft().name);
   const [deploying, setDeploying] = useState(false);
   const [deployError, setDeployError] = useState<string | null>(null);
   const [deployedId, setDeployedId] = useState<string | null>(null);
   const [deployCopied, setDeployCopied] = useState(false);
+
+  // Mirror the draft as it is typed, so an interruption cannot lose it.
+  useEffect(() => {
+    try {
+      if (deployHtml || deployName) sessionStorage.setItem(DEPLOY_DRAFT, JSON.stringify({ html: deployHtml, name: deployName }));
+      else sessionStorage.removeItem(DEPLOY_DRAFT);
+    } catch { /* full or private mode — the draft is a convenience, not the work */ }
+  }, [deployHtml, deployName]);
 
   const publishHtml = async () => {
     const html = deployHtml;
@@ -95,14 +134,20 @@ export default function Home() {
     setDeploying(true);
     setDeployError(null);
     try {
-      const res = await fetch("/api/publish", {
+      // apiFetch, not fetch: /api/publish is passcode-gated, and a plain fetch
+      // never sent the code — so wherever a SITE_PASSCODE is set this button
+      // could only fail. apiFetch also re-arms the passcode prompt on a 401,
+      // which is the only way to supply a code you were never asked for.
+      const res = await apiFetch("/api/publish", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ html, name: deployName.trim() || undefined }),
       });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) { setDeployError(data?.error || `Deploy failed (${res.status}).`); return; }
+      if (!res.ok) { setDeployError(deployErrorText(data?.error, res.status)); return; }
       setDeployedId(data.id);
+      // Published — the draft has served its purpose.
+      try { sessionStorage.removeItem(DEPLOY_DRAFT); } catch { /* noop */ }
     } catch {
       setDeployError("Couldn't reach the server. Check your connection and try again.");
     } finally {
@@ -123,8 +168,18 @@ export default function Home() {
     reader.readAsText(file);
   };
 
+  // Opening the panel should clear the LAST RESULT — nobody wants to land on
+  // the previous "deployed" success screen — but not the HTML sitting in the
+  // box. That distinction matters once a draft can survive the passcode prompt:
+  // clearing everything here threw the restored draft away on the way back in,
+  // which looked exactly like the restore never happened.
+  const resetDeployResult = () => {
+    setDeployedId(null); setDeployError(null); setDeployCopied(false);
+  };
+  // "Deploy another" — a deliberate fresh start, so the box empties too.
   const resetDeploy = () => {
-    setDeployedId(null); setDeployHtml(""); setDeployName(""); setDeployError(null); setDeployCopied(false);
+    resetDeployResult(); setDeployHtml(""); setDeployName("");
+    try { sessionStorage.removeItem(DEPLOY_DRAFT); } catch { /* noop */ }
   };
   const deployedUrl = deployedId ? `${window.location.origin}/p/${deployedId}` : "";
   const copyDeployed = async () => {
@@ -275,7 +330,7 @@ export default function Home() {
                   demos and prototypes. */}
               <button
                 className="ml-dark-btn ml-dark-btn-glass ml-dark-deploy-cta"
-                onClick={() => { resetDeploy(); setMode("deploy"); }}
+                onClick={() => { resetDeployResult(); setMode("deploy"); }}
                 style={{ width: "100%", justifyContent: "center", marginTop: 2 }}
               >
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">

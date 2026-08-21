@@ -7,7 +7,7 @@ import { cleanDisplayName } from "../lib/displayName";
 import { stepLockScript } from "../lib/stepLockScript";
 import { setupAttentionDetection } from "../lib/attentionDetector";
 import { localTimezone } from "../lib/tz";
-import { socketAuth, isPasscodeError } from "../lib/passcode";
+import { socketAuth, isPasscodeError, refusePasscode, apiFetch } from "../lib/passcode";
 import { ScreenPeer, screenShareSupported } from "../lib/screenShare";
 import ScreenSharePrompt from "../components/ScreenSharePrompt";
 import TeacherScreenView from "../components/TeacherScreenView";
@@ -621,7 +621,7 @@ export default function StudentView() {
       // A refused handshake means the stored code is wrong or stale. Tell the
       // gate so it can ask again, rather than leaving a room that silently
       // never connects.
-      if (isPasscodeError(err)) window.dispatchEvent(new Event('mathslive:passcode-refused'));
+      if (isPasscodeError(err)) refusePasscode();
     });
     setSocket(newSocket);
 
@@ -1224,7 +1224,10 @@ export default function StudentView() {
     }
     // Second try: HTTP fallback (works even if socket is flaky)
     try {
-      const res = await fetch(`/api/room/${roomId}/content`);
+      // The fallback that exists for when the socket fails was itself gated:
+      // with no passcode header the server refused it too, leaving a student
+      // whose socket dropped with no working path left at all.
+      const res = await apiFetch(`/api/room/${roomId}/content`);
       if (res.status === 200) {
         const data = await res.json();
         if (data.html && (typeof data.revision !== 'number' || data.revision >= lastRevisionRef.current) && !currentHtml) {
