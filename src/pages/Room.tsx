@@ -4397,7 +4397,7 @@ export default function Room() {
           is the IMPOLITE side of the negotiation: if both press call at the
           same instant, the teacher's offer wins and the student yields, so the
           two never deadlock. */}
-      <VideoCall socket={socket} roomId={roomId!} polite={false} selfLabel="You" />
+      <VideoCall socket={socket} roomId={roomId!} selfLabel="You" />
 
       {/* A YouTube clip over the top of everything — the teacher's playback is
           the one the room follows. */}

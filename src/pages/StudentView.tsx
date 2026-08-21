@@ -2238,7 +2238,7 @@ export default function StudentView() {
 
       {/* Face-to-face video. The student is the POLITE side: on a simultaneous
           call it yields to the teacher's offer rather than both stalling. */}
-      <VideoCall socket={socket} roomId={roomId!} polite selfLabel="You" />
+      <VideoCall socket={socket} roomId={roomId!} selfLabel="You" />
 
       {/* A clip the teacher is showing. It opens, plays, pauses and closes on
           their say-so — the student can only move it around and turn sound on. */}

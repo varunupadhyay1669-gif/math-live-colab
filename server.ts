@@ -4,6 +4,7 @@ import { Server } from 'socket.io';
 import path from 'path';
 import { pressureFrom, idleWindowFor, describeMemory, type MemoryPolicy } from './src/lib/memoryGuard';
 import fs from 'fs';
+import { createHmac } from 'crypto';
 
 interface FileEntry {
   id: string;
@@ -65,6 +66,24 @@ interface RoomData {
   mirrorAttrs: string | null;
   mirrorHead: string | null;
   mirrorHash: string | null;
+  // ── Video call ──
+  // Who is currently IN the call, by socket id. The call is a thing the room
+  // owns, not something the two browsers negotiate between themselves.
+  //
+  // It used to be the latter, and the result was that whoever pressed the
+  // button first decided whether the call connected at all: a side that had not
+  // joined yet threw away any offer it received, and once both sides had an
+  // unanswered offer out, neither ever retried. Teacher-first — the normal way a
+  // lesson starts — deadlocked every time; student-first worked. That is the
+  // whole "sometimes the call won't connect".
+  //
+  // With the room holding the state there is exactly one offerer, chosen here,
+  // and it is only chosen once both parties are actually present. No offer can
+  // arrive at a side that is not ready for it, so none can be dropped, and there
+  // is no collision to resolve because there is never a second offer.
+  callMembers: Set<string>;
+  /** The socket the server told to make the offer for the current pairing. */
+  callOfferer: string | null;
   // Shared YouTube clip playing over the lesson, if any. Held here (not just
   // broadcast) so a student joining or reloading mid-clip lands on the same
   // video at roughly the teacher's position instead of seeing nothing.
@@ -512,6 +531,8 @@ async function startServer() {
       mirrorHead: null,
       mirrorHash: null,
       sharedVideo: null,
+      callMembers: new Set<string>(),
+      callOfferer: null,
       revision: 0,
       whiteboard: { objects: [], strokes: [], shapes: [], view: null, gridMode: 'grid', instruments: [], texts: [] },
       annotations: [],
@@ -3062,21 +3083,109 @@ Build a widget that teaches: ${safePrompt}`;
     // relayed to the other member of the room. The media itself never touches
     // this server — it flows peer-to-peer, so there's no bandwidth cost here
     // and no third party in the middle of a lesson.
-    socket.on('rtc_signal', ({ roomId, signal }: { roomId: string; signal: unknown }) => {
-      if (typeof roomId !== 'string' || !signal || typeof signal !== 'object') return;
-      const room = rooms.get(roomId);
-      if (!isMember(room, socket.id)) return;
-      // 1-to-1: everyone else in the room is "the other person".
-      socket.to(roomId).emit('rtc_signal', { signal, from: socket.id });
-    });
-    // "My camera is on / off" — lets the other side show a Join button at the
-    // right moment instead of guessing.
-    socket.on('rtc_presence', ({ roomId, active }: { roomId: string; active: boolean }) => {
+    // The other party in a 1-to-1 call: the only other socket that has joined it.
+    function callPeerOf(room: RoomData, socketId: string): string | null {
+      for (const id of room.callMembers) {
+        if (id !== socketId && room.users.has(id)) return id;
+      }
+      return null;
+    }
+
+    // Both sides are in — name one of them the offerer and tell them to start.
+    // Re-pairing after someone leaves and returns picks a fresh offerer, so a
+    // rejoin is a clean negotiation rather than a half-finished old one.
+    function pairCall(roomId: string, room: RoomData) {
+      const ids = Array.from(room.callMembers).filter(id => room.users.has(id));
+      if (ids.length < 2) {
+        room.callOfferer = null;
+        return;
+      }
+      // The teacher offers when present — arbitrary but stable, and it keeps the
+      // side with the better uplink initiating.
+      const teacher = ids.find(id => room.users.get(id)?.role === 'teacher');
+      const offerer = teacher || ids[0];
+      const answerer = ids.find(id => id !== offerer)!;
+      room.callOfferer = offerer;
+      const nameOf = (id: string) => room.users.get(id)?.name || 'Someone';
+      io.to(offerer).emit('call_start', { role: 'offerer', peerName: nameOf(answerer) });
+      io.to(answerer).emit('call_start', { role: 'answerer', peerName: nameOf(offerer) });
+      console.log(`📞 Room ${roomId}: call paired — ${nameOf(offerer)} offers to ${nameOf(answerer)}`);
+    }
+
+    // "Is anyone in a call right now?" — asked by the call widget as soon as it
+    // has a socket, and again after a reconnect.
+    //
+    // A push at join time would race the widget mounting, and losing that race
+    // is not cosmetic: a student whose iPad reloaded mid-lesson came back to a
+    // button saying "Start call" with no hint that their teacher was sitting in
+    // one, so the natural thing to do — wait to be called — was exactly wrong.
+    // Asking cannot race.
+    socket.on('call_status', ({ roomId }: { roomId: string }) => {
       if (typeof roomId !== 'string') return;
       const room = rooms.get(roomId);
       if (!isMember(room, socket.id)) return;
+      for (const id of room.callMembers) {
+        if (id === socket.id) continue;
+        const inCall = room.users.get(id);
+        if (!inCall) continue;
+        socket.emit('call_presence', { active: true, name: inCall.name, role: inCall.role, socketId: id });
+        return;
+      }
+      socket.emit('call_presence', { active: false, socketId: null });
+    });
+
+    // Someone opened their camera and is in the call.
+    socket.on('call_join', ({ roomId }: { roomId: string }) => {
+      if (typeof roomId !== 'string') return;
+      const room = rooms.get(roomId);
+      if (!isMember(room, socket.id)) return;
+      room.callMembers.add(socket.id);
       const user = room.users.get(socket.id);
-      socket.to(roomId).emit('rtc_presence', { active: !!active, name: user?.name || 'Someone', role: user?.role });
+      // Tell the other side someone is waiting, so their button can say "Join".
+      socket.to(roomId).emit('call_presence', {
+        active: true, name: user?.name || 'Someone', role: user?.role, socketId: socket.id,
+      });
+      pairCall(roomId, room);
+    });
+
+    // Left the call (hung up, or the page went away).
+    function leaveCall(roomId: string, room: RoomData, socketId: string) {
+      if (!room.callMembers.delete(socketId)) return;
+      const user = room.users.get(socketId);
+      if (room.callOfferer === socketId) room.callOfferer = null;
+      io.to(roomId).except(socketId).emit('call_presence', {
+        active: false, name: user?.name || 'Someone', role: user?.role, socketId,
+      });
+    }
+    socket.on('call_leave', ({ roomId }: { roomId: string }) => {
+      if (typeof roomId !== 'string') return;
+      const room = rooms.get(roomId);
+      if (!room) return;
+      leaveCall(roomId, room, socket.id);
+    });
+
+    // Offer / answer / candidate, addressed to the one other party.
+    //
+    // Broadcasting these was its own bug: a second student socket — the tutor
+    // watching from another browser, or a parent on a second device — received
+    // the same offer and answered it, and the two answers fought.
+    socket.on('call_signal', ({ roomId, signal }: { roomId: string; signal: unknown }) => {
+      if (typeof roomId !== 'string' || !signal || typeof signal !== 'object') return;
+      const room = rooms.get(roomId);
+      if (!isMember(room, socket.id)) return;
+      if (!room.callMembers.has(socket.id)) return;
+      const peer = callPeerOf(room, socket.id);
+      if (!peer) return;
+      io.to(peer).emit('call_signal', { signal, from: socket.id });
+    });
+
+    // A side wants to renegotiate from scratch (ICE restart after a network
+    // change). Re-pair so both ends agree on who offers this time.
+    socket.on('call_restart', ({ roomId }: { roomId: string }) => {
+      if (typeof roomId !== 'string') return;
+      const room = rooms.get(roomId);
+      if (!isMember(room, socket.id) || !room.callMembers.has(socket.id)) return;
+      pairCall(roomId, room);
     });
 
     // ─── SCREEN SHARE (the teacher watches the student's ACTUAL screen) ───
@@ -3601,6 +3710,8 @@ Build a widget that teaches: ${safePrompt}`;
           // Clear any pending-snapshot membership for this socket so a dead id
           // doesn't linger in the set until the next snapshot sweep.
           room.pendingSyncStudents.delete(socket.id);
+          // A closed tab is a hang-up as far as the other party is concerned.
+          leaveCall(roomId, room, socket.id);
 
           io.to(roomId).emit('user_list', getRoomUserList(room));
           io.to(roomId).emit('user_left', { userId: socket.id, userName: user?.name || 'Unknown' });
@@ -3756,6 +3867,58 @@ Build a widget that teaches: ${safePrompt}`;
   // to browsers and is protected by row-level security. The service-role key
   // bypasses RLS entirely and must never appear in this response — it is not
   // read here at all, so it cannot be leaked by a future edit to this handler.
+  // ─── ICE SERVERS (how the two browsers find each other) ───
+  //
+  // STUN alone only works when both networks allow a direct connection between
+  // them. Indian mobile carriers put subscribers behind a shared address, and so
+  // do most school and office networks — for those there is no direct path at
+  // all, and a call with no relay simply never connects. That is not a rare edge
+  // case; it is a normal share of real lessons.
+  //
+  // A TURN relay is the fallback. Credentials are minted here, per request, and
+  // expire — the browser never holds a long-lived secret, so a shared lesson
+  // link can never leak relay access. Two provider shapes are supported:
+  //
+  //   TURN_URLS + TURN_SECRET          → the standard coturn/Cloudflare HMAC
+  //                                      scheme (username is an expiry stamp,
+  //                                      password is its HMAC). Preferred.
+  //   TURN_URLS + TURN_USERNAME
+  //               + TURN_PASSWORD      → a provider issuing static credentials.
+  //
+  // With none of them set the response is STUN-only and the app still works for
+  // everyone whose network permits a direct connection — it just tells the tutor
+  // when a call failed for want of a relay, instead of failing silently.
+  app.get('/api/turn', (_req, res) => {
+    res.set('Cache-Control', 'no-store');
+    const stun: Array<Record<string, unknown>> = [
+      { urls: 'stun:stun.l.google.com:19302' },
+      { urls: 'stun:stun1.l.google.com:19302' },
+    ];
+    const urls = (process.env.TURN_URLS || '').split(',').map(u => u.trim()).filter(Boolean);
+    if (urls.length === 0) {
+      res.json({ iceServers: stun, relay: false });
+      return;
+    }
+    const ttl = Math.max(60, Number(process.env.TURN_TTL_SECONDS) || 3600);
+    const secret = (process.env.TURN_SECRET || '').trim();
+    if (secret) {
+      // coturn's REST convention: username is "<unix-expiry>", credential is the
+      // base64 HMAC-SHA1 of it under the shared secret.
+      const username = String(Math.floor(Date.now() / 1000) + ttl);
+      const credential = createHmac('sha1', secret).update(username).digest('base64');
+      res.json({ iceServers: [...stun, { urls, username, credential }], relay: true, expiresIn: ttl });
+      return;
+    }
+    const username = (process.env.TURN_USERNAME || '').trim();
+    const credential = (process.env.TURN_PASSWORD || '').trim();
+    if (username && credential) {
+      res.json({ iceServers: [...stun, { urls, username, credential }], relay: true, expiresIn: ttl });
+      return;
+    }
+    // URLs without credentials would be rejected by the browser anyway.
+    res.json({ iceServers: stun, relay: false });
+  });
+
   app.get('/api/config', (_req, res) => {
     res.set('Cache-Control', 'no-store');
     res.json({

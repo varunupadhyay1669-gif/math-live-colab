@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode, type Key } from "react";
 import type { Socket } from "socket.io-client";
+import { getIceConfig, describeConnection } from "../lib/iceServers";
 
 // ─────────────────────────────────────────────────────────────────────────
 // Face-to-face video, inside the lesson.
@@ -16,22 +17,14 @@ import type { Socket } from "socket.io-client";
 // browser's recording indicator goes out).
 // ─────────────────────────────────────────────────────────────────────────
 
-const STUN = [
-  { urls: 'stun:stun.l.google.com:19302' },
-  { urls: 'stun:stun1.l.google.com:19302' },
-];
-
 type Props = {
   socket: Socket | null;
   roomId: string;
-  /** Exactly one side must be polite; it yields when both call at once
-   *  ("glare"). Teacher = impolite, student = polite. */
-  polite: boolean;
   /** Shown under the small self-view. */
   selfLabel?: string;
 };
 
-export default function VideoCall({ socket, roomId, polite, selfLabel = 'You' }: Props) {
+export default function VideoCall({ socket, roomId, selfLabel = 'You' }: Props) {
   const [active, setActive] = useState(false);          // my camera is running
   const [connected, setConnected] = useState(false);     // remote media arrived
   const [peerReady, setPeerReady] = useState(false);     // other side is on camera
@@ -40,6 +33,15 @@ export default function VideoCall({ socket, roomId, polite, selfLabel = 'You' }:
   const [camOn, setCamOn] = useState(true);
   const [minimised, setMinimised] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Trying to get back, rather than gone. Shown instead of silence.
+  const [reconnecting, setReconnecting] = useState(false);
+  // The other side dropped (a reload, a closed tab). We stay in the call.
+  const [peerLeft, setPeerLeft] = useState<string | null>(null);
+  // direct | relayed — the single most useful fact when a call is poor.
+  const [path, setPath] = useState<'direct' | 'relayed' | 'unknown'>('unknown');
+  // Is a relay even available? False means a restrictive network cannot connect
+  // at all, which is worth saying plainly rather than blaming the network.
+  const [relayAvailable, setRelayAvailable] = useState(true);
   // Bottom-right by default, and remembered.
   //
   // It used to sit at (16, 84) — directly on top of the tool rail, which runs
@@ -89,13 +91,21 @@ export default function VideoCall({ socket, roomId, polite, selfLabel = 'You' }:
   const localStreamRef = useRef<MediaStream | null>(null);
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const remoteVideoRef = useRef<HTMLVideoElement>(null);
-  const makingOfferRef = useRef(false);
-  const ignoreOfferRef = useRef(false);
+  // The server names one side the offerer once both are actually in the call,
+  // so there is no glare to resolve and no offer that can arrive too early.
+  const callRoleRef = useRef<'offerer' | 'answerer' | null>(null);
+  // Candidates that arrive before the remote description. Dropping them is not
+  // harmless: on the restrictive networks that need every candidate, the one
+  // discarded is often the one that would have worked.
+  const pendingCandidatesRef = useRef<RTCIceCandidateInit[]>([]);
+  const iceConfigRef = useRef<RTCIceServer[] | null>(null);
+  const restartTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // The signalling effect subscribes once and must not re-subscribe on every
   // state change, so it reads "am I on a call" and "how do I hang up" through
   // refs rather than closing over values that would go stale.
   const activeRef = useRef(false);
   const stopCallRef = useRef<((tellPeer?: boolean) => void) | null>(null);
+  const restartIceRef = useRef<(() => void) | null>(null);
   const dragRef = useRef<{ dx: number; dy: number } | null>(null);
   // Kept so 'off' can restore the untouched camera, and so teardown can stop
   // the segmentation loop instead of leaving it spinning.
@@ -103,15 +113,54 @@ export default function VideoCall({ socket, roomId, polite, selfLabel = 'You' }:
   const rawVideoTrackRef = useRef<MediaStreamTrack | null>(null);
 
   const emitSignal = useCallback((signal: unknown) => {
-    socket?.emit('rtc_signal', { roomId, signal });
+    socket?.emit('call_signal', { roomId, signal });
   }, [socket, roomId]);
+  // The peer connection is built once and lives for the whole call, so anything
+  // it holds must not be a closure over render-time values. onicecandidate fires
+  // for the entire call; if it captured the emitter from the first render — when
+  // the socket was still null — every candidate would be gathered and silently
+  // dropped, and the call would sit at "new" forever with a perfectly good
+  // offer/answer already exchanged. Route through a ref that is always current.
+  const emitSignalRef = useRef(emitSignal);
+  useEffect(() => { emitSignalRef.current = emitSignal; }, [emitSignal]);
 
   // Build the peer connection lazily; both starting a call and answering one
   // funnel through here so there is only ever one connection object.
+  // Publish the camera and mic onto a connection, with a bitrate ceiling.
+  //
+  // This lives here rather than in startCall because the connection is rebuilt
+  // whenever the other side drops and comes back. Attaching tracks only once, at
+  // start, meant the rebuilt connection had no media on it at all: the two sides
+  // negotiated happily and then sat there with nothing to send.
+  const attachLocalTracks = useCallback((pc: RTCPeerConnection) => {
+    const stream = localStreamRef.current;
+    if (!stream) return;
+    // A rebuild starts from a bare connection, but guard anyway — adding the
+    // same track twice throws and would abort the whole negotiation.
+    const already = new Set(pc.getSenders().map(s => s.track).filter(Boolean));
+    stream.getTracks().forEach(t => {
+      if (already.has(t)) return;
+      const sender = pc.addTrack(t, stream);
+      if (t.kind === 'video') {
+        // A ceiling, not a target — the browser still adapts below it. Without
+        // one, a call on a weak uplink takes the bandwidth the LESSON mirror
+        // needs; they share the teacher's upload, and the lesson matters more.
+        try {
+          const params = sender.getParameters();
+          params.encodings = [{ maxBitrate: 1_200_000, maxFramerate: 30 }];
+          void sender.setParameters(params);
+        } catch { /* not supported here — the browser adapts anyway */ }
+        try { (t as MediaStreamTrack & { contentHint?: string }).contentHint = 'motion'; } catch { /* noop */ }
+      }
+    });
+  }, []);
+
   const ensurePc = useCallback(() => {
     if (pcRef.current) return pcRef.current;
-    const pc = new RTCPeerConnection({ iceServers: STUN });
-    pc.onicecandidate = ({ candidate }) => { if (candidate) emitSignal({ candidate }); };
+    // Whatever /api/turn last returned. Fetched when the call starts; STUN-only
+    // is a working fallback, not an error.
+    const pc = new RTCPeerConnection({ iceServers: iceConfigRef.current || [{ urls: 'stun:stun.l.google.com:19302' }] });
+    pc.onicecandidate = ({ candidate }) => { if (candidate) emitSignalRef.current({ candidate }); };
     pc.ontrack = ({ streams }) => {
       const [stream] = streams;
       if (stream) {
@@ -123,32 +172,40 @@ export default function VideoCall({ socket, roomId, polite, selfLabel = 'You' }:
     };
     pc.onconnectionstatechange = () => {
       const s = pc.connectionState;
-      if (s === 'connected') setConnected(true);
-      if (s === 'failed') {
-        // Almost always a restrictive network with no relay available. End it
-        // rather than leaving the camera running against a dead connection —
-        // 'disconnected' is the transient one, 'failed' is not recoverable here.
+      if (s === 'connected') {
+        setConnected(true);
+        setReconnecting(false);
+        if (restartTimerRef.current) { clearTimeout(restartTimerRef.current); restartTimerRef.current = null; }
+        // Worth knowing, and cheap: a relayed call has further to travel, and a
+        // call that FAILED with no relay available has an obvious fix.
+        void describeConnection(pc).then(setPath);
+      }
+      // 'disconnected' is a wobble — a wifi hand-off, a phone moving to mobile
+      // data, a few seconds of nothing. It very often recovers on its own, and
+      // when it doesn't, an ICE restart is the mechanism built for exactly this.
+      // Hanging up here (which is what used to happen on 'failed', immediately)
+      // threw away calls that were about to come back.
+      if (s === 'disconnected') {
         setConnected(false);
-        stopCallRef.current?.(false);
-        setError("Couldn't connect — one of you may be on a restricted network.");
+        setReconnecting(true);
+        if (!restartTimerRef.current) {
+          restartTimerRef.current = setTimeout(() => {
+            restartTimerRef.current = null;
+            if (pcRef.current === pc && pc.connectionState !== 'connected') restartIceRef.current?.();
+          }, 2000);
+        }
       }
-      if (s === 'disconnected' || s === 'closed') setConnected(false);
-    };
-    // Perfect negotiation: renegotiate whenever tracks change.
-    pc.onnegotiationneeded = async () => {
-      try {
-        makingOfferRef.current = true;
-        await pc.setLocalDescription();
-        emitSignal({ description: pc.localDescription });
-      } catch (e) {
-        console.warn('[call] negotiation failed', e);
-      } finally {
-        makingOfferRef.current = false;
+      if (s === 'failed') {
+        setConnected(false);
+        setReconnecting(true);
+        restartIceRef.current?.();
       }
+      if (s === 'closed') { setConnected(false); setReconnecting(false); }
     };
     pcRef.current = pc;
+    attachLocalTracks(pc);
     return pc;
-  }, [emitSignal]);
+  }, [attachLocalTracks]);
 
   const stopCall = useCallback((tellPeer = true) => {
     // Stop the blur pipeline first or its rAF loop keeps running after hang-up.
@@ -165,25 +222,37 @@ export default function VideoCall({ socket, roomId, polite, selfLabel = 'You' }:
     if (remoteVideoRef.current) remoteVideoRef.current.srcObject = null;
     setActive(false);
     setConnected(false);
-    if (tellPeer) socket?.emit('rtc_presence', { roomId, active: false });
+    setReconnecting(false);
+    setPeerLeft(null);
+    setPath('unknown');
+    callRoleRef.current = null;
+    pendingCandidatesRef.current = [];
+    if (restartTimerRef.current) { clearTimeout(restartTimerRef.current); restartTimerRef.current = null; }
+    if (tellPeer) socket?.emit('call_leave', { roomId });
   }, [socket, roomId]);
 
   const startCall = useCallback(async () => {
     setError(null);
+    setPeerLeft(null);
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { width: { ideal: 640 }, height: { ideal: 480 } },
-        audio: { echoCancellation: true, noiseSuppression: true },
+        video: { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } },
+        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
       });
       localStreamRef.current = stream;
       if (localVideoRef.current) localVideoRef.current.srcObject = stream;
-      const pc = ensurePc();
-      // Adding tracks fires onnegotiationneeded, which sends the offer.
-      stream.getTracks().forEach(t => pc.addTrack(t, stream));
+      // Relay credentials BEFORE the connection is built — they are part of its
+      // configuration and cannot be added afterwards.
+      const ice = await getIceConfig();
+      iceConfigRef.current = ice.iceServers;
+      setRelayAvailable(ice.relay);
+      ensurePc();   // builds the connection and publishes the camera onto it
       setActive(true);
+      activeRef.current = true;   // the negotiation handlers read this immediately
       setMicOn(true);
       setCamOn(true);
-      socket?.emit('rtc_presence', { roomId, active: true });
+      // "I'm in." The server pairs us when the other side is in too.
+      socket?.emit('call_join', { roomId });
     } catch (e) {
       const err = e as Error;
       setError(
@@ -196,55 +265,123 @@ export default function VideoCall({ socket, roomId, polite, selfLabel = 'You' }:
     }
   }, [ensurePc, socket, roomId]);
 
-  // ── Signalling ──
+  // ── Negotiation ──
+  //
+  // The server decides who offers, and only once BOTH sides are in the call. So
+  // this side never has to guess, never races the other, and never receives an
+  // offer it isn't ready for.
+  const makeOffer = useCallback(async (iceRestart = false) => {
+    const pc = pcRef.current;
+    if (!pc) return;
+    try {
+      const offer = await pc.createOffer(iceRestart ? { iceRestart: true } : undefined);
+      await pc.setLocalDescription(offer);
+      emitSignal({ description: pc.localDescription });
+    } catch (e) {
+      console.warn('[call] offer failed', e);
+    }
+  }, [emitSignal]);
+
+  // A network changed under us. Ask the server to re-pair (so both ends agree on
+  // who offers this time) and, if that's us, offer again with fresh candidates.
+  const restartIce = useCallback(() => {
+    if (!activeRef.current || !socket) return;
+    setReconnecting(true);
+    socket.emit('call_restart', { roomId });
+  }, [socket, roomId]);
+  useEffect(() => { restartIceRef.current = restartIce; }, [restartIce]);
+
   useEffect(() => {
     if (!socket) return;
+
+    // "You are the offerer / answerer for this pairing." Sent when both sides
+    // are in, and again after a restart.
+    const onStart = async ({ role, peerName: pn }: { role: 'offerer' | 'answerer'; peerName?: string }) => {
+      if (!activeRef.current) return;
+      callRoleRef.current = role;
+      if (pn) setPeerName(pn);
+      setPeerReady(true);
+      const pc = ensurePc();
+      if (role === 'offerer') {
+        // If we already have a connection up, this is a restart.
+        await makeOffer(pc.connectionState === 'connected' || pc.connectionState === 'disconnected' || pc.connectionState === 'failed');
+      }
+    };
+
     const onSignal = async ({ signal }: { signal: any }) => {
-      if (!signal) return;
-      // Only engage once this side has actually joined; otherwise we'd open a
-      // connection (and a camera prompt) for someone who never asked to call.
-      if (!pcRef.current && !localStreamRef.current) return;
+      if (!signal || !activeRef.current) return;
       const pc = ensurePc();
       try {
         if (signal.description) {
           const desc = signal.description;
-          const collision = desc.type === 'offer' && (makingOfferRef.current || pc.signalingState !== 'stable');
-          ignoreOfferRef.current = !polite && collision;
-          if (ignoreOfferRef.current) return;   // impolite side wins, ignore theirs
+          // An answerer that somehow has a local offer out (a restart crossing
+          // in flight) rolls back rather than erroring — one line, and it makes
+          // the state machine total.
+          if (desc.type === 'offer' && pc.signalingState !== 'stable') {
+            await pc.setLocalDescription({ type: 'rollback' } as RTCSessionDescriptionInit).catch(() => {});
+          }
           await pc.setRemoteDescription(desc);
+          // Anything that raced ahead of the description can be applied now.
+          for (const c of pendingCandidatesRef.current.splice(0)) {
+            try { await pc.addIceCandidate(c); } catch { /* stale */ }
+          }
           if (desc.type === 'offer') {
-            await pc.setLocalDescription();
+            const answer = await pc.createAnswer();
+            await pc.setLocalDescription(answer);
             emitSignal({ description: pc.localDescription });
           }
         } else if (signal.candidate) {
-          try { await pc.addIceCandidate(signal.candidate); }
-          catch (e) { if (!ignoreOfferRef.current) console.warn('[call] ICE add failed', e); }
+          // Before the remote description this is the ordinary race, not an
+          // error. Hold it — see pendingCandidatesRef.
+          if (!pc.remoteDescription) { pendingCandidatesRef.current.push(signal.candidate); return; }
+          try { await pc.addIceCandidate(signal.candidate); } catch { /* stale */ }
         }
       } catch (e) {
         console.warn('[call] signal handling failed', e);
       }
     };
+
     const onPresence = ({ active: a, name }: { active: boolean; name?: string }) => {
       setPeerReady(!!a);
       if (name) setPeerName(name);
-      if (!a) {
+      if (!a && activeRef.current) {
+        // They left. Stay in the call ourselves: on an iPad a reload looks
+        // exactly like a hang-up, and tearing our own call down meant a
+        // four-second refresh cost both people their call and their camera.
+        // They rejoin, the server re-pairs, and this reconnects on its own.
         setConnected(false);
-        // They hung up. Hang up here too, or this side sits there with the
-        // camera still running and the other person's last frame frozen on
-        // screen — it looks like a live call to someone who is alone.
-        if (activeRef.current) {
-          stopCallRef.current?.(false);
-          setError(`${name || 'The other person'} ended the call.`);
-        }
+        setPeerLeft(name || 'The other person');
+        callRoleRef.current = null;
+        pendingCandidatesRef.current = [];
+        try { pcRef.current?.close(); } catch { /* already closed */ }
+        pcRef.current = null;
+        setRemoteStream(null);
       }
+      if (a) setPeerLeft(null);
     };
-    socket.on('rtc_signal', onSignal);
-    socket.on('rtc_presence', onPresence);
+
+    socket.on('call_start', onStart);
+    socket.on('call_signal', onSignal);
+    socket.on('call_presence', onPresence);
     return () => {
-      socket.off('rtc_signal', onSignal);
-      socket.off('rtc_presence', onPresence);
+      socket.off('call_start', onStart);
+      socket.off('call_signal', onSignal);
+      socket.off('call_presence', onPresence);
     };
-  }, [socket, polite, ensurePc, emitSignal]);
+  }, [socket, ensurePc, emitSignal, makeOffer]);
+
+  // Ask whether a call is already running — on mount, and after a reconnect.
+  // A socket reconnect mid-call also re-announces us, so the server re-pairs.
+  useEffect(() => {
+    if (!socket) return;
+    const sync = () => {
+      if (activeRef.current) socket.emit('call_join', { roomId });
+      else socket.emit('call_status', { roomId });
+    };
+    sync();
+    socket.on('connect', sync);
+    return () => { socket.off('connect', sync); };
+  }, [socket, roomId]);
 
   // ── Wire streams to the <video> elements AFTER they exist ──
   // THE self-view bug: while idle the component renders only the button, so
@@ -381,12 +518,9 @@ export default function VideoCall({ socket, roomId, polite, selfLabel = 'You' }:
     }
   }, [blurSupported]);
 
-  // Announce ourselves to a peer who joins after we started.
-  useEffect(() => {
-    if (!socket || !active) return;
-    const t = setInterval(() => socket.emit('rtc_presence', { roomId, active: true }), 5000);
-    return () => clearInterval(t);
-  }, [socket, active, roomId]);
+  // No heartbeat: membership is server state now, cleared on disconnect. The
+  // old 5-second "still here" ping had no timeout on the receiving side, so a
+  // missed "I'm off" left the button offering to join a call nobody was in.
 
   useEffect(() => { activeRef.current = active; }, [active]);
   useEffect(() => { stopCallRef.current = stopCall; }, [stopCall]);
@@ -397,7 +531,7 @@ export default function VideoCall({ socket, roomId, polite, selfLabel = 'You' }:
   // spuriously in React's development double-mount.
   useEffect(() => {
     if (!socket || !active) return;
-    const bye = () => { try { socket.emit('rtc_presence', { roomId, active: false }); } catch { /* socket already gone */ } };
+    const bye = () => { try { socket.emit('call_leave', { roomId }); } catch { /* socket already gone */ } };
     window.addEventListener('pagehide', bye);
     return () => window.removeEventListener('pagehide', bye);
   }, [socket, active, roomId]);
@@ -509,10 +643,37 @@ export default function VideoCall({ socket, roomId, polite, selfLabel = 'You' }:
         />
         {!connected && (
           <div style={{
-            position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center',
+            position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', gap: 6,
+            alignItems: 'center', justifyContent: 'center',
             color: 'rgba(255,255,255,0.65)', fontSize: 12.5, textAlign: 'center', padding: 12,
           }}>
-            {peerReady ? 'Connecting…' : 'Waiting for the other person to join…'}
+            {/* Never just a frozen frame and no explanation — every state here
+                says which of the four things is actually going on. */}
+            {peerLeft
+              ? <>
+                  <span>{peerLeft} dropped out.</span>
+                  <span style={{ fontSize: 11, opacity: 0.75 }}>Staying in the call — they'll reconnect automatically.</span>
+                </>
+              : reconnecting
+                ? 'Reconnecting…'
+                : peerReady ? 'Connecting…' : 'Waiting for the other person to join…'}
+            {!relayAvailable && (reconnecting || peerReady) && (
+              <span style={{ fontSize: 10.5, opacity: 0.6, maxWidth: 190, lineHeight: 1.4 }}>
+                No relay is set up, so this can fail on mobile data or school wifi.
+              </span>
+            )}
+          </div>
+        )}
+        {/* Connection path, once it's up. Small, and the first thing worth
+            knowing when someone says the call is poor. */}
+        {connected && path !== 'unknown' && !minimised && (
+          <div style={{
+            position: 'absolute', left: 8, top: 8, padding: '2px 7px', borderRadius: 6,
+            background: 'rgba(0,0,0,0.45)', color: 'rgba(255,255,255,0.8)', fontSize: 10, fontWeight: 600,
+          }} title={path === 'relayed'
+            ? 'Going through the relay — normal on mobile data or a school network.'
+            : 'Connected directly, browser to browser.'}>
+            {path === 'relayed' ? 'via relay' : 'direct'}
           </div>
         )}
         {/* Self-view, small */}
