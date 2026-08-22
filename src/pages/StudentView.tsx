@@ -307,6 +307,17 @@ export default function StudentView() {
 
   // ── Temporary Explanation Content ──
   const [tempContent, setTempContent] = useState<{ html: string; name: string } | null>(null);
+  // WHICH explanation is showing — needed only so annotations land on the right
+  // surface. Ink is tagged with the surface it was drawn on ('main', or
+  // 'exp:<id>'), and each side only paints ink belonging to the surface it is
+  // currently showing. The teacher has always tagged correctly; the student
+  // never knew the id, so their layer assumed 'main' forever. The result: every
+  // stroke the teacher drew on an explanation was received and then discarded,
+  // and the LESSON's old ink stayed on screen over the explanation instead.
+  //
+  // The id already arrives three ways (session_state, temp_content,
+  // explanations_state) — none of them were being read.
+  const [activeExplanationId, setActiveExplanationId] = useState<string | null>(null);
   const [showTempContent, setShowTempContent] = useState(false);
 
   // Built once per explanation and handed over as srcdoc — same reasoning as
@@ -504,6 +515,7 @@ export default function StudentView() {
       setTempContent(null);
       setShowTempContent(false);
     }
+    if ('activeExplanationId' in state) setActiveExplanationId(state.activeExplanationId ?? null);
     if (state.lastTeacherScroll) {
       const remoteScroll = { ...state.lastTeacherScroll, type: 'REMOTE_SCROLL' };
       pendingMessagesRef.current = pendingMessagesRef.current
@@ -944,14 +956,23 @@ export default function StudentView() {
     });
 
     // ── Temporary Explanation Content ──
-    newSocket.on("temp_content", ({ html, name }: { html: string; name: string }) => {
+    newSocket.on("temp_content", ({ html, name, id }: { html: string; name: string; id?: string }) => {
       setTempContent({ html, name });
       setShowTempContent(true);
+      setActiveExplanationId(id ?? null);
       showNotification(`📚 Teacher is showing explanation: ${name}`);
     });
     newSocket.on("clear_temp_content", () => {
       setShowTempContent(false);
+      setActiveExplanationId(null);
       showNotification('↩️ Back to main content');
+    });
+    // Belt and braces: the room also broadcasts which explanation is active
+    // whenever the list changes. Reading it here means a student who joined
+    // mid-explanation, or missed a temp_content, still annotates on the right
+    // surface rather than silently on the wrong one.
+    newSocket.on("explanations_state", ({ activeId }: { activeId: string | null }) => {
+      setActiveExplanationId(activeId ?? null);
     });
 
     newSocket.on("spotlight", (data: { x: number; y: number; active: boolean }) => {
@@ -2210,6 +2231,9 @@ export default function StudentView() {
             interactive={canAnnotate && (studentDrawMode || studentEraser !== 'off')}
             laserPointer={laserPointer}
             initialAnnotations={annotations}
+            // Must match the teacher's tag exactly — ink drawn on an
+            // explanation is discarded by anyone showing a different surface.
+            surface={showTempContent && activeExplanationId ? `exp:${activeExplanationId}` : 'main'}
           />
 
           {/* Teacher Cursor */}
