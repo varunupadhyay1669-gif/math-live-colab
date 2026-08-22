@@ -220,6 +220,9 @@ export const mirrorScript = `
         oversizeReported = true;
         post({ type: 'SYNC_MIRROR_OVERSIZE', bytes: body.length });
       }
+      // Alongside the frame, never instead of it: the DOM is still what every
+      // student renders. This is only for putting the SOURCE back.
+      try { publishLessonState(); } catch (e) {}
       try {
         post({
           type: 'SYNC_MIRROR', body: body, attrs: attrs,
@@ -242,6 +245,53 @@ export const mirrorScript = `
     //     ~4/s. That's plenty for a DOM mirror — canvas/3D visuals stream on
     //     their own throttled channel — and it keeps the main thread responsive.
     // MutationObserver already coalesces a synchronous DOM update into one call.
+    // ── The lesson's own state ──
+    //
+    // The mirror can keep every student on the teacher's screen. It cannot keep
+    // the teacher's screen alive through a reload: the lesson runs in that tab,
+    // and closing it ends the only copy there is. Rebuilding from a DOM snapshot
+    // re-runs the lesson's scripts over already-rendered markup, which is how a
+    // quiz returns to question 1 with two canvases.
+    //
+    // No amount of cleverness out here fixes that. The lesson has to say what it
+    // is, and a lesson that can say so can be put back exactly:
+    //
+    //     window.mathslive = {
+    //       getState: () => state,
+    //       setState: (s) => { state = s; render(); }
+    //     };
+    //
+    // Optional throughout. A lesson without it loses its place on reload, the
+    // same as before — but everyone loses it together, and the tutor is warned
+    // rather than surprised.
+    var lastStateJson = null;
+    var MAX_STATE = 64 * 1024;
+    function publishLessonState() {
+      var api = null;
+      try { api = window.mathslive; } catch (e) {}
+      if (!api || typeof api.getState !== 'function') return;
+      var json;
+      try { json = JSON.stringify(api.getState()); } catch (e) { return; }
+      if (typeof json !== 'string') return;
+      // A lesson keeping its whole question bank in state would otherwise send
+      // it on every click. State is for the PLACE, not the content.
+      if (json.length > MAX_STATE) return;
+      if (json === lastStateJson) return;
+      lastStateJson = json;
+      post({ type: 'SYNC_MIRROR_STATE', state: json });
+    }
+
+    function restoreLessonState(json) {
+      var api = null;
+      try { api = window.mathslive; } catch (e) {}
+      if (!api || typeof api.setState !== 'function') return false;
+      try {
+        api.setState(JSON.parse(json));
+        lastStateJson = json;   // do not immediately republish what we just applied
+        return true;
+      } catch (e) { return false; }
+    }
+
     function scheduleSnapshot() {
       // A canvas can appear at any time (3D libraries append theirs once loaded,
       // or on a "Start" click). Any DOM change is our cue to check.
@@ -477,6 +527,9 @@ export const mirrorScript = `
         if (applyingInput || Date.now() - lastForwardedScrollAt < 250) return;
         post({ type: 'SYNC_MIRROR_SCROLL', scrollX: window.scrollX || 0, scrollY: window.scrollY || 0 });
       }, { passive: true });
+      // Announce whether this lesson can be restored, once it has had a moment
+      // to define the hook (lessons set it up inside their own init).
+      setTimeout(function () { post({ type: 'SYNC_MIRROR_STATEFUL', supported: !!(window.mathslive && typeof window.mathslive.getState === 'function' && typeof window.mathslive.setState === 'function') }); }, 800);
       setTimeout(function () { sendSnapshot(true); ensureCanvasTimer(); }, 40);
       window.addEventListener('load', function () { setTimeout(function () { sendSnapshot(true); ensureCanvasTimer(); }, 120); });
       // Self-correcting heartbeat: re-check the DOM every 500ms and re-send ONLY
@@ -530,6 +583,20 @@ export const mirrorScript = `
       // still would otherwise receive nothing at all and sit on a blank frame
       // until something moved. force=true bypasses the dedup for exactly this.
       else if (d.type === 'MIRROR_REQUEST') { sendSnapshot(true); canvasTick(true); }
+      // Put this lesson back where the class was. Sent once, after a reload,
+      // and only when the room's stored state belongs to THIS lesson.
+      else if (d.type === 'MIRROR_RESTORE_STATE' && typeof d.state === 'string') {
+        var ok = restoreLessonState(d.state);
+        post({ type: 'SYNC_MIRROR_RESTORED', ok: ok });
+        if (ok) { sendSnapshot(true); canvasTick(true); }
+      }
+      // Does this lesson implement the contract at all? The tutor is told when
+      // it does not, because then a reload really does restart the class.
+      else if (d.type === 'MIRROR_QUERY_STATEFUL') {
+        var has = false;
+        try { has = !!(window.mathslive && typeof window.mathslive.getState === 'function' && typeof window.mathslive.setState === 'function'); } catch (e) {}
+        post({ type: 'SYNC_MIRROR_STATEFUL', supported: has });
+      }
       else if (d.type === 'SET_MIRROR_ROLE' && d.role !== 'source') { /* role flip handled by parent via rebuild */ }
     });
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', activate); else activate();

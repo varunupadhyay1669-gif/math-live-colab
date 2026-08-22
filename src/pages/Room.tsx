@@ -150,6 +150,13 @@ export default function Room() {
   const [syncStatus, setSyncStatus] = useState<Record<string, { ok: boolean; at: number }>>({});
   // Is this tab in the background while a class is watching it?
   const [tabHidden, setTabHidden] = useState(false);
+  // Does the current lesson implement the state contract? Drives the honest
+  // warning below — a lesson that cannot say where it is really does restart
+  // the class on reload, and the tutor should know that before it happens.
+  const [lessonResumable, setLessonResumable] = useState<boolean | null>(null);
+  // The position the room last knew about, waiting to be handed back to a
+  // freshly-loaded lesson. Consumed once, then cleared.
+  const pendingLessonStateRef = useRef<string | null>(null);
   // Re-render on a timer so "4s behind" keeps counting up rather than freezing
   // at whatever it said when the last ack landed. A stopped clock reading
   // "in sync" is worse than no clock at all.
@@ -686,6 +693,12 @@ export default function Room() {
     if (typeof state.zoomLevel === 'number') setZoomLevel(state.zoomLevel);
     if (state.gates) setGates(state.gates);
     if (typeof state.randomSeed === 'number') setRandomSeed(state.randomSeed);
+    // Held, not applied: the lesson iframe may not exist yet, and applying it to
+    // the wrong instance is worse than not applying it at all. handleIframeLoad
+    // hands it over once the lesson is actually running.
+    if (typeof state.lessonState === 'string' && state.lessonState) {
+      pendingLessonStateRef.current = state.lessonState;
+    }
     if ('controlHolderName' in state) setControlHolderName(state.controlHolderName ?? null);
     if (Array.isArray(state.bookmarks)) setBookmarks(state.bookmarks);
     if (state.tempContent) {
@@ -1671,6 +1684,23 @@ export default function Room() {
       iframeRef.current?.contentWindow?.postMessage({ type: 'SET_ZOOM', zoom: zoomLevel }, '*');
       iframeRef.current?.contentWindow?.postMessage({ type: 'MIRROR_ZOOM', zoom: zoomLevel }, '*');
     }
+    // Put the lesson back where the class was.
+    //
+    // A reload is a new lesson: the old one died with the tab. The mirror can
+    // keep everyone on the teacher's screen but cannot keep that screen alive,
+    // and rebuilding from a DOM snapshot re-runs the lesson's scripts over
+    // already-rendered markup — a quiz back at question 1, with two canvases.
+    //
+    // So the lesson says where it is (window.mathslive.getState) and gets handed
+    // it back here, once, after it has had a moment to define the hook. Applied
+    // to the running instance, not to markup, so there is nothing to re-run.
+    const resume = pendingLessonStateRef.current;
+    if (resume) {
+      pendingLessonStateRef.current = null;
+      setTimeout(() => {
+        iframeRef.current?.contentWindow?.postMessage({ type: 'MIRROR_RESTORE_STATE', state: resume }, '*');
+      }, 900);
+    }
     // CATCH-UP: if the lesson iframe just remounted after the teacher was on the
     // whiteboard / temp content, it booted fresh on the home screen. Pull the
     // current journal and replay it forward so the teacher returns to the room's
@@ -1808,6 +1838,14 @@ export default function Room() {
         return;
       }
       if (type === 'MIRROR_SOURCE_READY') { return; }
+      // The lesson saying where it has got to. Small, deduplicated by the
+      // source, and the only thing that can put it back after a reload.
+      if (type === 'SYNC_MIRROR_STATE') { socket.emit('mirror_state', { roomId, state: e.data.state }); return; }
+      if (type === 'SYNC_MIRROR_STATEFUL') { setLessonResumable(!!e.data.supported); return; }
+      if (type === 'SYNC_MIRROR_RESTORED') {
+        if (e.data.ok) showNotif('⏱️ Picked the lesson back up where the class was');
+        return;
+      }
 
       // Internal sync events — not interactions
       if (type === 'SYNC_PROVIDE_HTML') {
@@ -3402,6 +3440,23 @@ export default function Room() {
   };
 
   const studentCount = users.filter(u => u.role === 'student').length;
+
+  // Closing or reloading this tab ends the only running copy of the lesson.
+  //
+  // For a lesson that implements the state contract that is survivable — it is
+  // put straight back. For one that does not, the class genuinely restarts from
+  // the top, and the tutor deserves to be asked rather than to find out. The
+  // browser shows its own wording here; all we control is whether it asks.
+  useEffect(() => {
+    if (studentCount === 0 || lessonResumable !== false) return;
+    const warn = (e: BeforeUnloadEvent) => { e.preventDefault(); e.returnValue = ''; };
+    window.addEventListener('beforeunload', warn);
+    return () => window.removeEventListener('beforeunload', warn);
+  }, [studentCount, lessonResumable]);
+
+  // A different lesson answers for itself.
+  useEffect(() => { setLessonResumable(null); }, [iframeUrl]);
+
   // The left panel is the HTML code-editor pane. It's only useful when the
   // teacher is actually working with HTML files — not on a blank empty room
   // (the upload buttons live in the right-hand mode picker now), and not in
@@ -3765,6 +3820,14 @@ export default function Room() {
         </div>
       )}
       {/* What this lesson will and will not do, said before it is taught. */}
+      {/* Can this lesson survive a reload? Only worth saying once a class is
+          watching, and only when the answer is no. */}
+      {lessonResumable === false && studentCount > 0 && (
+        <div className="px-4 py-2 flex items-center justify-center gap-2 text-xs"
+          style={{ background: 'var(--bg-surface)', color: 'var(--text-muted)', borderBottom: '1px solid var(--border-subtle)' }}>
+          <span>ℹ️ If you reload this tab, this lesson restarts from the beginning for everyone. It doesn't tell MathsLive where it has got to.</span>
+        </div>
+      )}
       {lessonIssues.length > 0 && (
         <div className="px-4 py-2.5" style={{ background: 'var(--bg-surface)', borderBottom: '1px solid var(--border-subtle)' }}>
           <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, maxWidth: 1100, margin: '0 auto' }}>

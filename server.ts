@@ -84,6 +84,14 @@ interface RoomData {
   // What each student's screen actually holds, by socket id. Transient: it
   // describes a live connection and means nothing once that connection is gone.
   mirrorAcks: Map<string, { h: string | null; ok: boolean; at: number }>;
+  // Where the lesson had got to, as the lesson itself describes it.
+  //
+  // The one thing the mirror cannot do alone is survive the death of the tab the
+  // lesson runs in — so a lesson that implements window.mathslive.getState()
+  // tells us, and after a reload we hand it straight back. Tagged with the
+  // lesson it came from: restoring question 5 of a bus problem into a different
+  // lesson entirely would be worse than restarting.
+  lessonState: { forHtml: string; state: string; at: number } | null;
   callMembers: Set<string>;
   /** The socket the server told to make the offer for the current pairing. */
   callOfferer: string | null;
@@ -192,6 +200,8 @@ interface SessionStatePayload {
   activeFileId: string | null;
   sourceHtml: string | null;
   liveSnapshotHtml: string | null;
+  /** Where the lesson had got to, if it can say — see RoomData.lessonState. */
+  lessonState?: string | null;
   effectiveHtml: string | null;
   files: FileEntry[];
   isPaused: boolean;
@@ -535,6 +545,7 @@ async function startServer() {
       mirrorHash: null,
       sharedVideo: null,
       mirrorAcks: new Map<string, { h: string | null; ok: boolean; at: number }>(),
+      lessonState: null,
       callMembers: new Set<string>(),
       callOfferer: null,
       revision: 0,
@@ -566,6 +577,8 @@ async function startServer() {
   // the journal restarts AND every client re-seeds its RNG identically.
   function newContentBaseline(room: RoomData) {
     resetEventJournal(room);
+    // A different lesson is a different place; the old position means nothing.
+    room.lessonState = null;
     room.randomSeed = newRandomSeed();
     // Drop the old lesson's mirror snapshot so a student joining right after a
     // lesson switch never renders the previous lesson's DOM (the source will
@@ -788,6 +801,10 @@ async function startServer() {
       controlHolderName: room.controlHolderName,
       bookmarks: room.bookmarks,
       randomSeed: room.randomSeed,
+      // Persisted, so a server restart mid-lesson does not cost the class its
+      // place either — the tab that survives it re-seeds the room, and this puts
+      // the lesson back where it was.
+      lessonState: room.lessonState,
       // Bounded (EVENT_LOG_MAX) — survives restart so a late joiner right
       // after a redeploy still converges.
       eventLog: room.eventLog,
@@ -981,6 +998,7 @@ async function startServer() {
     room.claimedBy = raw.claimedBy ?? null;
     room.claimedAt = raw.claimedAt ?? null;
     room.lastTeacherScroll = raw.lastTeacherScroll || null;
+    room.lessonState = raw.lessonState && typeof raw.lessonState.state === 'string' ? raw.lessonState : null;
     room.zoomLevel = raw.zoomLevel || 1;
     // Restore the temporary explanation overlay (see serializeRoom).
     room.tempContent = (raw.tempContent && typeof raw.tempContent === 'object')
@@ -1198,6 +1216,15 @@ async function startServer() {
     return room.revision;
   }
 
+  // Which lesson a stored state belongs to. Cheap and stable — the point is
+  // only to notice that the lesson CHANGED, not to identify it cryptographically.
+  function contentKey(html: string | null): string {
+    if (!html) return '';
+    let h = 5381;
+    for (let i = 0; i < html.length; i++) h = ((h * 33) ^ html.charCodeAt(i)) >>> 0;
+    return h.toString(36) + '-' + html.length.toString(36);
+  }
+
   function getSourceHtml(room: RoomData): string | null {
     if (room.activeFileId) {
       const file = room.files.find(f => f.id === room.activeFileId);
@@ -1231,6 +1258,11 @@ async function startServer() {
       sourceHtml,
       liveSnapshotHtml: room.liveSnapshotHtml,
       effectiveHtml,
+      // Where the lesson had got to — but only if it belongs to the lesson we
+      // are about to hand over. A state from a different lesson is worse than
+      // none: it would put the class somewhere that never existed.
+      lessonState: (room.lessonState && room.lessonState.forHtml === contentKey(room.lastRunHtml))
+        ? room.lessonState.state : null,
       files: room.files,
       isPaused: room.isPaused,
       scrollSyncEnabled: room.scrollSyncEnabled,
@@ -3357,6 +3389,17 @@ Build a widget that teaches: ${safePrompt}`;
     // one-directional by design, so silence and perfect sync look identical
     // from the source. This is the return channel, and it is deliberately
     // tiny — a hash and a boolean, once every couple of seconds.
+    // The lesson describing its own position. Teacher only — the source is the
+    // only copy that is actually running.
+    socket.on('mirror_state', ({ roomId, state }: { roomId: string; state: string }) => {
+      if (typeof roomId !== 'string' || typeof state !== 'string') return;
+      if (state.length > 64 * 1024) return;
+      if (!checkRateLimit(socket.id, true)) return;
+      const room = rooms.get(roomId);
+      if (!isMirrorSource(room, socket.id)) return;
+      room.lessonState = { forHtml: contentKey(room.lastRunHtml), state, at: Date.now() };
+    });
+
     socket.on('mirror_ack', ({ roomId, h, ok }: { roomId: string; h?: string; ok?: boolean }) => {
       if (typeof roomId !== 'string') return;
       if (!checkRateLimit(socket.id, true)) return;
