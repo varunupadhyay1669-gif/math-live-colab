@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import { useParams, useNavigate, useSearchParams } from "react-router-dom";
 import { io, Socket } from "socket.io-client";
 import { seededSyncScript } from "../lib/syncScript";
-import { mirrorScriptFor } from "../lib/mirrorScript";
+import { mirrorScriptFor, stripLessonScripts } from "../lib/mirrorScript";
 import { checkLesson, type LessonIssue } from "../lib/lessonCheck";
 import { stepLockScript } from "../lib/stepLockScript";
 import { DEMO_LESSON_HTML, DEMO_LESSON_NAME } from "../lib/demoLesson";
@@ -441,6 +441,28 @@ export default function Room() {
 
   // ── Dual View (split: teacher | student mirror) ──
   const [dualView, setDualView] = useState(false);
+
+  // Dual View: a real follower, built exactly as a student's is.
+  //
+  // It used to load the full lesson — scripts and all, plus a second mirror
+  // source — and be fed the legacy engine's replays. That is the OLD engine: the
+  // one that drifts. So the pane labelled "Student Mirror (live)" was showing
+  // the teacher a second, independently-drifting copy and calling it what
+  // students see. Its frames were correctly refused by the relay, so it never
+  // harmed the class; it only ever misled the tutor.
+  //
+  // Now it is a script-stripped shell painted from the teacher's own stream. It
+  // cannot show anything students are not seeing, because it is the same thing
+  // students are — by construction, not by agreement.
+  const mirrorFollowerUrl = useMemo(() => {
+    if (!dualView || !previewHtml) return null;
+    const content = stripLessonScripts(previewHtml).includes('<head>')
+      ? stripLessonScripts(previewHtml).replace('<head>', '<head>' + mirrorScriptFor('follower'))
+      : mirrorScriptFor('follower') + stripLessonScripts(previewHtml);
+    return URL.createObjectURL(new Blob([content], { type: 'text/html' }));
+  }, [dualView, previewHtml]);
+  useEffect(() => () => { if (mirrorFollowerUrl) URL.revokeObjectURL(mirrorFollowerUrl); }, [mirrorFollowerUrl]);
+
   const dualViewRef = useRef(false);
   useEffect(() => { dualViewRef.current = dualView; }, [dualView]);
   const mirrorIframeRef = useRef<HTMLIFrameElement>(null);
@@ -1119,25 +1141,12 @@ export default function Room() {
             }, '*');
           }
         }
-        const remoteEvent = { ...event, type: event.type.replace("SYNC_", "REMOTE_") };
-        postToIframe(remoteEvent);
-        if (dualViewRef.current && mirrorIframeRef.current?.contentWindow) {
-          if (mirrorReadyRef.current) {
-            mirrorIframeRef.current.contentWindow.postMessage(remoteEvent, '*');
-          } else if (pendingMirrorMessagesRef.current.length < 500) {
-            pendingMirrorMessagesRef.current.push(remoteEvent);
-          }
-        }
+        // Dual View is no longer fed replays — it is a follower, painted by the
+        // mirror stream like any student. Replaying into it was what made it a
+        // second drifting copy rather than a view of the class's screen.
+        postToIframe({ ...event, type: event.type.replace("SYNC_", "REMOTE_") });
       } else {
-        const remoteEvent = { ...event, type: event.type.replace("SYNC_", "REMOTE_") };
-        postToIframe(remoteEvent);
-        if (dualViewRef.current && mirrorIframeRef.current?.contentWindow) {
-          if (mirrorReadyRef.current) {
-            mirrorIframeRef.current.contentWindow.postMessage(remoteEvent, '*');
-          } else if (pendingMirrorMessagesRef.current.length < 500) {
-            pendingMirrorMessagesRef.current.push(remoteEvent);
-          }
-        }
+        postToIframe({ ...event, type: event.type.replace("SYNC_", "REMOTE_") });
       }
       // Same stale-closure reasoning: read through the ref so flipping Record
       // on after mount actually starts recording from that moment forward.
@@ -1655,6 +1664,7 @@ export default function Room() {
     }
     if (zoomLevel !== 1) {
       iframeRef.current?.contentWindow?.postMessage({ type: 'SET_ZOOM', zoom: zoomLevel }, '*');
+      iframeRef.current?.contentWindow?.postMessage({ type: 'MIRROR_ZOOM', zoom: zoomLevel }, '*');
     }
     // CATCH-UP: if the lesson iframe just remounted after the teacher was on the
     // whiteboard / temp content, it booted fresh on the home screen. Pull the
@@ -1719,10 +1729,10 @@ export default function Room() {
     for (const msg of pending) {
       mirrorIframeRef.current?.contentWindow?.postMessage(msg, '*');
     }
-    // Mirror is view-only and receives remote events only
-    mirrorIframeRef.current?.contentWindow?.postMessage({ type: 'SET_PRESENTER_MODE', enabled: false }, '*');
-    mirrorIframeRef.current?.contentWindow?.postMessage({ type: 'SET_INTERACTION_MODE', allowed: false }, '*');
-    mirrorIframeRef.current?.contentWindow?.postMessage({ type: 'SET_SCROLL_SYNC', enabled: true }, '*');
+    // A follower shell, watching only: it must never forward input, and it must
+    // not scroll itself away from what the class is being shown.
+    mirrorIframeRef.current?.contentWindow?.postMessage({ type: 'SET_MIRROR_INTERACT', allowed: false }, '*');
+    mirrorIframeRef.current?.contentWindow?.postMessage({ type: 'SET_MIRROR_SCROLLLOCK', locked: true }, '*');
     if (stepLockEnabled && currentStep) {
       mirrorIframeRef.current?.contentWindow?.postMessage({ type: 'SET_STEP', step: currentStep }, '*');
     }
@@ -1771,6 +1781,13 @@ export default function Room() {
       // server (which fans out to every follower). MUST be handled and returned
       // BEFORE the SYNC_ interaction relay below — 'SYNC_MIRROR' starts with
       // 'SYNC_' but is a snapshot, not a replayable interaction.
+      // Dual View is a follower now, so it is painted by the same frames the
+      // class gets — from this iframe, before they even leave the machine.
+      if (dualViewRef.current && type.indexOf('SYNC_MIRROR') === 0) {
+        if (type === 'SYNC_MIRROR') postToMirror({ type: 'MIRROR_APPLY', body: e.data.body, attrs: e.data.attrs, head: e.data.head, h: e.data.h, scrollX: e.data.scrollX, scrollY: e.data.scrollY });
+        else if (type === 'SYNC_MIRROR_CANVAS') postToMirror({ type: 'MIRROR_CANVAS', canvases: e.data.canvases });
+        else if (type === 'SYNC_MIRROR_SCROLL') postToMirror({ type: 'MIRROR_SCROLL', scrollX: e.data.scrollX, scrollY: e.data.scrollY });
+      }
       if (type === 'SYNC_MIRROR') {
         socket.emit('mirror_dom', {
           roomId, body: e.data.body, scrollX: e.data.scrollX, scrollY: e.data.scrollY,
@@ -1928,7 +1945,7 @@ export default function Room() {
   useEffect(() => {
     mirrorReadyRef.current = false;
     pendingMirrorMessagesRef.current = [];
-  }, [iframeUrl, showTempContent, whiteboardMode, dualView]);
+  }, [mirrorFollowerUrl, showTempContent, whiteboardMode, dualView]);
 
   // NOTE: Periodic auto-sync removed — it was causing full iframe reloads on student
   // side every 10s, making the page blink and scroll jump to top.
@@ -2008,7 +2025,11 @@ export default function Room() {
 
   // ── Zoom: push to iframe when level changes ──
   useEffect(() => {
+    // Both: SET_ZOOM is the legacy engine's (documentElement, teacher-only),
+    // MIRROR_ZOOM is the mirror's (body, and therefore actually reaches the
+    // class). Sending both keeps the teacher's own view identical either way.
     postToIframe({ type: 'SET_ZOOM', zoom: zoomLevel });
+    postToIframe({ type: 'MIRROR_ZOOM', zoom: zoomLevel });
   }, [zoomLevel, postToIframe]);
 
   const handleZoomIn = () => {
@@ -4323,7 +4344,7 @@ export default function Room() {
                         style={{ background: 'rgba(16,185,129,0.9)', color: '#fff' }}>
                         Student Mirror (live)
                       </div>
-                      <iframe ref={mirrorIframeRef} src={iframeUrl} className="w-full h-full border-none"
+                      <iframe ref={mirrorIframeRef} src={mirrorFollowerUrl || undefined} className="w-full h-full border-none"
                         style={{ background: '#ffffff' }}
                         onLoad={handleMirrorLoad}
                         sandbox={LESSON_IFRAME_SANDBOX}

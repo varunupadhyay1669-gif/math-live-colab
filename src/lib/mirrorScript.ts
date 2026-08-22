@@ -500,6 +500,30 @@ export const mirrorScript = `
     window.addEventListener('message', function (e) {
       var d = e.data; if (!d || !d.type) return;
       if (d.type === 'MIRROR_INPUT') applyForwardedInput(d);
+      // Zoom, applied to BODY rather than documentElement.
+      //
+      // The old engine zoomed documentElement, which the mirror never sees: it
+      // serializes the body's attributes and contents, and documentElement is
+      // neither. So the teacher zoomed to 150%, said "look at the top-right
+      // corner", and every student was still at 100% looking at something else.
+      //
+      // On the body it needs no new channel at all — style IS a body attribute,
+      // so it rides the existing snapshot and every follower applies it with the
+      // rest. One line here, and the fix is structural rather than another
+      // message type to keep in step.
+      else if (d.type === 'MIRROR_ZOOM') {
+        try {
+          var z = Number(d.zoom) || 1;
+          var b = document.body;
+          if ('zoom' in b.style) { b.style.zoom = z === 1 ? '' : String(z); }
+          else {
+            // Firefox has no CSS zoom.
+            b.style.transformOrigin = '0 0';
+            b.style.transform = z === 1 ? '' : 'scale(' + z + ')';
+            b.style.width = z === 1 ? '' : (100 / z) + '%';
+          }
+        } catch (e) {}
+      }
       // Late-join / reconnect / "Force sync" → force a full snapshot AND a full
       // set of canvas frames. The pixel channel only sends what changed, so a
       // student arriving mid-lesson in front of a canvas that happens to be

@@ -326,6 +326,28 @@ export default function StudentView() {
     return content;
   }, [tempContent?.html, tempContent?.name, randomSeed]);
 
+  // Handed over as a blob URL, not srcdoc — the same change the lesson needed.
+  //
+  // WebKit is far less tolerant of a multi-megabyte srcdoc than of a blob URL,
+  // and explanations run to the same 2MB cap as lessons. On an iPad a large one
+  // rendered as a white rectangle while the teacher, on a desktop, saw it fine.
+  // The lesson was moved off srcdoc for exactly this; the explanation was not,
+  // and it is the same students on the same devices.
+  const [tempUrl, setTempUrl] = useState('');
+  const tempUrlRef = useRef('');
+  useEffect(() => {
+    if (!tempContentDoc) { setTempUrl(''); return; }
+    const url = URL.createObjectURL(new Blob([tempContentDoc], { type: 'text/html' }));
+    const previous = tempUrlRef.current;
+    tempUrlRef.current = url;
+    setTempUrl(url);
+    // Only ever revoke the PREVIOUS document, and only once no load can still
+    // be using it. Revoking one whose load is in flight blanks the frame
+    // permanently on a slower device — the bug this pattern exists to avoid.
+    if (previous) setTimeout(() => URL.revokeObjectURL(previous), 60_000);
+  }, [tempContentDoc]);
+  useEffect(() => () => { if (tempUrlRef.current) URL.revokeObjectURL(tempUrlRef.current); }, []);
+
   // ── Student Interaction Mode ──
   const [interactionAllowed, setInteractionAllowed] = useState(false);
   // ── Control grant ("the chalk") ──
@@ -1361,7 +1383,7 @@ export default function StudentView() {
   // pointer is set on the switch itself as well.
   useEffect(() => {
     iframeRef.current = showTempContent ? tempFrameRef.current : lessonFrameRef.current;
-  }, [showTempContent, whiteboardMode, tempContentDoc, lessonUrl]);
+  }, [showTempContent, whiteboardMode, tempUrl, lessonUrl]);
 
   // Re-push zoom when level changes
   useEffect(() => {
@@ -1527,7 +1549,7 @@ export default function StudentView() {
   // delivered. The server broadcasts sync_full_state on EVERY join, which is
   // exactly what recomputes lessonUrl: one student joining went and froze
   // another student, mid-lesson, with no error anywhere.
-  const mountedSurface = whiteboardMode ? null : showTempContent ? tempContentDoc : lessonUrl;   // the ACTIVE document
+  const mountedSurface = whiteboardMode ? null : showTempContent ? tempUrl : lessonUrl;   // the ACTIVE document
   useEffect(() => {
     iframeReadyRef.current = false;
   }, [mountedSurface]);
@@ -1992,11 +2014,11 @@ export default function StudentView() {
 
           {/* EXPLANATION — an overlay on top of the lesson shell, which stays
               mounted underneath holding the teacher's last painted frame. */}
-          {showTempContent && tempContent && tempContentDoc && (
+          {showTempContent && tempContent && tempUrl && (
             <div style={{ position: 'absolute', inset: 0, zIndex: 6 }}>
               <iframe
                 ref={tempFrameRef}
-                srcDoc={tempContentDoc}
+                src={tempUrl}
                 className="w-full h-full border-none"
                 style={{ background: '#ffffff' }}
                 onLoad={() => handleSurfaceLoad(tempFrameRef.current, true)}
