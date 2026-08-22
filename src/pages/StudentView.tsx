@@ -1,7 +1,6 @@
 ﻿import React, { useEffect, useState, useRef, useCallback, useMemo } from "react";
 import { useParams, useNavigate, useSearchParams } from "react-router-dom";
 import { io, Socket } from "socket.io-client";
-import { seededSyncScript } from "../lib/syncScript";
 import { mirrorScriptFor, stripLessonScripts } from "../lib/mirrorScript";
 import { cleanDisplayName } from "../lib/displayName";
 import { stepLockScript } from "../lib/stepLockScript";
@@ -44,6 +43,10 @@ import Whiteboard from "../components/Whiteboard";
 // student's iPad during some past debugging and that student drifts from the
 // class forever, with nothing in the UI to explain it and no way for the tutor
 // to see it. A sync model is a property of the room, not of a browser.
+//
+// Kept as a named constant because a few places still read it to explain
+// themselves ("the shell has the lesson's scripts stripped, so..."). There is no
+// longer another value it could take.
 const MIRROR_MODE = true;
 
 // ── Types ──
@@ -314,10 +317,8 @@ export default function StudentView() {
     // explanation that runs its own scripts is a second, independent instance,
     // not a view of the teacher's. Two students who each clicked once ended up
     // on different questions of the same explainer, with no way back.
-    const scripts = MIRROR_MODE
-      ? mirrorScriptFor('follower')
-      : seededSyncScript(randomSeed) + stepLockScript;
-    let content = MIRROR_MODE ? stripLessonScripts(tempContent.html) : tempContent.html;
+    const scripts = mirrorScriptFor('follower');
+    let content = stripLessonScripts(tempContent.html);
     if (content.includes("<head>")) {
       content = content.replace("<head>", "<head>" + scripts);
     } else {
@@ -596,10 +597,8 @@ export default function StudentView() {
     // STRIPPED so it never runs the lesson (that would make it a diverging
     // instance); only the follower agent runs, painting the teacher's streamed
     // DOM. Keeps <head>/<style>/<link> so the mirror looks identical.
-    const scripts = MIRROR_MODE
-      ? mirrorScriptFor('follower')
-      : seededSyncScript(randomSeed) + stepLockScript;
-    let content = MIRROR_MODE ? stripLessonScripts(currentHtml) : currentHtml;
+    const scripts = mirrorScriptFor('follower');
+    let content = stripLessonScripts(currentHtml);
     if (content.includes("<head>")) {
       content = content.replace("<head>", "<head>" + scripts);
     } else if (content.includes("<html>")) {

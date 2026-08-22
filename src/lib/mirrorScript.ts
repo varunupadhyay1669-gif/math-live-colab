@@ -515,6 +515,146 @@ export const mirrorScript = `
       scheduleSnapshot();
     }
 
+    // ── The five things the mirror does not get for free ──
+    //
+    // Everything else the source needs it already has: the DOM is the state, and
+    // the DOM is already streaming. These five are not derivable from a frame,
+    // and they were the only reason the old replay engine still had to be loaded
+    // into this iframe alongside the mirror.
+
+    // 1. The teacher's cursor. A frame has no pointer in it.
+    //    Anchored to the element under it rather than to a screen percentage: a
+    //    percentage lands an option or two off whenever the two layouts differ,
+    //    which for a centred fixed-width lesson is always.
+    var lastCursorAt = 0;
+    function trackCursor(e) {
+      var now = Date.now();
+      if (now - lastCursorAt < 50) return;
+      lastCursorAt = now;
+      var cpath = null, cex = 0.5, cey = 0.5;
+      try {
+        var t = e.target;
+        if (t && t !== document && t !== document.body && t !== document.documentElement) {
+          cpath = getElementPath(t);
+          var r = t.getBoundingClientRect();
+          if (r.width > 0 && r.height > 0) {
+            cex = (e.clientX - r.left) / r.width;
+            cey = (e.clientY - r.top) / r.height;
+          }
+        }
+      } catch (err) {}
+      post({ type: 'SYNC_CURSOR', x: e.clientX / window.innerWidth, y: e.clientY / window.innerHeight, path: cpath, ex: cex, ey: cey });
+    }
+
+    // 2. Alt+click "look here". Capture phase and stopped immediately, because
+    //    pointing AT a button must not also press it.
+    function pingAt(x, y) {
+      try {
+        var ping = document.createElement('div');
+        ping.setAttribute('data-mathslive-ping', '1');
+        ping.style.cssText = 'position:fixed;left:' + (x - 22) + 'px;top:' + (y - 22) + 'px;width:44px;height:44px;border-radius:50%;border:3px solid #F43F5E;background:rgba(244,63,94,0.18);pointer-events:none;z-index:2147483647;animation:mathslive-ping-pop 1.2s ease-out forwards;';
+        if (!document.getElementById('mathslive-ping-style')) {
+          var st = document.createElement('style');
+          st.id = 'mathslive-ping-style';
+          st.textContent = '@keyframes mathslive-ping-pop{0%{transform:scale(0.4);opacity:1}70%{transform:scale(1.6);opacity:0.7}100%{transform:scale(2.4);opacity:0}}';
+          (document.head || document.documentElement).appendChild(st);
+        }
+        (document.body || document.documentElement).appendChild(ping);
+        setTimeout(function () { ping.parentNode && ping.parentNode.removeChild(ping); }, 1300);
+      } catch (e) {}
+    }
+
+    // 3. A lesson that failed to load. A CDN script blocked by the school's
+    //    network, WebGL unavailable, a crash mid-boot — without this the tutor
+    //    gets silence and a blank area, with no way to tell which.
+    var simErrCount = 0, simErrSeen = {};
+    function reportSimError(msg, src) {
+      try {
+        if (simErrCount >= 3) return;
+        var key = String(msg).slice(0, 120);
+        if (simErrSeen[key]) return;
+        simErrSeen[key] = 1;
+        simErrCount++;
+        post({ type: 'SYNC_SIM_ERROR', message: key, source: src || '' });
+      } catch (e) {}
+    }
+
+    // Registered HERE, not in activate(), and the difference is the whole point
+    // of the feature. activate() waits for DOMContentLoaded; a <script src>
+    // blocked by a school's network fails while the document is still being
+    // parsed, which is BEFORE that. Listening late meant the one error most
+    // worth reporting — the CDN a lesson depends on being unreachable on the
+    // student's network — was the one error never reported. The mirror agent is
+    // first in <head>, so from this line on nothing is missed.
+    window.addEventListener('error', function (e) {
+      try {
+        var t = e && e.target;
+        if (t && t.tagName === 'IMG') return;   // noisy and rarely fatal
+        if (t && (t.tagName === 'SCRIPT' || t.tagName === 'LINK')) {
+          reportSimError('Could not load ' + (t.src || t.href || 'a file'), t.src || t.href || '');
+          return;
+        }
+        if (e && e.message) reportSimError(e.message, e.filename || '');
+      } catch (err) {}
+    }, true);
+    window.addEventListener('unhandledrejection', function (e) {
+      try {
+        var r = e && e.reason;
+        var m = r && (r.message || (typeof r === 'string' ? r : ''));
+        if (m) reportSimError('Unhandled rejection: ' + m, '');
+      } catch (err) {}
+    });
+
+    // 4. A snapshot of the whole document, on request. Two callers left — Force
+    //    Sync's re-baseline and the class pack — and both ask explicitly.
+    //    The injected scripts are stripped from the copy: leaving one in means
+    //    the next build injects another on top of it, and after N force-syncs
+    //    the lesson carries N observers.
+    function provideHtml(requestId) {
+      try {
+        var clone = document.documentElement.cloneNode(true);
+        try {
+          var injected = clone.querySelectorAll('#mathslive-sync-script, #mathslive-steplock-script, #mathslive-mirror-script');
+          for (var i = 0; i < injected.length; i++) injected[i].parentNode && injected[i].parentNode.removeChild(injected[i]);
+        } catch (e) {}
+        // Live form values live in properties, not attributes, so they have to
+        // be written onto the clone or the snapshot loses everything typed.
+        try {
+          var a = document.querySelectorAll('input, textarea, select');
+          var b = clone.querySelectorAll('input, textarea, select');
+          for (var k = 0; k < a.length && k < b.length; k++) {
+            var o = a[k], c = b[k];
+            if (o.tagName === 'INPUT') {
+              if (o.type === 'checkbox' || o.type === 'radio') {
+                if (o.checked) c.setAttribute('checked', 'checked'); else c.removeAttribute('checked');
+              } else { c.setAttribute('value', o.value); }
+            } else if (o.tagName === 'TEXTAREA') { c.textContent = o.value; }
+            else if (o.tagName === 'SELECT') {
+              for (var j = 0; j < o.options.length && j < c.options.length; j++) {
+                if (o.options[j].selected) c.options[j].setAttribute('selected', 'selected'); else c.options[j].removeAttribute('selected');
+              }
+            }
+          }
+        } catch (e) {}
+        post({
+          type: 'SYNC_PROVIDE_HTML', requestId: requestId,
+          html: '<!DOCTYPE html>' + String.fromCharCode(10) + clone.outerHTML,
+          scrollX: window.scrollX, scrollY: window.scrollY,
+          hasCanvas: !!document.querySelector('canvas'),
+        });
+      } catch (e) {}
+    }
+
+    // 5. Scroll to where a student clicked, when the teacher is following them.
+    function followClick(nx, ny) {
+      try {
+        var x = (typeof nx === 'number' ? nx : 0.5) * window.innerWidth;
+        var y = (typeof ny === 'number' ? ny : 0.5) * window.innerHeight;
+        var el = document.elementFromPoint(x, y);
+        if (el && el.scrollIntoView) el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      } catch (e) {}
+    }
+
     function activate() {
       try {
         new MutationObserver(scheduleSnapshot).observe(document.documentElement || document.body, { subtree: true, childList: true, attributes: true, characterData: true });
@@ -527,6 +667,16 @@ export const mirrorScript = `
         if (applyingInput || Date.now() - lastForwardedScrollAt < 250) return;
         post({ type: 'SYNC_MIRROR_SCROLL', scrollX: window.scrollX || 0, scrollY: window.scrollY || 0 });
       }, { passive: true });
+
+      document.addEventListener('mousemove', trackCursor, { passive: true });
+      document.addEventListener('click', function (e) {
+        if (!e.altKey || !e.isTrusted || applyingInput) return;
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        pingAt(e.clientX, e.clientY);
+        post({ type: 'SYNC_PING', clientX: e.clientX / window.innerWidth, clientY: e.clientY / window.innerHeight, path: getElementPath(e.target) });
+      }, true);
+
       // Announce whether this lesson can be restored, once it has had a moment
       // to define the hook (lessons set it up inside their own init).
       setTimeout(function () { post({ type: 'SYNC_MIRROR_STATEFUL', supported: !!(window.mathslive && typeof window.mathslive.getState === 'function' && typeof window.mathslive.setState === 'function') }); }, 800);
@@ -592,6 +742,8 @@ export const mirrorScript = `
       }
       // Does this lesson implement the contract at all? The tutor is told when
       // it does not, because then a reload really does restart the class.
+      else if (d.type === 'REQUEST_HTML') provideHtml(d.requestId);
+      else if (d.type === 'FOLLOW_CLICK') followClick(d.x, d.y);
       else if (d.type === 'MIRROR_QUERY_STATEFUL') {
         var has = false;
         try { has = !!(window.mathslive && typeof window.mathslive.getState === 'function' && typeof window.mathslive.setState === 'function'); } catch (e) {}

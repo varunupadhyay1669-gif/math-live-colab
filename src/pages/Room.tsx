@@ -2,7 +2,6 @@
 import { createPortal } from "react-dom";
 import { useParams, useNavigate, useSearchParams } from "react-router-dom";
 import { io, Socket } from "socket.io-client";
-import { seededSyncScript } from "../lib/syncScript";
 import { mirrorScriptFor, stripLessonScripts } from "../lib/mirrorScript";
 import { checkLesson, type LessonIssue } from "../lib/lessonCheck";
 import { stepLockScript } from "../lib/stepLockScript";
@@ -323,7 +322,20 @@ export default function Room() {
     // Only one lesson iframe is mounted at a time (this one replaces the
     // lesson's while it is showing), so there is exactly one source streaming
     // and no crosstalk between the two.
-    const scripts = seededSyncScript(randomSeed) + stepLockScript + mirrorScriptFor('source');
+    // The mirror, and the step lock. That is the whole engine now.
+    //
+    // seededSyncScript used to be here too — the input-replay engine, which
+    // re-derived the lesson's state on every screen by re-running clicks. It has
+    // not driven a student since the mirror landed, but it stayed loaded in this
+    // iframe and kept its reach: it journaled every click, snapshotted the whole
+    // document on a timer, and cancelled input at capture phase whenever the
+    // iframe was in a blocked state — which is what made a student's forwarded
+    // taps vanish the moment they were given control.
+    //
+    // Everything it still genuinely provided — the cursor, the "look here" ping,
+    // lesson-load errors, an on-demand document snapshot, follow-click — now
+    // comes from the mirror source itself, where it belongs. One engine.
+    const scripts = stepLockScript + mirrorScriptFor('source');
     let content = tempContent.html;
     if (content.includes("<head>")) {
       content = content.replace("<head>", "<head>" + scripts);
@@ -1992,7 +2004,20 @@ export default function Room() {
     // instance. The 'source' agent streams its real DOM (+ canvas) to students,
     // who render a read-only mirror and can never be on a different screen. It
     // rides alongside the classic sync scripts (different message namespace).
-    const scripts = seededSyncScript(randomSeed) + stepLockScript + mirrorScriptFor('source');
+    // The mirror, and the step lock. That is the whole engine now.
+    //
+    // seededSyncScript used to be here too — the input-replay engine, which
+    // re-derived the lesson's state on every screen by re-running clicks. It has
+    // not driven a student since the mirror landed, but it stayed loaded in this
+    // iframe and kept its reach: it journaled every click, snapshotted the whole
+    // document on a timer, and cancelled input at capture phase whenever the
+    // iframe was in a blocked state — which is what made a student's forwarded
+    // taps vanish the moment they were given control.
+    //
+    // Everything it still genuinely provided — the cursor, the "look here" ping,
+    // lesson-load errors, an on-demand document snapshot, follow-click — now
+    // comes from the mirror source itself, where it belongs. One engine.
+    const scripts = stepLockScript + mirrorScriptFor('source');
     if (content.includes("<head>")) {
       content = content.replace("<head>", "<head>" + scripts);
     } else if (content.includes("<html>")) {
