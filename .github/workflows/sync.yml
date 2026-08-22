@@ -1,0 +1,46 @@
+# Does the mirror still hold?
+#
+# Every check in verify-mirror.mjs is a bug that reached a live lesson once.
+# They were all found by hand, from a tutor saying "it isn't working" with no
+# way to know which of a dozen things that meant. This is so the next one fails
+# a build instead of a lesson.
+name: sync
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+      - run: npm ci
+
+      # Types first: the injected scripts live inside a template literal, and a
+      # stray backtick there is a compile error rather than a subtle one.
+      - name: Types
+        run: npm run lint
+
+      # The offline half — the injected scripts, path symmetry across script
+      # stripping, the lesson check, and a guard against the replay engine
+      # being reintroduced into the live path.
+      - name: Mirror invariants
+        run: npm run verify:mirror
+
+      - name: Build
+        run: npm run build
+
+      # The live half — the socket protocol, against a real server.
+      - name: Protocol
+        run: |
+          npm run dev &
+          for i in $(seq 1 40); do
+            curl -sf http://localhost:4000/healthz >/dev/null && break
+            sleep 1
+          done
+          PORT=4000 node --import tsx verify-mirror.mjs

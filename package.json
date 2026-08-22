@@ -14,6 +14,8 @@
     "clean": "rm -rf dist",
     "lint": "tsc --noEmit",
     "verify:sync": "node verify-sync.mjs",
+    "verify:mirror": "node --import tsx verify-mirror.mjs",
+    "test": "npm run lint && npm run verify:mirror",
     "stress": "node stress.mjs",
     "stress2": "node stress2.mjs",
     "stress3": "node stress3.mjs",
@@ -53,6 +55,7 @@
     "@types/uuid": "^10.0.0",
     "@vitejs/plugin-react": "^5.0.4",
     "autoprefixer": "^10.4.21",
+    "jsdom": "^29.1.1",
     "tailwindcss": "^4.1.14",
     "typescript": "~5.8.2",
     "vite": "^6.2.0"
