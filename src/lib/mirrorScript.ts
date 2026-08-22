@@ -964,6 +964,15 @@ export const mirrorScript = `
       // source won't resend state it thinks we already hold. Require TWO
       // consecutive mismatches (~4s) so a snapshot merely in flight doesn't
       // trigger a needless resync, then ask for a full one.
+      // Tell the parent what we ACTUALLY have, every time.
+      //
+      // The follower has always known when its screen differs from the
+      // source's — that is what the mismatch below is — but it kept the answer
+      // to itself and quietly asked for a resend. So a student could be frozen,
+      // or three seconds behind, and nothing anywhere said so; the teacher found
+      // out when the student spoke up, or never. This is the one fact that turns
+      // "it sometimes doesn't work" into something with a name and a time.
+      post({ type: 'MIRROR_ACK', h: appliedHash, ok: !!(d.h && d.h === appliedHash) });
       if (d.h && d.h !== appliedHash) {
         staleTicks++;
         if (staleTicks >= 2) { staleTicks = 0; post({ type: 'MIRROR_STALE' }); }

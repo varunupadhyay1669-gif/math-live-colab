@@ -1406,6 +1406,9 @@ export default function StudentView() {
       // fingerprint (a frame was lost in transit) — pull a fresh full snapshot.
       // Rate-limited follower-side (two consecutive mismatches, ~4s).
       if (type === 'MIRROR_STALE') { socket.emit('mirror_request', { roomId }); return; }
+      // What this student's screen actually holds, answered on every ping.
+      // Loss-tolerant by nature — a missed ack just means one stale reading.
+      if (type === 'MIRROR_ACK') { socket.emit('mirror_ack', { roomId, h: e.data.h, ok: !!e.data.ok }); return; }
       if (type === 'MIRROR_FOLLOWER_READY') {
         socket.emit('mirror_request', { roomId });
         // Tell the follower its permissions IMMEDIATELY on announce. The mirror

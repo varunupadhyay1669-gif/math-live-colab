@@ -4,6 +4,7 @@ import { useParams, useNavigate, useSearchParams } from "react-router-dom";
 import { io, Socket } from "socket.io-client";
 import { seededSyncScript } from "../lib/syncScript";
 import { mirrorScriptFor } from "../lib/mirrorScript";
+import { checkLesson, type LessonIssue } from "../lib/lessonCheck";
 import { stepLockScript } from "../lib/stepLockScript";
 import { DEMO_LESSON_HTML, DEMO_LESSON_NAME } from "../lib/demoLesson";
 import { cleanDisplayName } from "../lib/displayName";
@@ -143,6 +144,37 @@ export default function Room() {
   // and disables all write actions on the dethroned tab until the
   // user reloads.
   const [teacherReplaced, setTeacherReplaced] = useState(false);
+  // What each student's screen actually holds, keyed by socket id. Fed by the
+  // follower's ack on every ping — the only way a one-directional mirror can
+  // tell a frozen student from a perfectly synced one.
+  const [syncStatus, setSyncStatus] = useState<Record<string, { ok: boolean; at: number }>>({});
+  // Is this tab in the background while a class is watching it?
+  const [tabHidden, setTabHidden] = useState(false);
+  // Re-render on a timer so "4s behind" keeps counting up rather than freezing
+  // at whatever it said when the last ack landed. A stopped clock reading
+  // "in sync" is worse than no clock at all.
+  const [, setStatusTick] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => setStatusTick(n => n + 1), 1000);
+    return () => clearInterval(t);
+  }, []);
+
+  // A backgrounded tab cannot stream.
+  //
+  // Chrome throttles timers in a hidden tab to once a second, and after five
+  // minutes hidden to once a MINUTE. The mirror's DOM snapshots and its 120ms
+  // canvas tick are both timer-driven, so putting MathsLive behind Zoom — or
+  // behind the second browser opened to check on the student — quietly drops
+  // the class to roughly one frame a minute. Nothing in the browser announces
+  // this and nothing in the app noticed, so it read as "the lesson froze".
+  //
+  // The tutor cannot be expected to know that. Say it.
+  useEffect(() => {
+    const onVis = () => setTabHidden(document.hidden);
+    onVis();
+    document.addEventListener('visibilitychange', onVis);
+    return () => document.removeEventListener('visibilitychange', onVis);
+  }, []);
   // Server rejected this teacher join (ownership enforcement, or another
   // teacher already seated). Surfaces a blocking banner instead of failing
   // silently.
@@ -1283,6 +1315,10 @@ export default function Room() {
     });
 
     // ── Control handoff ──
+    newSocket.on("mirror_status", ({ studentId, ok, at }: { studentId: string; studentName: string; ok: boolean; at: number }) => {
+      setSyncStatus(prev => ({ ...prev, [studentId]: { ok, at: at || Date.now() } }));
+    });
+
     newSocket.on("control_changed", ({ holderName }: { holderName: string | null }) => {
       setControlHolderName(holderName);
       showNotif(holderName ? `✋ ${holderName} now has control` : '👁️ You took back control');
@@ -2043,6 +2079,7 @@ export default function Room() {
           html: content,
           uploadedAt: Date.now(),
         };
+        reviewLesson(entry.html);
         socket.emit("upload_file", { roomId, file: entry });
         setHtmlCode(content);
         setSimPreviewHtml(content);
@@ -2116,6 +2153,7 @@ export default function Room() {
           html: content,
           uploadedAt: Date.now(),
         };
+        reviewLesson(entry.html);
         socket.emit("upload_file", { roomId, file: entry });
         setHtmlCode(content);
         setSimPreviewHtml(content);
@@ -2202,9 +2240,22 @@ export default function Room() {
     return true;
   };
 
+  // What this lesson will and will not do once mirrored.
+  //
+  // Each of these used to fail silently in front of a class — an embedded page
+  // running separately on every device, a fifth canvas never sent, sound only
+  // the tutor can hear. Upload time is the last moment any of it can be acted
+  // on, so it is said here rather than discovered by a child.
+  const [lessonIssues, setLessonIssues] = useState<LessonIssue[]>([]);
+  const reviewLesson = useCallback((html: string) => {
+    try { setLessonIssues(checkLesson(html, { maxBytes: 2 * 1024 * 1024 })); }
+    catch { setLessonIssues([]); }
+  }, []);
+
   const runPreview = () => {
     if (!socket || !activeFileId) return;
     if (lessonTooLarge(htmlCode)) return;
+    reviewLesson(htmlCode);
     // Flag to skip our own echo from the server broadcast
     skipOwnPreviewRef.current = true;
     socket.emit("run_preview", { roomId, fileId: activeFileId, html: htmlCode });
@@ -2289,6 +2340,15 @@ export default function Room() {
     if (!socket || !peekStudentRef.current) return;
     socket.emit("peek_student", { roomId, studentId: peekStudentRef.current.id });
   };
+  // Push this student a fresh frame. In the mirror model that is all "resync"
+  // can mean — the server serves the cached frame and asks the source for a new
+  // one; nothing is rebuilt on either side.
+  const resyncStudent = useCallback((studentId: string, studentName: string) => {
+    if (!socket) return;
+    socket.emit('resync_student', { roomId, studentId });
+    showNotif(`⟳ Sent ${studentName} a fresh frame`);
+  }, [socket, roomId]);
+
   const resyncPeekStudent = () => {
     if (!socket || !peekStudentRef.current) return;
     socket.emit("resync_student", { roomId, studentId: peekStudentRef.current.id });
@@ -3460,6 +3520,8 @@ export default function Room() {
                   ) : (
                     <UserList users={users} attention={attention} isTeacher={true} socket={socket} roomId={roomId!}
                       controlHolderName={controlHolderName}
+                      syncStatus={syncStatus}
+                      onResync={resyncStudent}
                       onGrantControl={grantControl}
                       onPeek={peekAtStudent}
                       onScreenShare={askForScreen} />
@@ -3687,6 +3749,38 @@ export default function Room() {
           >
             Back to home
           </button>
+        </div>
+      )}
+      {/* What this lesson will and will not do, said before it is taught. */}
+      {lessonIssues.length > 0 && (
+        <div className="px-4 py-2.5" style={{ background: 'var(--bg-surface)', borderBottom: '1px solid var(--border-subtle)' }}>
+          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, maxWidth: 1100, margin: '0 auto' }}>
+            <div style={{ flex: 1, display: 'grid', gap: 6 }}>
+              {lessonIssues.map((iss, i) => (
+                <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'flex-start', fontSize: 12.5, lineHeight: 1.45 }}>
+                  <span style={{ flexShrink: 0, fontSize: 12 }}>
+                    {iss.level === 'blocked' ? '⛔' : iss.level === 'warn' ? '⚠️' : 'ℹ️'}
+                  </span>
+                  <span>
+                    <b style={{ color: 'var(--text-primary)' }}>{iss.title}</b>{' '}
+                    <span style={{ color: 'var(--text-muted)' }}>{iss.detail}</span>
+                  </span>
+                </div>
+              ))}
+            </div>
+            <button onClick={() => setLessonIssues([])}
+              title="Dismiss"
+              style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', fontSize: 14, lineHeight: 1, padding: 2 }}>✕</button>
+          </div>
+        </div>
+      )}
+      {/* The lesson only streams while this tab is on screen — see the
+          visibilitychange effect. Shown the moment it is not, so the tutor is
+          never explaining to a class that stopped updating a minute ago. */}
+      {tabHidden && studentCount > 0 && (
+        <div className="px-4 py-2.5 flex items-center justify-center gap-3 text-sm font-semibold"
+          style={{ background: '#FFFBEB', color: '#92400E', borderBottom: '1px solid #FCD34D' }}>
+          <span>⚠️ This tab is in the background, so your class has stopped updating. Bring MathsLive back to the front to carry on.</span>
         </div>
       )}
       {teacherReplaced && (

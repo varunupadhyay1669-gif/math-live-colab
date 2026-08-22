@@ -81,6 +81,9 @@ interface RoomData {
   // and it is only chosen once both parties are actually present. No offer can
   // arrive at a side that is not ready for it, so none can be dropped, and there
   // is no collision to resolve because there is never a second offer.
+  // What each student's screen actually holds, by socket id. Transient: it
+  // describes a live connection and means nothing once that connection is gone.
+  mirrorAcks: Map<string, { h: string | null; ok: boolean; at: number }>;
   callMembers: Set<string>;
   /** The socket the server told to make the offer for the current pairing. */
   callOfferer: string | null;
@@ -531,6 +534,7 @@ async function startServer() {
       mirrorHead: null,
       mirrorHash: null,
       sharedVideo: null,
+      mirrorAcks: new Map<string, { h: string | null; ok: boolean; at: number }>(),
       callMembers: new Set<string>(),
       callOfferer: null,
       revision: 0,
@@ -3347,6 +3351,27 @@ Build a widget that teaches: ${safePrompt}`;
       if (!isMirrorSource(room, socket.id)) return;
       socket.to(roomId).emit('mirror_canvas', { canvases });
     });
+    // A student reporting the fingerprint they have actually rendered.
+    //
+    // The teacher cannot see a frozen student any other way: the mirror is
+    // one-directional by design, so silence and perfect sync look identical
+    // from the source. This is the return channel, and it is deliberately
+    // tiny — a hash and a boolean, once every couple of seconds.
+    socket.on('mirror_ack', ({ roomId, h, ok }: { roomId: string; h?: string; ok?: boolean }) => {
+      if (typeof roomId !== 'string') return;
+      if (!checkRateLimit(socket.id, true)) return;
+      const room = rooms.get(roomId);
+      if (!isMember(room, socket.id)) return;
+      const user = room.users.get(socket.id);
+      if (user?.role !== 'student') return;
+      room.mirrorAcks.set(socket.id, { h: typeof h === 'string' ? h : null, ok: !!ok, at: Date.now() });
+      if (room.teacherSocketId) {
+        io.to(room.teacherSocketId).emit('mirror_status', {
+          studentId: socket.id, studentName: user.name, ok: !!ok, at: Date.now(),
+        });
+      }
+    });
+
     socket.on('mirror_scroll', ({ roomId, scrollX, scrollY }: { roomId: string; scrollX?: number; scrollY?: number }) => {
       if (typeof roomId !== 'string') return;
       if (!checkRateLimit(socket.id, true)) return;
@@ -3748,6 +3773,7 @@ Build a widget that teaches: ${safePrompt}`;
           room.pendingSyncStudents.delete(socket.id);
           // A closed tab is a hang-up as far as the other party is concerned.
           leaveCall(roomId, room, socket.id);
+          room.mirrorAcks.delete(socket.id);
 
           io.to(roomId).emit('user_list', getRoomUserList(room));
           io.to(roomId).emit('user_left', { userId: socket.id, userName: user?.name || 'Unknown' });
