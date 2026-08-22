@@ -1620,15 +1620,20 @@ export default function Room() {
     // none; explanation has the temp iframe), and snapshotting it would publish
     // the explainer DOM as the lesson's liveSnapshotHtml — corrupting what late
     // joiners boot from.
-    if (whiteboardMode || showTempContent) return;
-    const id = setInterval(() => {
-      if (!iframeReadyRef.current || !previewHtmlRef.current) return;
-      const requestId = `snap-hb-${Date.now()}`;
-      snapshotRequestRef.current = requestId;
-      postToIframe({ type: 'REQUEST_HTML', requestId });
-    }, 2500);
-    return () => clearInterval(id);
-  }, [studentInteractionAllowed, whiteboardMode, showTempContent, postToIframe]);
+    // GONE: the 2.5-second full-document snapshot.
+    //
+    // It existed so a late joiner had something recent to boot from. The mirror
+    // frame is that now — cached on the room and served the instant a student
+    // asks — and it is the body only, deduplicated, already being sent. The
+    // snapshot was the whole document, on a timer, forever: on a 349kB lesson,
+    // 760kB of dom_snapshot plus 760kB of sync_html_update across a handful of
+    // clicks, none of which any student ever read.
+    //
+    // REQUEST_HTML still exists for the things that genuinely need a document —
+    // Force Sync's re-baseline and the class pack — but on demand, not on a
+    // clock.
+    return;
+  }, [whiteboardMode, showTempContent]);
 
   // ── Iframe onLoad: flush pending messages ──
   const handleIframeLoad = useCallback(() => {
@@ -1761,15 +1766,6 @@ export default function Room() {
 
   // ── Relay iframe messages ──
   useEffect(() => {
-    const requestSnapshot = () => {
-      if (snapshotTimerRef.current) clearTimeout(snapshotTimerRef.current);
-      snapshotTimerRef.current = setTimeout(() => {
-        const requestId = `snap-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-        snapshotRequestRef.current = requestId;
-        postToIframe({ type: 'REQUEST_HTML', requestId });
-      }, 350);
-    };
-
     const handler = (e: MessageEvent) => {
       if (!socket) return;
       if (e.source !== iframeRef.current?.contentWindow) return;
@@ -1863,33 +1859,29 @@ export default function Room() {
       // lesson, and it cannot be out of step with itself. Drop the signal.
       if (type === 'SYNC_REPLAY_MISS') return;
 
-      // Only relay actual SYNC_ interaction events
-      if (type.startsWith('SYNC_')) {
-        // Check scroll sync gate
-        if (type === 'SYNC_SCROLL' && !scrollSyncEnabled) return;
-        const mirrorOnly = !!e.data.mirrorOnly;
-        if (!mirrorOnly) {
+      // Only the two events the mirror does NOT carry.
+      //
+      // Everything else here was replay fodder: clicks, keys, drags, scroll —
+      // all re-derived on each student's own copy of the lesson. Students do not
+      // run the lesson any more, so those events arrive as no-ops, are journaled
+      // for a replay nothing performs, and each one dragged a full-document
+      // snapshot along behind it.
+      //
+      // A cursor is not state, and a "look here" ping is not state; neither can
+      // be recovered from a DOM frame, so both keep their channel.
+      if (type === 'SYNC_CURSOR' || type === 'SYNC_PING') {
+        if (!e.data.mirrorOnly) {
           socket.emit("interaction", {
             roomId,
-            event: {
-              ...e.data,
-              syncEpoch: syncEpochRef.current,
-              clientTs: Date.now(),
-            },
+            event: { ...e.data, syncEpoch: syncEpochRef.current, clientTs: Date.now() },
           });
         }
-        // Forward teacher-originated event to the student-mirror iframe so it
-        // visually reflects exactly what students see in real-time.
-        if (dualView && type !== 'SYNC_CURSOR') {
-          const remoteEvent = { ...e.data, type: type.replace('SYNC_', 'REMOTE_') };
-          postToMirror(remoteEvent);
-        }
-        if (!mirrorOnly && type !== 'SYNC_CURSOR' && type !== 'SYNC_SCROLL' && type !== 'SYNC_ZOOM' && type !== 'SYNC_MOUSEMOVE' && type !== 'SYNC_WHEEL') {
-          // SYNC_MOUSEMOVE streams during a drag; debouncing a snapshot per
-          // move would storm the iframe. The trailing SYNC_MOUSEUP triggers
-          // the authoritative snapshot once the gesture settles.
-          requestSnapshot();
-        }
+        return;
+      }
+      if (type.startsWith('SYNC_')) {
+        if (type === 'SYNC_SCROLL' && !scrollSyncEnabled) return;
+        // Dual View is painted by the mirror stream now (see the SYNC_MIRROR
+        // branch above), so it needs nothing here either.
       }
     };
     window.addEventListener("message", handler);
