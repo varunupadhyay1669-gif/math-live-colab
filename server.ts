@@ -364,7 +364,13 @@ async function startServer() {
       // activity and must not have their room (and its durable copy) swept out
       // from under them.
       if (room.studentLeftAt && (now - room.studentLeftAt > studentLeftExpiryMs)) {
-        if (room.users.size === 0) {
+        // Only a throwaway room dies here. "Empty for two hours" is the NORMAL
+        // state of a claimed board between weekly lessons, and this branch used
+        // to remove the durable copy too — so the claim-aware 30-day promise a
+        // few lines above was quietly void. Claimed rooms and rooms with
+        // content are left to the idle eviction below (persist, then drop from
+        // memory) and to their own TTL.
+        if (room.users.size === 0 && !room.claimed && !roomHasContent(room)) {
           rooms.delete(roomId);
           void roomStore.remove(roomId).catch(() => {});
           deletedCount++;
@@ -644,6 +650,23 @@ async function startServer() {
       return room.claimedAt + CLAIMED_TTL_MS;
     }
     return room.createdAt + ANON_TTL_MS;
+  }
+
+  // The same promise, asked of a STORED blob before it is hydrated.
+  //
+  // The old gate was flat: anything idle for 48 hours was refused. But a
+  // weekly class link is idle for seven days BY DESIGN, and refusing the
+  // teacher did not merely hide the board — the join path then created a
+  // fresh empty room under the same id, and the next persist overwrote the
+  // saved copy with the emptiness. The claim was honoured everywhere except
+  // the one moment it mattered: coming back.
+  function storedRoomFresh(raw: any): boolean {
+    if (!raw) return false;
+    if (raw.claimed && raw.claimedAt) return Date.now() < raw.claimedAt + CLAIMED_TTL_MS;
+    if (raw.createdAt) return Date.now() < raw.createdAt + ANON_TTL_MS;
+    // A blob from before these stamps existed: the old activity rule is all
+    // there is to go on.
+    return !(raw.lastActivityAt && Date.now() - raw.lastActivityAt > PERSIST_MAX_AGE);
   }
 
   // ─── ROOM PERSISTENCE ───
@@ -1216,7 +1239,7 @@ async function startServer() {
       let cleaned = 0;
       for (const { roomId, data: raw } of entries) {
         try {
-          if (raw.lastActivityAt && (now - raw.lastActivityAt > PERSIST_MAX_AGE)) {
+          if (!storedRoomFresh(raw)) {
             await roomStore.remove(roomId);
             cleaned++;
             continue;
@@ -1682,7 +1705,7 @@ async function startServer() {
       if (!existingRoom) {
         try {
           const raw = await roomStore.load(roomId);
-          const fresh = raw && !(raw.lastActivityAt && Date.now() - raw.lastActivityAt > PERSIST_MAX_AGE);
+          const fresh = storedRoomFresh(raw);
           if (fresh) {
             existingRoom = hydrateRoom(raw);
             rooms.set(roomId, existingRoom);
