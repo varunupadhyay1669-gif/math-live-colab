@@ -7,3 +7,6 @@ coverage/
 .env*
 !.env.example
 .rooms/
+
+# Server env file for the Lightsail deploy — secrets, never commit.
+deploy/mathslive.env

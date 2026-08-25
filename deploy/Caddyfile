@@ -1,0 +1,44 @@
+# /etc/caddy/Caddyfile
+#
+# Caddy gets and renews the TLS certificate by itself. The only requirement is
+# that the name below already points at this machine — a certificate cannot be
+# issued for a name that resolves somewhere else.
+#
+# That is why the cutover in DEPLOY.md tests on a SPARE name first: the spare
+# points here from the start, so everything can be proven end to end while the
+# real name is still being served by the old host. Adding the real name is then
+# the last step, and Caddy issues its certificate on the first request.
+
+{
+	# Replace with a real address — it is only used for expiry warnings.
+	email varunupadhyay1669@gmail.com
+}
+
+# ── Test name. Point this at the box first and verify against it. ──
+aws.matheinstein.com {
+	reverse_proxy 127.0.0.1:4000
+	encode zstd gzip
+	log {
+		output file /var/log/caddy/mathslive.log
+		format console
+	}
+}
+
+# ── The real name. Uncomment ONLY at cutover, after the tests pass. ──
+# class.matheinstein.com {
+# 	reverse_proxy 127.0.0.1:4000
+# 	encode zstd gzip
+# 	log {
+# 		output file /var/log/caddy/mathslive.log
+# 		format console
+# 	}
+# }
+
+# Notes for whoever edits this next:
+#
+# WebSockets need no configuration. Caddy's reverse_proxy passes an Upgrade
+# request through as a matter of course, which is what Socket.IO needs.
+#
+# Do NOT put Cloudflare's orange-cloud proxy in front of this host. It has
+# broken long-lived WebSocket connections for this app before; grey-cloud
+# (DNS only) is the setting that works.

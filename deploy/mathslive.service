@@ -1,0 +1,35 @@
+[Unit]
+Description=MathsLive
+After=network-online.target postgresql.service
+Wants=network-online.target postgresql.service
+
+[Service]
+Type=simple
+User=mathslive
+WorkingDirectory=/opt/mathslive
+EnvironmentFile=/opt/mathslive/deploy/mathslive.env
+ExecStart=/usr/bin/npm start
+
+# Restart forever, not five times.
+#
+# On 24 Aug the app ran out of memory and the host's restart policy gave up
+# after five attempts, so a crash that a restart fixes cost eight hours of
+# downtime. A tutoring platform should come back on its own at 2am; StartLimit
+# is disabled deliberately so nothing can decide to stop trying.
+Restart=always
+RestartSec=3
+StartLimitIntervalSec=0
+
+# Journald keeps the output; the app logs plainly to stdout.
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=mathslive
+
+# Modest hardening. The app writes only inside its own directory.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target
