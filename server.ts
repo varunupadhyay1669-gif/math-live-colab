@@ -5,6 +5,10 @@ import path from 'path';
 import { pressureFrom, idleWindowFor, describeMemory, type MemoryPolicy } from './src/lib/memoryGuard';
 import fs from 'fs';
 import { createHmac } from 'crypto';
+// pg is CommonJS; this file is ESM. Named imports off a CJS module are the
+// classic ERR_MODULE_NOT_FOUND at boot, so take the default and destructure.
+import pg from 'pg';
+const { Pool } = pg;
 
 interface FileEntry {
   id: string;
@@ -750,15 +754,195 @@ async function startServer() {
     };
   }
 
+  // ── THE SCHEMA ─────────────────────────────────────────────────────────
+  // Idempotent, and run on every boot. That costs one round trip and removes a
+  // migration step somebody would otherwise have to remember on a new
+  // environment — which, for a thing that is only ever set up twice, is the
+  // trade worth making.
+  const SCHEMA_SQL = `
+    -- The durable copy of a live class. One JSON document per room, which is
+    -- the shape the server already used; what Postgres adds is surviving a
+    -- redeploy. Rooms used to live on the container filesystem, so every deploy
+    -- silently threw away every saved lesson.
+    CREATE TABLE IF NOT EXISTS rooms (
+      room_id    text PRIMARY KEY,
+      data       jsonb       NOT NULL,
+      expires_at timestamptz,
+      updated_at timestamptz NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS rooms_expires_at_idx ON rooms (expires_at);
+
+    -- ── The intelligence layer (spec P0/F0.1) ──
+    -- Created now, written later. They are here so that a new environment is
+    -- one deploy away from complete rather than one deploy plus a migration
+    -- nobody documented.
+    CREATE TABLE IF NOT EXISTS students (
+      id         text PRIMARY KEY,
+      name       text NOT NULL,
+      grade      text,
+      interests  jsonb       NOT NULL DEFAULT '{}'::jsonb,
+      created_at timestamptz NOT NULL DEFAULT now()
+    );
+
+    CREATE TABLE IF NOT EXISTS sessions (
+      id         text PRIMARY KEY,
+      student_id text REFERENCES students(id) ON DELETE CASCADE,
+      room_id    text,
+      started_at timestamptz NOT NULL DEFAULT now(),
+      ended_at   timestamptz,
+      topic      text,
+      summary    jsonb
+    );
+    CREATE INDEX IF NOT EXISTS sessions_student_idx ON sessions (student_id, started_at DESC);
+
+    -- The event spine (P1/F1.1). Append-only. The copilot, the student model
+    -- and ParentLive are all derived from this one table, which is why it is
+    -- worth creating before anything reads it.
+    CREATE TABLE IF NOT EXISTS events (
+      id         bigserial PRIMARY KEY,
+      session_id text,
+      room_id    text,
+      student_id text,
+      at         timestamptz NOT NULL DEFAULT now(),
+      actor      text NOT NULL,
+      kind       text NOT NULL,
+      payload    jsonb NOT NULL DEFAULT '{}'::jsonb
+    );
+    CREATE INDEX IF NOT EXISTS events_session_idx ON events (session_id, at);
+    CREATE INDEX IF NOT EXISTS events_student_idx ON events (student_id, at DESC);
+    CREATE INDEX IF NOT EXISTS events_kind_idx    ON events (kind, at DESC);
+
+    CREATE TABLE IF NOT EXISTS mastery (
+      student_id text NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+      skill_code text NOT NULL,
+      band       text NOT NULL,
+      evidence   integer NOT NULL DEFAULT 0,
+      trend      text,
+      last_seen  timestamptz NOT NULL DEFAULT now(),
+      PRIMARY KEY (student_id, skill_code)
+    );
+
+    CREATE TABLE IF NOT EXISTS student_model (
+      student_id     text PRIMARY KEY REFERENCES students(id) ON DELETE CASCADE,
+      misconceptions jsonb NOT NULL DEFAULT '[]'::jsonb,
+      preferences    jsonb NOT NULL DEFAULT '{}'::jsonb,
+      reactions      jsonb NOT NULL DEFAULT '{}'::jsonb,
+      updated_at     timestamptz NOT NULL DEFAULT now()
+    );
+
+    CREATE TABLE IF NOT EXISTS artifacts (
+      id             text PRIMARY KEY,
+      kind           text NOT NULL,
+      topic          text,
+      skill_codes    text[] NOT NULL DEFAULT '{}',
+      html           text,
+      section_scores jsonb NOT NULL DEFAULT '{}'::jsonb,
+      created_at     timestamptz NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS artifacts_topic_idx ON artifacts (topic);
+
+    CREATE TABLE IF NOT EXISTS parents (
+      id         text PRIMARY KEY,
+      student_id text REFERENCES students(id) ON DELETE CASCADE,
+      email      text NOT NULL,
+      token      text UNIQUE NOT NULL,
+      consents   jsonb NOT NULL DEFAULT '{}'::jsonb,
+      created_at timestamptz NOT NULL DEFAULT now()
+    );
+  `;
+
+  // Postgres — durable rooms, and the home the intelligence layer will need
+  // anyway. Preferred over Redis for the reason a lesson is not a cache: a
+  // class link is meant to work in a month, and Redis is built to forget.
+  //
+  // Note what this quietly fixes. restoreRooms() below returns early for any
+  // store that is not `file`, so rooms lazy-load on join instead of every room
+  // being hydrated into the heap at boot. That eager scan is what turned an
+  // out-of-memory crash into an eight-hour crash loop: each retry re-loaded the
+  // same too-large set and died at the same point.
+  function makePostgresRoomStore(connectionString: string): RoomStore {
+    // Railway's private network is already inside the trust boundary and
+    // presents no TLS; anything reachable from outside needs it, and managed
+    // providers routinely present certs a strict client refuses.
+    const isInternal = /\.railway\.internal|@localhost|@127\.0\.0\.1/.test(connectionString);
+    const pool = new Pool({
+      connectionString,
+      max: Number(process.env.PGPOOL_MAX) || 5,
+      idleTimeoutMillis: 30_000,
+      connectionTimeoutMillis: 10_000,
+      ...(isInternal ? {} : { ssl: { rejectUnauthorized: false } }),
+    });
+    // An idle client killed by the network must not take the process with it.
+    pool.on('error', (err: Error) => console.error('Postgres pool error:', err.message));
+
+    // Deliberately never rejects. Nothing awaits this at boot, and an unhandled
+    // rejection ends the process — which is the exact failure this whole change
+    // exists to stop. A store that cannot answer is survivable: every caller
+    // already handles it (a failed save is logged, a failed lazy-restore reads
+    // as "room not here yet"), so the class degrades to non-durable instead of
+    // going down.
+    const ready = pool.query(SCHEMA_SQL)
+      .then(() => { console.log('🗃️  Postgres schema ready'); })
+      .catch((err: Error) => {
+        console.error('Postgres schema failed — rooms will NOT persist:', err.message);
+      });
+
+    return {
+      kind: 'postgres',
+      async save(roomId, data, ttlSeconds) {
+        await ready;
+        const ttl = Math.max(60, Math.floor(ttlSeconds));
+        await pool.query(
+          `INSERT INTO rooms (room_id, data, expires_at, updated_at)
+                VALUES ($1, $2::jsonb, now() + ($3::int * interval '1 second'), now())
+           ON CONFLICT (room_id) DO UPDATE SET
+                data       = EXCLUDED.data,
+                expires_at = EXCLUDED.expires_at,
+                updated_at = now()`,
+          [roomId, JSON.stringify(data), ttl],
+        );
+      },
+      async load(roomId) {
+        await ready;
+        const r = await pool.query(
+          `SELECT data FROM rooms
+            WHERE room_id = $1 AND (expires_at IS NULL OR expires_at > now())`,
+          [roomId],
+        );
+        return r.rows.length ? r.rows[0].data : null;
+      },
+      async loadAll() {
+        await ready;
+        const r = await pool.query(
+          `SELECT room_id, data FROM rooms
+            WHERE expires_at IS NULL OR expires_at > now()`,
+        );
+        return r.rows.map((row: { room_id: string; data: any }) => ({ roomId: row.room_id, data: row.data }));
+      },
+      async remove(roomId) {
+        await ready;
+        await pool.query('DELETE FROM rooms WHERE room_id = $1', [roomId]);
+      },
+    };
+  }
+
   const UPSTASH_URL = process.env.UPSTASH_REDIS_REST_URL;
   const UPSTASH_TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN;
-  const roomStore: RoomStore = (UPSTASH_URL && UPSTASH_TOKEN)
-    ? makeRedisRoomStore(UPSTASH_URL, UPSTASH_TOKEN)
-    : fileRoomStore;
+  // Railway injects DATABASE_URL when a Postgres service is attached, so the
+  // durable path turns itself on. Upstash stays supported for anyone already
+  // on it; files remain the local default so `npm run dev` needs no database.
+  const DATABASE_URL = process.env.DATABASE_URL;
+  const roomStore: RoomStore = DATABASE_URL
+    ? makePostgresRoomStore(DATABASE_URL)
+    : (UPSTASH_URL && UPSTASH_TOKEN)
+      ? makeRedisRoomStore(UPSTASH_URL, UPSTASH_TOKEN)
+      : fileRoomStore;
   console.log(
-    roomStore.kind === 'redis'
-      ? '🗄️  Room store: Upstash Redis — durable rooms enabled'
-      : '🗄️  Room store: .rooms/ files — set UPSTASH_REDIS_REST_URL + UPSTASH_REDIS_REST_TOKEN for durable rooms'
+    roomStore.kind === 'postgres'
+      ? '🗄️  Room store: Postgres — durable rooms enabled'
+      : roomStore.kind === 'redis'
+        ? '🗄️  Room store: Upstash Redis — durable rooms enabled'
+        : '🗄️  Room store: .rooms/ files — set DATABASE_URL for durable rooms'
   );
 
   function serializeRoom(roomId: string, room: RoomData): object {
@@ -4045,7 +4229,7 @@ Build a widget that teaches: ${safePrompt}`;
       // lets you curl /healthz and confirm your latest push really deployed
       // (instead of guessing whether a fix is live). Falls back to 'dev' locally.
       commit: (process.env.RENDER_GIT_COMMIT || process.env.GIT_COMMIT || 'dev').slice(0, 7),
-      durableRooms: roomStore.kind === 'redis',
+      durableRooms: roomStore.kind !== 'file',
       // Whether to show the prompt — never the code itself.
       passcodeRequired,
       ts: Date.now(),
