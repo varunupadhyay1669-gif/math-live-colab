@@ -2,6 +2,11 @@
 Description=MathsLive
 After=network-online.target postgresql.service
 Wants=network-online.target postgresql.service
+# These two belong to [Unit], NOT [Service]. systemd ignores them in the wrong
+# section with only a log line, which is how the restart cap survived a review:
+# the unit looked right and behaved as though the setting was never written.
+StartLimitIntervalSec=0
+StartLimitBurst=0
 
 [Service]
 Type=simple
@@ -18,7 +23,6 @@ ExecStart=/usr/bin/npm start
 # is disabled deliberately so nothing can decide to stop trying.
 Restart=always
 RestartSec=3
-StartLimitIntervalSec=0
 
 # Journald keeps the output; the app logs plainly to stdout.
 StandardOutput=journal
