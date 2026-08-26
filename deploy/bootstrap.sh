@@ -66,6 +66,43 @@ fi
 sudo -u postgres psql -tAc "SELECT 1 FROM pg_database WHERE datname='$DB_NAME'" | grep -q 1 \
   || sudo -u postgres createdb -O "$DB_USER" "$DB_NAME"
 
+log "Swap — the difference between a slow minute and a dead process"
+# A 1 GB box runs Node AND PostgreSQL AND the OS. Without swap, a momentary
+# spike is not slow, it is fatal: the kernel picks the biggest process and
+# kills it, which on this box is always the app, and always mid-lesson.
+#
+# Swap is not extra memory and must not be treated as headroom. It is a shock
+# absorber, so a brief overshoot costs latency instead of the class.
+if ! swapon --show | grep -q '/swapfile'; then
+  fallocate -l 2G /swapfile
+  chmod 600 /swapfile
+  mkswap /swapfile >/dev/null
+  swapon /swapfile
+  grep -q '/swapfile' /etc/fstab || echo '/swapfile none swap sw 0 0' >> /etc/fstab
+fi
+# Prefer RAM, but do not refuse swap when it is the alternative to being killed.
+sysctl -qw vm.swappiness=10
+grep -q '^vm.swappiness' /etc/sysctl.conf || echo 'vm.swappiness=10' >> /etc/sysctl.conf
+free -h | head -3
+
+log "PostgreSQL tuned for a small box"
+# Defaults assume the database owns the machine. Here it is a guest sharing
+# 1 GB with the thing that actually serves lessons, so it is capped hard. The
+# workload is a handful of small documents, not analytics.
+PG_CONF=$(sudo -u postgres psql -tAc 'SHOW config_file;')
+if ! grep -q '# mathslive small-box tuning' "$PG_CONF"; then
+  cat >> "$PG_CONF" <<'PGTUNE'
+
+# mathslive small-box tuning
+shared_buffers = 96MB
+work_mem = 4MB
+maintenance_work_mem = 32MB
+max_connections = 20
+effective_cache_size = 256MB
+PGTUNE
+  systemctl restart postgresql
+fi
+
 log "Firewall — only SSH and the web ports"
 ufw allow OpenSSH >/dev/null
 ufw allow 80/tcp   >/dev/null
