@@ -155,6 +155,67 @@ for (const [name, html] of Object.entries(LESSONS)) {
     mismatches.slice(0, 3).join('; '));
 }
 
+section('OFFLINE — a frame belongs to ONE canvas');
+
+// Reported from a live class: a burst of confetti froze on the student's screen
+// after a correct answer and never cleared, sitting on top of the question.
+//
+// The follower caches the last frame per canvas and repaints after a body swap,
+// because innerHTML recreates a canvas blank. The trap is that a POSITIONAL
+// selector does not stop resolving when its element is removed — it starts
+// resolving to a different element. With the celebration canvas first in the
+// body, "canvas:nth-of-type(1)" became the LESSON canvas the moment confetti
+// was removed, so the cached confetti frame was drawn over the question, and
+// again on every snapshot after it.
+{
+  const followerJs = mirrorScriptFor('follower')
+    .replace(/^[\s\S]*?<script[^>]*>/i, '')
+    .replace(/<\/script>[\s\S]*$/i, '');
+  const dom = new JSDOM('<!doctype html><html><body></body></html>',
+    { runScripts: 'outside-only', pretendToBeVisual: true });
+  const { window } = dom;
+  const drawn = [];
+  window.HTMLCanvasElement.prototype.getContext = function () {
+    const el = this;
+    return { drawImage: () => drawn.push(el.id || '(no id)') };
+  };
+  // jsdom decodes nothing; resolve immediately so onload actually runs.
+  window.Image = class { set src(_v) { if (this.onload) this.onload(); } };
+  window.parent = { postMessage: () => {} };
+  window.eval(followerJs);
+  const send = (msg) => window.dispatchEvent(
+    new window.MessageEvent('message', { data: msg, source: window.parent }));
+
+  // Celebration canvas FIRST — the order that makes the selector re-resolve.
+  send({ type: 'MIRROR_APPLY', attrs: {},
+    body: '<canvas id="confetti" width="80" height="80"></canvas>'
+        + '<canvas id="lesson" width="80" height="80"></canvas>' });
+  send({ type: 'MIRROR_CANVAS', canvases: [
+    { sel: 'body > canvas:nth-of-type(1)', idx: 0, w: 80, h: 80, data: 'data:image/webp;base64,CONFETTI' }] });
+  assert(drawn.includes('confetti'), 'a frame paints onto its own canvas');
+
+  // The animation ends and the lesson removes the celebration canvas.
+  drawn.length = 0;
+  send({ type: 'MIRROR_APPLY', attrs: {},
+    body: '<canvas id="lesson" width="80" height="80"></canvas>' });
+  assert(!drawn.includes('lesson'),
+    'a removed canvas does not paint onto its neighbour',
+    'the confetti frame was drawn onto the lesson canvas — this is the stuck confetti');
+
+  // And it must not keep happening on every snapshot after.
+  drawn.length = 0;
+  send({ type: 'MIRROR_APPLY', attrs: {},
+    body: '<canvas id="lesson" width="80" height="80"></canvas><p>next question</p>' });
+  assert(drawn.length === 0, 'a dead frame is dropped, not chased forever');
+
+  // The race the index fallback exists for must still work: a LIVE frame whose
+  // canvas has not arrived yet may still resolve by index.
+  drawn.length = 0;
+  send({ type: 'MIRROR_CANVAS', canvases: [
+    { sel: 'body > canvas:nth-of-type(9)', idx: 0, w: 80, h: 80, data: 'data:image/webp;base64,LIVE' }] });
+  assert(drawn.includes('lesson'), 'a live frame can still fall back to the canvas index');
+}
+
 section('OFFLINE — the follower never runs the lesson');
 
 for (const [name, html] of Object.entries(LESSONS)) {

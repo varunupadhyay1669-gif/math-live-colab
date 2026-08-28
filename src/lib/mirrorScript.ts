@@ -988,7 +988,7 @@ export const mirrorScript = `
     // Immediately re-draw the most recent captured frame so a lesson that
     // mutates the DOM while a canvas/3D sim runs doesn't flicker to empty
     // between the swap and the next ~120ms canvas tick.
-    if (lastCanvasList) paintCanvases(lastCanvasList);
+    if (lastCanvasList) repaintKnownCanvases();
   }
   // Ask for a fresh full frame, at most once every few seconds. A miss usually
   // means the DOM snapshot carrying this canvas has not landed yet, so a burst
@@ -1016,6 +1016,59 @@ export const mirrorScript = `
     return i < all.length ? all[i] : null;
   }
 
+  // Repaint the frames we already hold, after a body swap blanked their
+  // canvases — onto the exact elements they were painted on, and nothing else.
+  //
+  // This is where confetti got stuck on a student's screen for the rest of a
+  // lesson. A celebration canvas streams frames, the lesson removes it when the
+  // animation finishes, and the next DOM snapshot repainted the cached list.
+  //
+  // The trap is that a positional selector does not stop resolving when its
+  // element is removed — it silently starts resolving to a DIFFERENT element.
+  // With the celebration canvas first in the body, "canvas:nth-of-type(1)"
+  // became the LESSON canvas the moment confetti was removed, so a frozen burst
+  // of confetti was drawn straight over the question, and drawn again on every
+  // snapshot after it. Checking that the selector still resolves does not help;
+  // it resolves perfectly, to the wrong canvas.
+  //
+  // So a cached frame is bound to the ELEMENT it was actually painted on. If
+  // that element has left the document the frame is dropped, because there is
+  // no longer anywhere it belongs.
+  function repaintKnownCanvases() {
+    if (!lastCanvasList) return;
+    var alive = [];
+    for (var i = 0; i < lastCanvasList.length; i++) {
+      var item = lastCanvasList[i];
+      var el = item.el;
+      var here = false;
+      try { here = !!(el && el.getContext && document.contains(el)); } catch (e) {}
+      if (here) { alive.push(item); drawFrame(item, el, true); }
+    }
+    lastCanvasList = alive.length ? alive : null;
+  }
+
+  function drawFrame(item, c, isRepaint) {
+    var img = new Image();
+    img.onload = function () {
+      try {
+        if (c.width !== item.w) c.width = item.w;
+        if (c.height !== item.h) c.height = item.h;
+        var ctx = c.getContext('2d');
+        // Null when something already took a webgl context on this element: a
+        // canvas only ever grants one kind. Nothing can be drawn here, so say
+        // so rather than failing mute.
+        if (!ctx) { if (!isRepaint) rescueCanvases('no 2d context on ' + item.sel); return; }
+        ctx.drawImage(img, 0, 0);
+      } catch (e) {
+        if (!isRepaint) rescueCanvases('draw failed: ' + (e && e.name));
+      }
+    };
+    // A corrupt or truncated data URL fires onerror, never onload. Left
+    // unhandled that was another way to sit on a blank canvas in silence.
+    img.onerror = function () { if (!isRepaint) rescueCanvases('frame failed to decode'); };
+    img.src = item.data;
+  }
+
   function paintCanvases(list) {
     lastCanvasList = list;
     for (var i = 0; i < list.length; i++) {
@@ -1035,25 +1088,10 @@ export const mirrorScript = `
         // is precisely how this was reported: "they see everything, but the
         // simulation is not showing".
         if (!c || !c.getContext) { rescueCanvases('element ' + item.sel + ' not found'); return; }
-        var img = new Image();
-        img.onload = function () {
-          try {
-            if (c.width !== item.w) c.width = item.w;
-            if (c.height !== item.h) c.height = item.h;
-            var ctx = c.getContext('2d');
-            // Null when something already took a webgl context on this element:
-            // a canvas only ever grants one kind. Nothing can be drawn here, so
-            // say so rather than failing mute.
-            if (!ctx) { rescueCanvases('no 2d context on ' + item.sel); return; }
-            ctx.drawImage(img, 0, 0);
-          } catch (e) {
-            rescueCanvases('draw failed: ' + (e && e.name));
-          }
-        };
-        // A corrupt or truncated data URL fires onerror, never onload. Left
-        // unhandled that was another way to sit on a blank canvas in silence.
-        img.onerror = function () { rescueCanvases('frame failed to decode'); };
-        img.src = item.data;
+        // Remember WHICH element this frame belongs to, so a later repaint
+        // cannot land it on a neighbour that inherited its selector.
+        item.el = c;
+        drawFrame(item, c, false);
       })(list[i]);
     }
   }
