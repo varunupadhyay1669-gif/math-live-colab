@@ -104,7 +104,9 @@ export function mountRecordRoutes(app: any, pool: Pool, opts: { secret: string }
   app.delete('/api/classes/:id', async (req: Request, res: Response) => {
     const user = requireUser(req, res); if (!user) return;
     try {
-      await pool.query('DELETE FROM classes WHERE id = $1 AND teacher_id = $2', [req.params.id, user.id]);
+      const r = await pool.query(
+        'DELETE FROM classes WHERE id = $1 AND teacher_id = $2', [req.params.id, user.id]);
+      if (r.rowCount === 0) return res.status(404).json({ error: 'Class not found.' });
       res.json({ ok: true });
     } catch (err) { fail(res, err, 'delete the class'); }
   });
@@ -209,8 +211,9 @@ export function mountRecordRoutes(app: any, pool: Pool, opts: { secret: string }
   app.delete('/api/sessions/:id', async (req: Request, res: Response) => {
     const user = requireUser(req, res); if (!user) return;
     try {
-      await pool.query('DELETE FROM teaching_sessions WHERE id = $1 AND teacher_id = $2',
-        [req.params.id, user.id]);
+      const r = await pool.query(
+        'DELETE FROM teaching_sessions WHERE id = $1 AND teacher_id = $2', [req.params.id, user.id]);
+      if (r.rowCount === 0) return res.status(404).json({ error: 'Session not found.' });
       res.json({ ok: true });
     } catch (err) { fail(res, err, 'delete the session'); }
   });
