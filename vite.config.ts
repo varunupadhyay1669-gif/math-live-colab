@@ -36,7 +36,8 @@ export default defineConfig(() => {
           manualChunks: {
             'vendor-react': ['react', 'react-dom', 'react-router-dom'],
             'vendor-socket': ['socket.io-client'],
-            'vendor-supabase': ['@supabase/supabase-js'],
+            // 'vendor-supabase' is gone with the dependency: teacher accounts are
+            // served by this application, so no auth SDK reaches the browser.
           },
         },
       },

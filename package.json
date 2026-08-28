@@ -34,7 +34,6 @@
   "dependencies": {
     "@google/genai": "^1.29.0",
     "@mediapipe/tasks-vision": "^1.0.0",
-    "@supabase/supabase-js": "^2.106.2",
     "@types/pg": "^8.23.1",
     "express": "^4.21.2",
     "html2canvas": "^1.4.1",

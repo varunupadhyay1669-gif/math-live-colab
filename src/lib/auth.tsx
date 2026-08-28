@@ -1,24 +1,34 @@
 import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
-import type { Session, User } from '@supabase/supabase-js';
+import { api, NotSignedIn } from './api';
 
-// Read the resolved flag rather than import.meta.env directly. Credentials may
-// have arrived at RUN time from the server, in which case the build-time
-// variables are empty and this flag would have said "no auth" on a deployment
-// with a perfectly good database. initConfig() has already resolved by the time
-// anything renders (see main.tsx).
+// Teacher sign-in, served by this application.
 //
-// Imported from runtimeConfig, NOT from ./supabase. Both export this flag, but
-// ./supabase carries the client; importing the flag from there pulled the whole
-// auth SDK into the entry bundle and undid the lazy import below.
-import { authConfigured } from './runtimeConfig';
+// Replaces Supabase Auth. What changed for anything using this file: nothing —
+// `enabled`, `loading`, `user`, `signInWithEmail`, `signOut` all mean what they
+// meant before. What changed underneath is worth knowing:
+//
+//   * The session is an HttpOnly cookie, so JavaScript cannot read it. That is
+//     strictly safer than the previous token in localStorage, which any script
+//     on the page could have taken. It also means the socket handshake carries
+//     the session automatically and no longer needs a token passed by hand.
+//   * There is no auth SDK to download. The 210 kB chunk this file worked hard
+//     to lazy-load does not exist any more.
+//   * There is no third party in the sign-in path, which removes the failure
+//     the watchdog below was written for — a hosted service being slow or over
+//     quota leaving every teacher on "Loading…" forever. The watchdog is kept
+//     anyway: our own server can be slow too, and a spinner with no way out is
+//     the worst possible answer.
+
+/** Shaped like the old Supabase user, so screens reading `.email` still work. */
+export interface AuthUser { id: string; email: string; }
 
 interface AuthState {
-  /** True when Supabase is configured (the two VITE_ env vars are set). */
+  /** True when accounts are available at all (the server has a database). */
   enabled: boolean;
   /** True until the initial session check resolves (avoids a login flash). */
   loading: boolean;
-  session: Session | null;
-  user: User | null;
+  session: { user: AuthUser } | null;
+  user: AuthUser | null;
   /** Send a passwordless magic-link to `email`. Returns an error message on failure. */
   signInWithEmail: (email: string) => Promise<{ error?: string }>;
   signOut: () => Promise<void>;
@@ -27,105 +37,56 @@ interface AuthState {
 const AuthContext = createContext<AuthState | null>(null);
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const [session, setSession] = useState<Session | null>(null);
-  // Only "loading" when auth is enabled — otherwise resolve instantly so the
-  // no-login app renders without delay.
-  const isAuthEnabled = authConfigured;
-  const [loading, setLoading] = useState<boolean>(isAuthEnabled);
+  const [user, setUser] = useState<AuthUser | null>(null);
+  const [loading, setLoading] = useState(true);
+  // Accounts are assumed available until the server says otherwise, so the
+  // sign-in button is not hidden from a teacher during the first round trip.
+  const [enabled, setEnabled] = useState(true);
 
   useEffect(() => {
-    if (!isAuthEnabled) {
-      setLoading(false);
-      return;
-    }
     let active = true;
-    let unsub: (() => void) | undefined;
-    // Never let a third-party service strand the whole app.
-    //
-    // getSession() below can hang rather than fail: with an expired token it
-    // goes to the network to refresh, and if Supabase is slow, throttled or
-    // over quota that request may never settle. Nothing else clears `loading`,
-    // so every auth-gated page — the dashboard, a student's page, /admin —
-    // sat on "Loading…" indefinitely with no message and no way out. That is
-    // indistinguishable from the app being broken.
-    //
-    // After this deadline we give up waiting and render as signed-out. The
-    // session, if it does arrive later, still lands via onAuthStateChange and
-    // the UI corrects itself. Showing a sign-in button a few seconds early is
-    // a small wrong; a permanent spinner is a much larger one.
     const settle = () => { if (active) setLoading(false); };
+    // A spinner that never resolves is indistinguishable from a broken app.
     const watchdog = setTimeout(() => {
       console.warn('Auth did not resolve in time — rendering as signed out.');
       settle();
     }, 8000);
-    // Lazy chunk — fetched only because auth is enabled. getSupabase() awaits
-    // the client being built rather than reading whatever `supabase` happens to
-    // hold right now: the first paint no longer waits for the SDK, so reading
-    // the binding directly could catch a null mid-construction and report "not
-    // signed in" to a teacher who is.
-    import('./supabase')
-      .then(({ getSupabase }) => getSupabase())
-      .then((supabase) => {
-        if (!active) return;
-        if (!supabase) {
-          settle();
-          return;
-        }
-        // .catch is not optional here. Without it a rejected getSession()
-        // left `loading` true forever — the outer .catch below never sees it,
-        // because this promise was not returned into that chain.
-        supabase.auth.getSession()
-          .then(({ data }) => {
-            if (!active) return;
-            setSession(data.session);
-          })
-          .catch((err) => {
-            console.error('Could not read the saved session:', err);
-          })
-          .finally(settle);
-        const { data: sub } = supabase.auth.onAuthStateChange((_event, s) => {
-          setSession(s);
-        });
-        unsub = () => sub.subscription.unsubscribe();
-      })
+
+    api.get<{ user: AuthUser | null }>('/api/auth/me')
+      .then(({ user }) => { if (active) setUser(user); })
       .catch((err) => {
-        console.error('Failed to load auth:', err);
-        settle();
-      });
-    return () => {
-      active = false;
-      clearTimeout(watchdog);
-      unsub?.();
-    };
+        if (!active) return;
+        // 404 means this server has no accounts configured — a valid state, and
+        // the app must run without them. Anything else is simply signed out.
+        if (err?.status === 404) setEnabled(false);
+        setUser(null);
+      })
+      .finally(() => { clearTimeout(watchdog); settle(); });
+
+    return () => { active = false; clearTimeout(watchdog); };
   }, []);
 
   const signInWithEmail = useCallback(async (email: string): Promise<{ error?: string }> => {
-    const { getSupabase } = await import('./supabase');
-    const supabase = await getSupabase();
-    if (!supabase) return { error: 'Auth not configured' };
-    const { error } = await supabase.auth.signInWithOtp({
-      email: email.trim(),
-      // Where the link in the email lands the teacher. This URL must be in
-      // Supabase → Auth → URL Configuration (Site URL / Redirect URLs).
-      options: { emailRedirectTo: `${window.location.origin}/dashboard` },
-    });
-    return { error: error?.message };
+    try {
+      await api.post('/api/auth/magic-link', { email: email.trim() });
+      return {};
+    } catch (err) {
+      return { error: (err as Error).message || 'Could not send the sign-in link.' };
+    }
   }, []);
 
   const signOut = useCallback(async () => {
-    const { getSupabase } = await import('./supabase');
-    const supabase = await getSupabase();
-    if (!supabase) return;
-    await supabase.auth.signOut();
+    try { await api.post('/api/auth/signout'); } catch { /* clearing locally is what matters */ }
+    setUser(null);
   }, []);
 
   return (
     <AuthContext.Provider
       value={{
-        enabled: isAuthEnabled,
+        enabled,
         loading,
-        session,
-        user: session?.user ?? null,
+        session: user ? { user } : null,
+        user,
         signInWithEmail,
         signOut,
       }}
@@ -138,8 +99,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 export function useAuth(): AuthState {
   const ctx = useContext(AuthContext);
   if (!ctx) {
-    // Provider not mounted — return a disabled stub so callers can safely
-    // render the no-auth path without crashing.
+    // Provider not mounted — a disabled stub so callers can render the
+    // no-account path without crashing.
     return {
       enabled: false,
       loading: false,
@@ -151,3 +112,7 @@ export function useAuth(): AuthState {
   }
   return ctx;
 }
+
+// NotSignedIn is re-exported so screens can distinguish "you are signed out"
+// from "something went wrong" without importing the API client themselves.
+export { NotSignedIn };

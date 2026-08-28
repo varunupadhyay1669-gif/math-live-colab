@@ -97,9 +97,9 @@ export default function AdminView() {
         <h2 className="ml-admin-setup-title">One setup step left</h2>
         <p className="ml-admin-muted" style={{ lineHeight: 1.6 }}>
           The admin functions are not in the database yet, so nothing can be read across tutors.
-          Open Supabase → SQL Editor and run:
+          On the server, add your email to the admin list:
         </p>
-        <code className="ml-admin-code">supabase/migrations/004_platform_admin.sql</code>
+        <code className="ml-admin-code">INSERT INTO platform_admins (email) VALUES ('you@example.com');</code>
         <p className="ml-admin-muted" style={{ lineHeight: 1.6, marginTop: 14 }}>
           Step 2 of that file has an email in it — make sure it is
           <strong style={{ color: '#E2E8F0' }}> {auth.user.email}</strong>, the account you are signed

@@ -1,17 +1,17 @@
-import { getSupabase } from './supabase';
+import { api, NotSignedIn, ApiError } from './api';
 import { classifyAdminError } from './adminLabels';
 
 // MathsLive Admin — reading across every tutor.
 //
-// The real gate is in Postgres (migration 004): these RPCs run `security
-// definer` and raise 'not authorised' for anyone who is not a listed admin.
-// Everything here is convenience on top of that. Hiding the page from
-// non-admins in the browser is a courtesy, not a control — anyone can call the
-// same RPC by hand, which is exactly why the check lives in the database.
+// The real gate is on the server: every /api/admin route re-checks the caller
+// against the platform_admins table before it reads a row, and answers 403
+// otherwise. Everything here is convenience on top of that. Hiding the page
+// from non-admins in the browser is a courtesy, not a control — anyone can
+// call the same endpoint by hand, which is exactly why the check lives on the
+// server.
 //
-// There is deliberately no service-role key in this app. That key bypasses
-// row-level security completely, so one leak would expose every tutor's
-// students.
+// Membership is a row in platform_admins, so granting admin is a visible,
+// deliberate INSERT rather than a flag someone can flip by accident.
 
 export interface TutorUsage {
   user_id: string;
@@ -40,7 +40,7 @@ export interface StudentUsage {
 /** Thrown when the admin migration has not been run yet. */
 export class AdminNotInstalled extends Error {
   constructor() {
-    super('The admin functions are not in this database yet. Run supabase/migrations/004_platform_admin.sql in the SQL editor.');
+    super('Admin access is not set up on this server yet. Add your email to the platform_admins table.');
     this.name = 'AdminNotInstalled';
   }
 }
@@ -57,11 +57,13 @@ export class AdminNotInstalled extends Error {
 export type AdminAccess = 'admin' | 'denied' | 'not-installed' | 'no-auth' | 'error';
 
 export async function checkAdminAccess(): Promise<AdminAccess> {
-  const supabase = await getSupabase();
-  if (!supabase) return 'no-auth';
-  const { data, error } = await supabase.rpc('is_platform_admin');
-  if (error) return classifyAdminError(error);
-  return data === true ? 'admin' : 'denied';
+  try {
+    const { isAdmin } = await api.get<{ isAdmin: boolean }>('/api/admin/is-admin');
+    return isAdmin ? 'admin' : 'denied';
+  } catch (err) {
+    if (err instanceof NotSignedIn) return 'no-auth';
+    return 'error';
+  }
 }
 
 /** Kept for callers that only need yes/no. */
@@ -70,32 +72,28 @@ export async function isPlatformAdmin(): Promise<boolean> {
 }
 
 export async function fetchTutorUsage(): Promise<TutorUsage[]> {
-  const supabase = await getSupabase();
-  if (!supabase) throw new Error('Auth is not configured');
-  const { data, error } = await supabase.rpc('admin_tutor_usage');
-  if (error) {
-    const kind = classifyAdminError(error);
-    if (kind === 'not-installed') throw new AdminNotInstalled();
-    if (kind === 'denied') throw new Error('Not authorised.');
-    throw error;
+  try {
+    const { tutors } = await api.get<{ tutors: TutorUsage[] }>('/api/admin/tutors');
+    return tutors ?? [];
+  } catch (err) {
+    if (err instanceof NotSignedIn) throw new Error('Sign in first.');
+    if (err instanceof ApiError && err.status === 403) throw new Error('Not authorised.');
+    throw err;
   }
-  return (data ?? []) as TutorUsage[];
 }
 
 export async function fetchStudentUsage(): Promise<StudentUsage[]> {
-  const supabase = await getSupabase();
-  if (!supabase) throw new Error('Auth is not configured');
-  const { data, error } = await supabase.rpc('admin_student_usage');
-  if (error) {
-    const kind = classifyAdminError(error);
-    if (kind === 'not-installed') throw new AdminNotInstalled();
-    if (kind === 'denied') throw new Error('Not authorised.');
-    throw error;
+  try {
+    const { students } = await api.get<{ students: StudentUsage[] }>('/api/admin/students');
+    return students ?? [];
+  } catch (err) {
+    if (err instanceof NotSignedIn) throw new Error('Sign in first.');
+    if (err instanceof ApiError && err.status === 403) throw new Error('Not authorised.');
+    throw err;
   }
-  return (data ?? []) as StudentUsage[];
 }
 
 // Presentation helpers are re-exported from lib/adminLabels, which imports
-// nothing — so a test of "is this tutor dormant" does not have to construct a
-// Supabase client to find out.
+// nothing — so a test of "is this tutor dormant" does not have to construct an
+// API client to find out.
 export { activityStatus, agoLabel, classifyAdminError, type ActivityStatus } from './adminLabels';

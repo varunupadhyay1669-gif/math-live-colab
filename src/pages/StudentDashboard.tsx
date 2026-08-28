@@ -75,8 +75,7 @@ export default function StudentDashboard() {
   useEffect(() => { if (auth.user) void load(); }, [auth.user, load]);
 
   const teacherName = useMemo(() => {
-    const meta = auth.user?.user_metadata as { full_name?: string; name?: string } | undefined;
-    return meta?.full_name || meta?.name || cleanDisplayName(auth.user?.email) || 'Teacher';
+    return cleanDisplayName(auth.user?.email) || 'Teacher';
   }, [auth.user]);
 
   const profile = useMemo(() => profileFrom(row), [row]);

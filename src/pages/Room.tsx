@@ -106,11 +106,11 @@ export default function Room() {
   const navigate = useNavigate();
   const auth = useAuth();
   // The signed-in teacher's Supabase token, mirrored into a ref so the socket
-  // 'connect' handler (set up once) always reads the latest value. Sent on
-  // join_room so the server can enforce class ownership (Stage 3). Undefined
-  // when auth is disabled — server then skips enforcement.
-  const authTokenRef = useRef<string | null>(null);
-  useEffect(() => { authTokenRef.current = auth.session?.access_token ?? null; }, [auth.session]);
+  // Class ownership used to be proved by reading an auth token out of storage
+  // and sending it on join_room. The session is an HttpOnly cookie now: the
+  // browser attaches it to the socket handshake by itself, and script cannot
+  // read it even to try. The server verifies that cookie directly, so there is
+  // nothing left for this component to carry.
   const [searchParams] = useSearchParams();
   // Never teach under a raw email: Dashboard links historically passed the
   // account email as ?name= — students then saw it on cursors, chat and the
@@ -880,7 +880,7 @@ export default function Room() {
       // already in the room we'll be allowed (same name) and that other
       // tab will receive a `teacher_replaced` notification.
       setTeacherReplaced(false);
-      newSocket.emit("join_room", { roomId, userName: teacherName, role: 'teacher', authToken: authTokenRef.current ?? undefined, tz: localTimezone() });
+      newSocket.emit("join_room", { roomId, userName: teacherName, role: 'teacher', tz: localTimezone() });
 
       // AUTONOMOUS: On a reconnect (NOT the initial connect), re-seed the
       // server with our cached HTML state. Render's free tier filesystem

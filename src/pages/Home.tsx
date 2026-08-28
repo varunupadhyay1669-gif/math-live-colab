@@ -73,8 +73,7 @@ export default function Home() {
     if (!auth.user) return;
     setTeacherName((prev) => {
       if (prev.trim()) return prev;
-      const meta = auth.user?.user_metadata as { full_name?: string; name?: string } | undefined;
-      return meta?.full_name || meta?.name || auth.user?.email || prev;
+      return auth.user?.email || prev;
     });
   }, [auth.user]);
   const [studentName, setStudentName] = useState("");
@@ -97,7 +96,7 @@ export default function Home() {
     setLoginError(null);
     try {
       if (!auth.enabled) {
-        setLoginError('Supabase is not connected yet. Please add VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY (or SUPABASE_URL and SUPABASE_ANON_KEY) in app Settings → Environment Variables.');
+        setLoginError('Teacher accounts are not set up on this server yet — it needs a DATABASE_URL.');
         return;
       }
       const { error } = await auth.signInWithEmail(email);

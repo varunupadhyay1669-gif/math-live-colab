@@ -4,11 +4,13 @@ import { Server } from 'socket.io';
 import path from 'path';
 import { pressureFrom, idleWindowFor, describeMemory, type MemoryPolicy } from './src/lib/memoryGuard';
 import fs from 'fs';
-import { createHmac } from 'crypto';
+import { createHmac, randomBytes } from 'crypto';
 // pg is CommonJS; this file is ESM. Named imports off a CJS module are the
 // classic ERR_MODULE_NOT_FOUND at boot, so take the default and destructure.
 import pg from 'pg';
 const { Pool } = pg;
+import { IDENTITY_SCHEMA_SQL, mountAuthRoutes, userFromCookieHeader } from './src/server/identity';
+import { mountRecordRoutes } from './src/server/records';
 
 interface FileEntry {
   id: string;
@@ -782,7 +784,9 @@ async function startServer() {
   // migration step somebody would otherwise have to remember on a new
   // environment — which, for a thing that is only ever set up twice, is the
   // trade worth making.
-  const SCHEMA_SQL = `
+  // The identity tables ride the SAME idempotent boot DDL as the rest, so
+  // replacing Supabase adds no migration step anyone has to remember.
+  const SCHEMA_SQL = IDENTITY_SCHEMA_SQL + `
     -- The durable copy of a live class. One JSON document per room, which is
     -- the shape the server already used; what Postgres adds is surviving a
     -- redeploy. Rooms used to live on the container filesystem, so every deploy
@@ -883,6 +887,14 @@ async function startServer() {
   // being hydrated into the heap at boot. That eager scan is what turned an
   // out-of-memory crash into an eight-hour crash loop: each retry re-loaded the
   // same too-large set and died at the same point.
+  // ONE Pool, shared. Auth and records use the same database as the room
+  // store, and a second pool would double connections against a Postgres
+  // deliberately capped at 20 on a 1GB box.
+  let appPool: InstanceType<typeof Pool> | null = null;
+  // Set when the auth routes mount; the socket handshake verifies the same
+  // cookie with it, so HTTP and WebSocket agree on who a teacher is.
+  let sessionSecret: string | null = null;
+
   function makePostgresRoomStore(connectionString: string): RoomStore {
     // Railway's private network is already inside the trust boundary and
     // presents no TLS; anything reachable from outside needs it, and managed
@@ -897,6 +909,7 @@ async function startServer() {
     });
     // An idle client killed by the network must not take the process with it.
     pool.on('error', (err: Error) => console.error('Postgres pool error:', err.message));
+    appPool = pool;
 
     // Deliberately never rejects. Nothing awaits this at boot, and an unhandled
     // rejection ends the process — which is the exact failure this whole change
@@ -1339,10 +1352,12 @@ async function startServer() {
   // "not the owner" apart from "no such class"). Ad-hoc rooms (no class row)
   // keep the legacy name-based behaviour. Entirely gated by env — absent →
   // no enforcement, identical to before.
-  const SUPABASE_URL = process.env.SUPABASE_URL;
-  const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY;
-  const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  const ownershipEnabled = !!(SUPABASE_URL && SUPABASE_ANON_KEY && SUPABASE_SERVICE_ROLE_KEY);
+  // Ownership is enforced from OUR database now. It used to require three
+  // Supabase environment variables, one of which (the service-role key) was
+  // never set — so this protection has in practice been off. With the classes
+  // table local, "is this room registered, and is this socket its owner" is a
+  // single query against data we already hold.
+  const ownershipEnabled = () => !!(appPool && sessionSecret);
 
   // ─── AI LESSON GENERATION (server-side; key never reaches the browser) ───
   const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
@@ -1351,38 +1366,41 @@ async function startServer() {
       ? '✨ AI lesson generation: ON'
       : '✨ AI lesson generation: OFF (set GEMINI_API_KEY to enable)'
   );
-  console.log(
-    ownershipEnabled
-      ? '🔒 Teacher ownership enforcement: ON (registered classes are owner-only)'
-      : '🔓 Teacher ownership enforcement: OFF (set SUPABASE_URL + SUPABASE_ANON_KEY + SUPABASE_SERVICE_ROLE_KEY to enable)'
-  );
+  // Ownership is reported where the auth routes mount, not here: this runs
+  // before sessionSecret is assigned, so any answer given now would be a guess
+  // that reads as fact.
 
   // Returns 'allow' | 'reject'. Fails OPEN (allow) on any transient error so a
   // Supabase hiccup never locks a teacher out of their own class; only a
   // definitive "this class belongs to someone else" rejects.
-  async function verifyTeacherOwnership(roomId: string, authToken: unknown): Promise<'allow' | 'reject'> {
-    if (!ownershipEnabled) return 'allow';
+  async function verifyTeacherOwnership(roomId: string, cookieHeader: unknown): Promise<'allow' | 'reject'> {
+    if (!ownershipEnabled()) return 'allow';
     try {
-      // 1) Does a registered class exist for this room code, and who owns it?
-      const clsRes = await fetch(
-        `${SUPABASE_URL}/rest/v1/classes?room_code=eq.${encodeURIComponent(roomId)}&select=teacher_id`,
-        { headers: { apikey: SUPABASE_SERVICE_ROLE_KEY!, Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}` } },
+      // 1) Is this room a REGISTERED class, and who owns it? An ad-hoc room —
+      //    the ordinary /live link a tutor makes on the spot — has no row here
+      //    and is deliberately unenforced, exactly as before.
+      const cls = await appPool!.query(
+        'SELECT teacher_id FROM classes WHERE room_code = $1',
+        [roomId],
       );
-      if (!clsRes.ok) return 'allow';
-      const rows = (await clsRes.json()) as Array<{ teacher_id: string }>;
-      if (!Array.isArray(rows) || rows.length === 0) return 'allow'; // ad-hoc room → no enforcement
-      const ownerId = rows[0].teacher_id;
+      if (cls.rowCount === 0) return 'allow';
+      const ownerId = cls.rows[0].teacher_id as string;
 
-      // 2) Registered class → require a valid token whose user IS the owner.
-      if (typeof authToken !== 'string' || !authToken) return 'reject';
-      const userRes = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
-        headers: { apikey: SUPABASE_ANON_KEY!, Authorization: `Bearer ${authToken}` },
-      });
-      if (!userRes.ok) return 'reject'; // invalid/expired token for an owned class
-      const user = (await userRes.json()) as { id?: string };
-      return user?.id && user.id === ownerId ? 'allow' : 'reject';
+      // 2) Registered class → the socket must carry a valid session cookie
+      //    whose user IS the owner. The cookie is verified by HMAC here, not
+      //    by asking a third party over the network: no round trip, and no
+      //    outage in someone else's service can lock a teacher out of a class
+      //    they own.
+      const user = userFromCookieHeader(
+        typeof cookieHeader === 'string' ? cookieHeader : undefined,
+        sessionSecret!,
+      );
+      return user && user.id === ownerId ? 'allow' : 'reject';
     } catch (err) {
-      console.error(`Ownership check failed for ${roomId} (failing open):`, err);
+      // Fail OPEN, on purpose. This check protects against one teacher opening
+      // another's room; a database hiccup must not lock a tutor out of their
+      // own lesson with a child waiting.
+      console.error(`Ownership check failed for ${roomId} (failing open):`, (err as Error).message);
       return 'allow';
     }
   }
@@ -1746,8 +1764,13 @@ async function startServer() {
       // the teacher seat. No-op unless Supabase is configured server-side and
       // the room is a registered class; ad-hoc rooms fall through to the
       // legacy name-based gate below.
-      if (role === 'teacher' && ownershipEnabled) {
-        const decision = await verifyTeacherOwnership(roomId, authToken);
+      if (role === 'teacher' && ownershipEnabled()) {
+        // The session travels as an HttpOnly cookie now, which the browser
+        // attaches to the socket handshake automatically — the client no
+        // longer has to (and no longer can) read a token out of storage and
+        // hand it over. authToken stays accepted in the payload for older
+        // tabs still open on the previous build.
+        const decision = await verifyTeacherOwnership(roomId, socket.handshake.headers.cookie);
         if (decision === 'reject') {
           socket.emit('join_error', { code: 'not_owner', retryable: false, message: 'This class belongs to another teacher. Please sign in as the owner.' });
           return;
@@ -4231,13 +4254,9 @@ Build a widget that teaches: ${safePrompt}`;
     res.json({ iceServers: stun, relay: false });
   });
 
-  app.get('/api/config', (_req, res) => {
-    res.set('Cache-Control', 'no-store');
-    res.json({
-      supabaseUrl: process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || null,
-      supabaseAnonKey: process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY || null,
-    });
-  });
+  // /api/config used to hand the browser a third party's URL and anon key so
+  // it could build an auth client. Accounts are served from here now, so there
+  // is nothing for a browser to be told: it asks /api/auth/me and is answered.
 
   // Two paths for the same check. Some hosts reserve /healthz at their edge
   // and answer it themselves — Google AI Studio returns its own 404 there — so
@@ -4311,6 +4330,34 @@ Build a widget that teaches: ${safePrompt}`;
   // ─── HTTP API: Room content fallback ───
   // Students can fetch room HTML via plain HTTP if Socket.io delivery fails
   app.use(express.json());
+
+  // ─── Teacher identity and records (replaces Supabase) ───
+  //
+  // Mounted only with a database: without one there is nothing to sign in to,
+  // and the app must still run — link-based rooms and the whiteboard never
+  // needed an account.
+  //
+  // SESSION_SECRET must be stable across restarts or every teacher is signed
+  // out on each deploy. It is generated per-boot when unset so local
+  // development needs no setup, and that is precisely why production must set
+  // it; the warning below is the only thing standing between a missing env var
+  // and a mystery.
+  if (appPool) {
+    sessionSecret = process.env.SESSION_SECRET || null;
+    if (!sessionSecret) {
+      console.warn('\u26a0\ufe0f  SESSION_SECRET is not set \u2014 teachers will be signed out on every restart.');
+      sessionSecret = randomBytes(32).toString('hex');
+    }
+    mountAuthRoutes(app, appPool, {
+      secret: sessionSecret,
+      secure: process.env.NODE_ENV === 'production',
+    });
+    mountRecordRoutes(app, appPool, { secret: sessionSecret });
+    console.log('\ud83d\udd11 Teacher accounts: this server\u2019s own database');
+    console.log('\ud83d\udd12 Teacher ownership enforcement: ON (registered classes are owner-only)');
+  } else {
+    console.log('\ud83d\udd11 Teacher accounts: OFF (no DATABASE_URL)');
+  }
   app.get('/api/room/:roomId/content', (req, res) => {
     if (!passcodeOk(req.get('x-site-passcode') || (req.query.passcode as string | undefined))) {
       return res.status(401).json({ error: 'passcode_required' });

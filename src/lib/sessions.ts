@@ -1,13 +1,16 @@
-import { getSupabase } from './supabase';
+import { api, NotSignedIn } from './api';
 // The day helpers are pure and live in lessonNav, which imports nothing —
-// keeping them here would drag the Supabase client into every test that only
-// wants to know what a lesson is called.
+// keeping them here would drag the API client into every test that only wants
+// to know what a lesson is called.
 import { lessonDay, findSessionForDay } from './lessonNav';
 export { lessonDay, findSessionForDay };
 
 // A "session" is a saved snapshot of a teaching session for a class: what was
-// taught (topic), the HTML used, and the whiteboard at save time. RLS scopes
-// rows to the owning teacher (see SUPABASE.md).
+// taught (topic), the HTML used, and the whiteboard at save time.
+//
+// Stored server-side in `teaching_sessions` — NOT `sessions`, which the
+// intelligence schema already owns for a different thing. The shape below is
+// unchanged, so every screen reading it stayed as it was.
 export interface SessionRow {
   id: string;
   class_id: string;
@@ -18,70 +21,54 @@ export interface SessionRow {
   notes: string | null;
   whiteboard_snapshot: any | null;
   html_used: string | null;
-  /** Seconds with a teacher and >=1 student both present (migration 003).
-   *  Optional on the type: a database without the column simply omits it. */
+  /** Seconds with a teacher and >=1 student both present. */
   taught_seconds?: number | null;
 }
 
-// The room_code → class id lookup (RLS: resolves only for the owning teacher).
-export async function findClassIdByRoomCode(roomCode: string): Promise<string | null> {
-  const supabase = await getSupabase();
-  if (!supabase) return null;
-  const { data, error } = await supabase.from('classes').select('id').eq('room_code', roomCode).maybeSingle();
-  if (error || !data) return null;
-  return (data as { id: string }).id;
+function emptyIfSignedOut<T>(err: unknown, fallback: T): T {
+  if (err instanceof NotSignedIn) return fallback;
+  throw err;
 }
 
+/** The room_code → class id lookup. Resolves only for the owning teacher. */
+export async function findClassIdByRoomCode(roomCode: string): Promise<string | null> {
+  try {
+    const { class: row } = await api.get<{ class: { id: string } | null }>(
+      `/api/classes/by-code/${encodeURIComponent(roomCode)}`);
+    return row?.id ?? null;
+  } catch (err) { return emptyIfSignedOut(err, null); }
+}
+
+/** Insert a new lesson row. Returns its id so the caller can keep writing to it. */
 export async function saveSession(input: {
   classId: string;
   topic?: string;
   html?: string | null;
   whiteboard?: any;
   startedAt?: string;
-}): Promise<void> {
-  const supabase = await getSupabase();
-  if (!supabase) throw new Error('Auth not configured');
-  const { data: userData } = await supabase.auth.getUser();
-  const teacher_id = userData.user?.id;
-  if (!teacher_id) throw new Error('Not signed in');
-  const { error } = await supabase.from('sessions').insert({
-    class_id: input.classId,
-    teacher_id,
-    started_at: input.startedAt || new Date().toISOString(),
-    ended_at: new Date().toISOString(),
-    topic: input.topic?.trim() || null,
-    whiteboard_snapshot: input.whiteboard ?? null,
-    html_used: input.html ?? null,
-  });
-  if (error) throw error;
+}): Promise<string> {
+  const { session } = await api.post<{ session: SessionRow }>('/api/sessions', input);
+  return session.id;
 }
 
 export async function listSessions(classId: string): Promise<SessionRow[]> {
-  const supabase = await getSupabase();
-  if (!supabase) return [];
-  const { data, error } = await supabase
-    .from('sessions')
-    .select('*')
-    .eq('class_id', classId)
-    .order('started_at', { ascending: false })
-    .limit(50);
-  if (error) throw error;
-  return (data ?? []) as SessionRow[];
+  try {
+    const { sessions } = await api.get<{ sessions: SessionRow[] }>(
+      `/api/sessions?classId=${encodeURIComponent(classId)}`);
+    return sessions ?? [];
+  } catch (err) { return emptyIfSignedOut(err, []); }
 }
 
 export async function getSession(id: string): Promise<SessionRow | null> {
-  const supabase = await getSupabase();
-  if (!supabase) return null;
-  const { data, error } = await supabase.from('sessions').select('*').eq('id', id).maybeSingle();
-  if (error || !data) return null;
-  return data as SessionRow;
+  try {
+    const { session } = await api.get<{ session: SessionRow | null }>(
+      `/api/sessions/${encodeURIComponent(id)}`);
+    return session ?? null;
+  } catch (err) { return emptyIfSignedOut(err, null); }
 }
 
 export async function deleteSession(id: string): Promise<void> {
-  const supabase = await getSupabase();
-  if (!supabase) return;
-  const { error } = await supabase.from('sessions').delete().eq('id', id);
-  if (error) throw error;
+  await api.del(`/api/sessions/${encodeURIComponent(id)}`);
 }
 
 // ── One row per lesson, not one per Save ──
@@ -95,24 +82,15 @@ export async function deleteSession(id: string): Promise<void> {
 export async function updateSession(id: string, input: {
   topic?: string; html?: string | null; whiteboard?: unknown; taughtSeconds?: number | null;
 }): Promise<void> {
-  const supabase = await getSupabase();
-  if (!supabase) throw new Error('Auth not configured');
   const patch: Record<string, unknown> = { ended_at: new Date().toISOString() };
   if (input.topic !== undefined) patch.topic = input.topic?.trim() || null;
   if (input.html !== undefined) patch.html_used = input.html;
   if (input.whiteboard !== undefined) patch.whiteboard_snapshot = input.whiteboard ?? null;
   // Only ever grows within a lesson, so a later save cannot shorten it.
-  if (input.taughtSeconds !== undefined && input.taughtSeconds !== null) patch.taught_seconds = input.taughtSeconds;
-  const { error } = await supabase.from('sessions').update(patch).eq('id', id);
-  // 42703 = the column is not there yet (migration 003 unrun). Saving the
-  // lesson matters more than recording its length, so retry without it.
-  if (error && (error as { code?: string }).code === '42703' && 'taught_seconds' in patch) {
-    delete patch.taught_seconds;
-    const retry = await supabase.from('sessions').update(patch).eq('id', id);
-    if (retry.error) throw retry.error;
-    return;
+  if (input.taughtSeconds !== undefined && input.taughtSeconds !== null) {
+    patch.taught_seconds = input.taughtSeconds;
   }
-  if (error) throw error;
+  await api.patch(`/api/sessions/${encodeURIComponent(id)}`, patch);
 }
 
 /**
@@ -131,8 +109,6 @@ export async function saveLessonForDay(input: {
   /** Seconds actually taught so far — see lib/teachingTime. */
   taughtSeconds?: number | null;
 }): Promise<string | null> {
-  const supabase = await getSupabase();
-  if (!supabase) throw new Error('Auth not configured');
   if (input.sessionId) {
     await updateSession(input.sessionId, input);
     return input.sessionId;
@@ -143,14 +119,12 @@ export async function saveLessonForDay(input: {
     await updateSession(existing.id, input);
     return existing.id;
   }
-  await saveSession(input);
-  const fresh = findSessionForDay(await listSessions(input.classId), today);
-  // saveSession INSERTs the columns it has always known about; the lesson's
-  // length is written straight after so a first save records it too, rather
-  // than only from the second save onwards.
-  if (fresh && input.taughtSeconds) {
-    try { await updateSession(fresh.id, { taughtSeconds: input.taughtSeconds }); }
+  // The insert hands back its id directly now, so the "save then search for
+  // what I just wrote" round trip the Supabase version needed is gone.
+  const id = await saveSession(input);
+  if (id && input.taughtSeconds) {
+    try { await updateSession(id, { taughtSeconds: input.taughtSeconds }); }
     catch { /* the lesson is saved; its length is the lesser loss */ }
   }
-  return fresh?.id ?? null;
+  return id ?? null;
 }

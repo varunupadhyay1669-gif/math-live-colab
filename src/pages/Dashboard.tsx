@@ -49,11 +49,10 @@ export default function Dashboard() {
   }, [auth.user, refresh]);
 
   const teacherName = (() => {
-    const meta = auth.user?.user_metadata as { full_name?: string; name?: string } | undefined;
     // Magic-link accounts have no profile name — the fallback used to be the
     // RAW EMAIL, which students then saw on the teacher's cursor, in chat and
     // in the participants list. cleanDisplayName turns it into a humane name.
-    return meta?.full_name || meta?.name || cleanDisplayName(auth.user?.email) || "Teacher";
+    return cleanDisplayName(auth.user?.email) || "Teacher";
   })();
 
   const studentLink = (code: string) => `${window.location.origin}/live/${code}`;
