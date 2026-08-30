@@ -11,6 +11,7 @@ import pg from 'pg';
 const { Pool } = pg;
 import { IDENTITY_SCHEMA_SQL, mountAuthRoutes, userFromCookieHeader } from './src/server/identity';
 import { mountRecordRoutes } from './src/server/records';
+import { BOARD_IMAGE_SCHEMA_SQL, mountBoardImageRoutes, externaliseBoardImages } from './src/server/boardImages';
 
 interface FileEntry {
   id: string;
@@ -786,7 +787,7 @@ async function startServer() {
   // trade worth making.
   // The identity tables ride the SAME idempotent boot DDL as the rest, so
   // replacing Supabase adds no migration step anyone has to remember.
-  const SCHEMA_SQL = IDENTITY_SCHEMA_SQL + `
+  const SCHEMA_SQL = IDENTITY_SCHEMA_SQL + BOARD_IMAGE_SCHEMA_SQL + `
     -- The durable copy of a live class. One JSON document per room, which is
     -- the shape the server already used; what Postgres adds is surviving a
     -- redeploy. Rooms used to live on the container filesystem, so every deploy
@@ -1725,6 +1726,31 @@ async function startServer() {
           const raw = await roomStore.load(roomId);
           const fresh = storedRoomFresh(raw);
           if (fresh) {
+            // Move any pasted pictures out of the room BEFORE it is hydrated.
+            //
+            // Whiteboard images used to be data: URLs on the board objects, so
+            // a room was as big as every photo ever pasted into it. One reached
+            // 128MB and took the heap from 78MB to 454MB the moment it opened,
+            // killing the process every few minutes. Converting on the way IN
+            // is the point: externalising only at save time would still mean
+            // holding all of it for the length of the lesson.
+            //
+            // Safe to run on an already-converted board — a src that is a URL
+            // rather than a data: URL is left untouched — so this both fixes
+            // the boards that exist and costs nothing once they are fixed.
+            if (appPool && raw && raw.whiteboard) {
+              try {
+                const moved = await externaliseBoardImages(appPool, raw.whiteboard);
+                if (moved > 0) {
+                  console.log(`🖼️  Moved ${moved} board image(s) out of room ${roomId}`);
+                  // Write the slimmed room straight back, so the next open is
+                  // cheap even if this process dies before the next save.
+                  void roomStore.save(roomId, raw, 30 * 24 * 3600).catch(() => {});
+                }
+              } catch (err) {
+                console.error(`Board image conversion failed for ${roomId}:`, (err as Error).message);
+              }
+            }
             existingRoom = hydrateRoom(raw);
             rooms.set(roomId, existingRoom);
             console.log(`📂 Lazy-restored room ${roomId} from ${roomStore.kind} on join`);
@@ -4329,6 +4355,12 @@ Build a widget that teaches: ${safePrompt}`;
 
   // ─── HTTP API: Room content fallback ───
   // Students can fetch room HTML via plain HTTP if Socket.io delivery fails
+  // Board images post a data URL, which is ~33% larger than the bytes and
+  // can legitimately reach a few MB. Registered before the global parser so
+  // it gets a body limit that fits an image rather than the default 100kb.
+  if (appPool) {
+    app.post('/api/board-image', express.json({ limit: '12mb' }));
+  }
   app.use(express.json());
 
   // ─── Teacher identity and records (replaces Supabase) ───
@@ -4353,6 +4385,7 @@ Build a widget that teaches: ${safePrompt}`;
       secure: process.env.NODE_ENV === 'production',
     });
     mountRecordRoutes(app, appPool, { secret: sessionSecret });
+    mountBoardImageRoutes(app, appPool);
     console.log('\ud83d\udd11 Teacher accounts: this server\u2019s own database');
     console.log('\ud83d\udd12 Teacher ownership enforcement: ON (registered classes are owner-only)');
   } else {

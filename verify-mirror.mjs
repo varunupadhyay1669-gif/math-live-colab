@@ -18,6 +18,7 @@
 import { JSDOM } from 'jsdom';
 import { mirrorScriptFor, stripLessonScripts } from './src/lib/mirrorScript.ts';
 import { checkLesson } from './src/lib/lessonCheck.ts';
+import { parseDataUrl, externaliseBoardImages } from './src/server/boardImages.ts';
 
 let passed = 0, failed = 0;
 const ok = (n) => { passed++; console.log(`  ✓ ${n}`); };
@@ -153,6 +154,57 @@ for (const [name, html] of Object.entries(LESSONS)) {
   assert(checked > 0 && mismatches.length === 0,
     `${name} (${checked} elements)`,
     mismatches.slice(0, 3).join('; '));
+}
+
+section('OFFLINE — whiteboard pictures live outside the room');
+
+// A room reached 128MB compressed — 150 pasted images, no lesson files — and
+// opening it took the heap from 78MB to 454MB, crash-looping the site all day.
+// Pictures are stored separately now and the board carries a URL. Converting on
+// open must be safe to repeat, must not move anything, and must never lose a
+// photo just because the database is unhappy.
+{
+  const PNG = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+  const stub = () => {
+    const rows = new Map();
+    return { rows, async query(sql, params) {
+      if (/INSERT INTO board_images/i.test(sql)) {
+        const [id, mime, buf] = params;
+        if (!rows.has(id)) rows.set(id, { mime, bytes: buf.length });
+      }
+      return { rowCount: 1, rows: [] };
+    } };
+  };
+
+  assert(parseDataUrl(PNG) !== null, 'a png data URL is recognised');
+  assert(parseDataUrl('/api/board-image/abc') === null, 'an ordinary URL is not an image');
+  assert(parseDataUrl('data:text/html;base64,PHNjcmlwdD4=') === null,
+    'a non-image data URL is refused', 'html was accepted as an image');
+
+  const pool = stub();
+  const wb = { objects: [
+    { id: 'a', src: PNG, x: 1, y: 2 },
+    { id: 'b', src: PNG, x: 3, y: 4 },              // same bytes
+    { id: 'c', src: '/api/board-image/deadbeef' },  // already converted
+  ], strokes: [{ points: [1, 2, 3] }] };
+  const moved = await externaliseBoardImages(pool, wb);
+  assert(moved === 2, 'data URLs are moved out', `moved ${moved}, expected 2`);
+  assert(wb.objects.every(o => !String(o.src).startsWith('data:')),
+    'no data URL is left on the board');
+  assert(pool.rows.size === 1, 'the same picture twice is stored once',
+    `stored ${pool.rows.size}`);
+  assert(wb.objects[2].src === '/api/board-image/deadbeef',
+    'an already-converted image is untouched');
+  assert(wb.objects[0].x === 1 && wb.strokes.length === 1,
+    'positions and pen strokes survive');
+  assert(await externaliseBoardImages(pool, wb) === 0,
+    'converting twice does nothing', 'boards are converted on every open');
+
+  const angry = { async query() { throw new Error('database is down'); } };
+  const keep = { objects: [{ id: 'a', src: PNG }] };
+  await externaliseBoardImages(angry, keep);
+  assert(keep.objects[0].src === PNG,
+    'a storage failure keeps the picture', 'the teacher photo was lost');
 }
 
 section('OFFLINE — a frame belongs to ONE canvas');

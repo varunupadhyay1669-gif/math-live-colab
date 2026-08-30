@@ -3,6 +3,7 @@ import { Socket } from 'socket.io-client';
 import katex from 'katex';
 import rough from 'roughjs';
 import { templates as templatesStore } from '../lib/prefs';
+import { apiFetch } from '../lib/passcode';
 
 // AUTONOMOUS: KaTeX render helper. Safe-fails on invalid LaTeX (returns
 // the source verbatim wrapped in a soft-error span) so a typo doesn't
@@ -1371,6 +1372,29 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
     // reset pinchActive and killed the gesture after one step.
     const zoomAtRef = useRef(zoomAt);
     zoomAtRef.current = zoomAt;
+
+    // Put the picture in the image store first and place a URL on the board.
+    //
+    // The board object carries a short URL instead of the whole picture, so the
+    // room document stays small — which is what stopped the server running out
+    // of memory. Falls back to the data URL if the upload fails: a board that
+    // is too big still beats losing the teacher's photo.
+    const uploadImage = useCallback(async (dataUrl: string): Promise<string> => {
+      if (!dataUrl.startsWith('data:')) return dataUrl;
+      try {
+        const res = await apiFetch('/api/board-image', {
+          method: 'POST',
+          credentials: 'same-origin',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ src: dataUrl }),
+        });
+        if (!res.ok) return dataUrl;
+        const body = await res.json();
+        return typeof body?.url === 'string' ? body.url : dataUrl;
+      } catch {
+        return dataUrl;
+      }
+    }, []);
 
     const addImageObject = useCallback((src: string, naturalWidth?: number, naturalHeight?: number) => {
       const container = containerRef.current;
@@ -3865,10 +3889,18 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
     //       blowing past Socket.IO's 5MB default frame size and silently
     //       dropping the message (image never appears for students),
     //   (c) accumulate in localStorage if we ever add client persistence.
-    // 4MB is generous for a math teaching context; bigger images get
-    // downscaled to fit a 2048px max edge before insertion.
-    const IMAGE_BYTE_CAP = 4 * 1024 * 1024;
-    const IMAGE_MAX_EDGE = 2048;
+    // A whiteboard picture is displayed a few hundred pixels wide and is
+    // occasionally zoomed. 1400px on the long edge covers both with room to
+    // spare, and is a fifth of the pixels of the 2048 this used to allow.
+    //
+    // These numbers matter more than they look. Every picture used to be stored
+    // inside the room document, so one board reached 150 images and 39MB, which
+    // took the server's heap past its ceiling and crash-looped the site for a
+    // day. Images live in their own table now, but a cap still belongs here:
+    // the cheapest megabyte is the one never created.
+    const IMAGE_MAX_EDGE = 1400;
+    // Under this, re-encoding would cost quality for no useful saving.
+    const IMAGE_PASSTHROUGH_BYTES = 96 * 1024;
 
     const ingestImageBlob = useCallback(async (blob: Blob): Promise<void> => {
       // Decode → measure → optionally downscale → addImageObject
@@ -3891,31 +3923,49 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
       });
       if (!img) return;
 
-      // Fast path: small image, no rescaling needed.
-      const tooLarge = blob.size > IMAGE_BYTE_CAP || img.naturalWidth > IMAGE_MAX_EDGE || img.naturalHeight > IMAGE_MAX_EDGE;
-      if (!tooLarge) {
-        addImageObject(dataUrl, img.naturalWidth, img.naturalHeight);
+      // Genuinely small already — re-encoding would only cost quality.
+      const alreadySmall = blob.size <= IMAGE_PASSTHROUGH_BYTES
+        && img.naturalWidth <= IMAGE_MAX_EDGE && img.naturalHeight <= IMAGE_MAX_EDGE;
+      if (alreadySmall) {
+        addImageObject(await uploadImage(dataUrl), img.naturalWidth, img.naturalHeight);
         return;
       }
 
-      // Downscale via offscreen canvas. Preserves aspect ratio; clamps
-      // longest edge to IMAGE_MAX_EDGE. Re-encodes as JPEG quality 0.85
-      // for big photos (PNG would still be huge for photographic content).
+      // Downscale via offscreen canvas, preserving aspect ratio.
       const ratio = Math.min(IMAGE_MAX_EDGE / img.naturalWidth, IMAGE_MAX_EDGE / img.naturalHeight, 1);
-      const w = Math.round(img.naturalWidth * ratio);
-      const h = Math.round(img.naturalHeight * ratio);
+      const w = Math.max(1, Math.round(img.naturalWidth * ratio));
+      const h = Math.max(1, Math.round(img.naturalHeight * ratio));
       const canvas = document.createElement('canvas');
       canvas.width = w;
       canvas.height = h;
       const ctx = canvas.getContext('2d');
       if (!ctx) return;
       ctx.drawImage(img, 0, 0, w, h);
-      // PNGs without transparency become huge; force JPEG for photographic
-      // content over the threshold. Keep PNG for transparent images.
-      const hasAlpha = blob.type === 'image/png' || blob.type === 'image/webp';
-      const outputUrl = canvas.toDataURL(hasAlpha ? 'image/png' : 'image/jpeg', 0.85);
-      addImageObject(outputUrl, w, h);
-    }, [addImageObject]);
+
+      // Does this picture ACTUALLY use transparency?
+      //
+      // This used to assume that any PNG did, purely from its MIME type — and
+      // a pasted screenshot is a PNG. So every screenshot was re-encoded as a
+      // PNG and stayed enormous: that assumption is most of why one board grew
+      // to 39MB. Photographic content in PNG is many times the size of the same
+      // image as JPEG, for no benefit when nothing is see-through.
+      //
+      // So look instead of guessing. Sampling beats reading every pixel on a
+      // 1400px image, and a picture with real transparency has plenty of it.
+      let hasAlpha = false;
+      try {
+        const px = ctx.getImageData(0, 0, w, h).data;
+        for (let i = 3; i < px.length; i += 4 * 97) {   // every 97th pixel
+          if (px[i] < 250) { hasAlpha = true; break; }
+        }
+      } catch {
+        // A tainted canvas cannot be read. Keeping the original format is the
+        // safe answer: it may be large, but it cannot be wrong.
+        hasAlpha = blob.type === 'image/png';
+      }
+      const outputUrl = canvas.toDataURL(hasAlpha ? 'image/png' : 'image/jpeg', 0.82);
+      addImageObject(await uploadImage(outputUrl), w, h);
+    }, [addImageObject, uploadImage]);
 
     const isPdf = (f: File) => f.type === 'application/pdf' || /\.pdf$/i.test(f.name || '');
 
