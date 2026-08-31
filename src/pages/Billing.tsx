@@ -80,7 +80,7 @@ export default function Billing() {
           </button>
         </header>
 
-        <div className="ml-dark-center">
+        <div className="ml-dark-center ml-page-top">
           <h1 className="ml-dark-headline">Subscription</h1>
 
           {loading ? (

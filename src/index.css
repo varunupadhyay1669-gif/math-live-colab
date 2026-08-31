@@ -4219,3 +4219,15 @@ html, body, #root { background: var(--bg-primary); }
   .ml-bill-banner { flex-direction: column; align-items: stretch; }
   .ml-bill-banner-cta { width: 100%; }
 }
+
+/* .ml-dark-center vertically centres its children, which is right for the
+   landing page and wrong for a page that is mostly a form: with only a couple
+   of boxes the content floats to the middle behind a band of empty space.
+   Pages that should read top-down opt out. */
+.ml-dark-center.ml-page-top {
+  justify-content: flex-start;
+  padding-top: 28px;
+}
+@media (max-width: 640px) {
+  .ml-dark-center.ml-page-top { padding-top: 16px; }
+}

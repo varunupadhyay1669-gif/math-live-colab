@@ -201,14 +201,18 @@ async function sendWhatsApp(text: string): Promise<boolean> {
 
 async function sendOwnerEmail(subject: string, body: string): Promise<boolean> {
   const key = process.env.RESEND_API_KEY;
-  const to = process.env.OWNER_EMAIL;
-  if (!key || !to) return false;
+  // Comma-separated, because the person running this has more than one address
+  // and an alert that lands in the inbox they are not reading is the same as no
+  // alert at all — which is exactly how the first test "failed".
+  const to = (process.env.OWNER_EMAIL || '')
+    .split(',').map(s => s.trim()).filter(Boolean);
+  if (!key || to.length === 0) return false;
   const from = process.env.AUTH_EMAIL_FROM || 'MathsLive <login@matheinstein.com>';
   try {
     const res = await fetch('https://api.resend.com/emails', {
       method: 'POST',
       headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ from, to: [to], subject, text: body }),
+      body: JSON.stringify({ from, to, subject, text: body }),
     });
     if (!res.ok) {
       console.error('Resend refused the owner alert:', res.status, (await res.text()).slice(0, 200));
