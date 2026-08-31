@@ -11,6 +11,17 @@ import {
 // the code, and no amount of editing this page changes that. This is the door
 // people are meant to walk through.
 
+/**
+ * Pages a stranger is allowed to read without the code.
+ *
+ * Deliberately a short, exact list rather than a prefix match. The gate exists
+ * so a passer-by cannot wander into a lesson; a price list is the one thing
+ * they are supposed to be able to read before deciding to ask for a code at
+ * all. Nothing here reads a room, a class, or a teacher — it is a page of
+ * prices and promises.
+ */
+const PUBLIC_PATHS = new Set(['/pricing']);
+
 interface Props {
   children: ReactNode;
 }
@@ -52,6 +63,12 @@ export default function PasscodeGate({ children }: Props) {
   // Still asking the server, or no gate on this deployment.
   if (required === null || required === false) return <>{children}</>;
   if (entered) return <>{children}</>;
+  // A price list nobody can read is not a price list. Checked against the
+  // live path so it also holds if someone lands here directly from a search
+  // result or an advert.
+  if (PUBLIC_PATHS.has(window.location.pathname.replace(/\/+$/, '') || '/')) {
+    return <>{children}</>;
+  }
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();

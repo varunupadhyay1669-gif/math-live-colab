@@ -28,6 +28,7 @@ const StudentDashboard = lazy(() => import('./pages/StudentDashboard'));
 const ReplayView = lazy(() => import('./pages/ReplayView'));
 const DeployView = lazy(() => import('./pages/DeployView'));
 const Billing = lazy(() => import('./pages/Billing'));
+const Pricing = lazy(() => import('./pages/Pricing'));
 
 // Tiny fallback while the route chunk loads. Matches the home page
 // background colour so there's no flash of wrong-colour content. The
@@ -110,6 +111,8 @@ export default function App() {
               <Route path="/dashboard" element={<Dashboard />} />
               {/* Trial status, the payment QR, and "I have paid" */}
               <Route path="/billing" element={<Billing />} />
+              {/* Public — readable without the access code (see PasscodeGate) */}
+              <Route path="/pricing" element={<Pricing />} />
               {/* One student: profile, goals, and their lesson history */}
               <Route path="/student-dashboard/:roomCode" element={<StudentDashboard />} />
               <Route path="/room/:roomId" element={<Room />} />

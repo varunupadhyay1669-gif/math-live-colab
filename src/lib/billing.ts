@@ -24,6 +24,8 @@ export interface BillingStatus {
   priceRupees: number;
   trialDays: number;
   graceDays: number;
+  /** What each plan costs. Server-owned so a price change needs no rebuild. */
+  plans: Array<{ months: number; rupees: number; perMonth: number }>;
   admin: boolean;
   pendingClaim: PendingClaim | null;
   upiId: string | null;
@@ -76,3 +78,14 @@ export function describe(s: BillingStatus): string {
   }
   return 'Access has ended';
 }
+
+
+/** What the public pricing page needs. No session required. */
+export interface PublicPricing {
+  priceRupees: number;
+  trialDays: number;
+  graceDays: number;
+  plans: Array<{ months: number; rupees: number; perMonth: number }>;
+}
+
+export const getPublicPricing = () => api.get<PublicPricing>('/api/pricing');

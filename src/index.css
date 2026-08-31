@@ -4288,3 +4288,85 @@ html, body, #root { background: var(--bg-primary); }
 @media (max-width: 640px) {
   .ml-dark-center.ml-page-top { padding-top: 16px; }
 }
+
+/* Choosing how long to commit for. Four buttons rather than a <select>,
+   because the saving is the argument and a dropdown hides it. */
+.ml-plan-list { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
+.ml-plan {
+  display: flex; flex-direction: column; gap: 1px; align-items: flex-start;
+  padding: 10px 12px; border-radius: 10px; cursor: pointer; text-align: left;
+  background: var(--bg-surface); border: 1px solid var(--border-default);
+  font-family: inherit; color: var(--text-secondary);
+  transition: border-color 120ms var(--ml-easing), background 120ms var(--ml-easing);
+}
+.ml-plan:hover { border-color: var(--border-strong); }
+.ml-plan.is-on {
+  border-color: var(--accent-indigo); background: var(--accent-indigo-light, var(--bg-card));
+  box-shadow: 0 0 0 2px var(--accent-indigo-light, transparent);
+}
+.ml-plan-term  { font-size: 12px; font-weight: 600; }
+.ml-plan-price { font-size: 17px; font-weight: 700; color: var(--text-primary); letter-spacing: -0.01em; }
+.ml-plan-rate  { font-size: 11.5px; color: var(--text-muted); }
+.ml-plan-rate em { font-style: normal; color: var(--accent-indigo); font-weight: 600; }
+.ml-plan:focus-visible { outline: 2px solid var(--accent-indigo); outline-offset: 2px; }
+
+/* ═══════════════════════════════════════════════════════════════
+   PRICING  (/pricing) — the one page a stranger can read
+   Quieter than the app: this page is read, not operated, so it gets
+   measure and hierarchy rather than controls.
+   ═══════════════════════════════════════════════════════════════ */
+.ml-price-lede {
+  max-width: 560px; align-self: center; text-align: center;
+  font-size: 16.5px; line-height: 1.6; color: var(--text-secondary); margin: -8px 0 0;
+}
+.ml-price-wrap {
+  width: min(880px, 94vw); align-self: center; text-align: left;
+  display: flex; flex-direction: column; gap: 26px;
+}
+.ml-price-grid {
+  display: grid; gap: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+}
+.ml-price-card {
+  position: relative; display: flex; flex-direction: column; gap: 2px;
+  padding: 18px 16px 16px; border-radius: 14px;
+  background: var(--bg-card); border: 1px solid var(--border-default);
+}
+.ml-price-card.is-default { border-color: var(--accent-indigo); }
+.ml-price-tag {
+  position: absolute; top: -9px; left: 14px;
+  font-size: 10.5px; font-weight: 700; letter-spacing: .02em;
+  padding: 2px 8px; border-radius: 999px;
+  background: var(--accent-indigo); color: #fff;
+}
+.ml-price-term { font-size: 12.5px; font-weight: 600; color: var(--text-secondary); }
+.ml-price-big {
+  font-size: 27px; font-weight: 800; letter-spacing: -0.025em;
+  color: var(--text-primary); font-variant-numeric: tabular-nums;
+}
+.ml-price-rate { font-size: 12.5px; color: var(--text-muted); }
+.ml-price-save { font-size: 12px; font-weight: 700; color: var(--accent-indigo); margin-top: 3px; }
+.ml-price-save-none { color: var(--text-muted); font-weight: 500; }
+.ml-price-fine { font-size: 12.5px; color: var(--text-muted); margin: 0; line-height: 1.55; }
+
+.ml-price-block {
+  padding: 20px 22px; border-radius: 14px;
+  background: var(--bg-card); border: 1px solid var(--border-default);
+}
+.ml-price-block-quiet { background: var(--bg-surface); }
+.ml-price-block h2 {
+  margin: 0 0 10px; font-size: 16px; font-weight: 700;
+  letter-spacing: -0.01em; color: var(--text-primary);
+}
+.ml-price-block ul { margin: 0; padding-left: 20px; }
+.ml-price-block li { font-size: 14px; line-height: 1.62; color: var(--text-secondary); margin-bottom: 7px; }
+.ml-price-block li::marker { color: var(--accent-indigo); }
+.ml-price-block li strong, .ml-price-block p strong { color: var(--text-primary); font-weight: 700; }
+.ml-price-block p { font-size: 14px; line-height: 1.62; color: var(--text-secondary); margin: 0 0 10px; max-width: 62ch; }
+.ml-price-block p:last-child { margin-bottom: 0; }
+
+.ml-price-cta {
+  display: flex; flex-direction: column; align-items: center; gap: 8px;
+  padding: 8px 0 4px; text-align: center;
+}
+.ml-price-cta .ml-dark-btn { min-width: 260px; }

@@ -28,8 +28,44 @@ import { sendMail, ownerAddresses, siteUrl, niceDate } from './mailer';
 
 /** How long a new teacher may use everything before paying. */
 export const TRIAL_DAYS = 7;
-/** The monthly price, in rupees. Shown on the payment page and stored per claim. */
+/** The monthly price, in rupees. The number quoted in every conversation. */
 export const PRICE_RUPEES = 500;
+
+/**
+ * What each plan actually costs.
+ *
+ * The monthly price never moves — ₹500 is the number in every conversation,
+ * and discounting it would teach teachers to wait for a sale. What is
+ * discounted is COMMITMENT: paying for longer is cheaper per month, because a
+ * teacher who has paid to September is a teacher who is still here in
+ * September. Prepayment is the cheapest churn insurance there is.
+ *
+ * Kept as an explicit table rather than a percentage so the numbers are round.
+ * ₹1,350 reads as a price; ₹1,342.50 reads as arithmetic.
+ */
+export const PLANS: ReadonlyArray<{ months: number; rupees: number }> = [
+  { months: 1,  rupees: 500  },   // ₹500/mo
+  { months: 3,  rupees: 1350 },   // ₹450/mo — one school term
+  { months: 6,  rupees: 2550 },   // ₹425/mo
+  { months: 12, rupees: 4800 },   // ₹400/mo
+];
+
+/**
+ * The price of N months.
+ *
+ * Anything not in the table falls back to the full monthly rate, so an
+ * unexpected value can only ever overcharge-by-list, never undercharge. A bug
+ * that silently gives away months is worse than one that quotes the plain
+ * price.
+ */
+export function priceFor(months: number): number {
+  return PLANS.find(p => p.months === months)?.rupees ?? PRICE_RUPEES * months;
+}
+
+/** What a plan works out to per month — for "₹450/month" under the option. */
+export function perMonth(months: number): number {
+  return Math.round(priceFor(months) / months);
+}
 /**
  * Days of teaching allowed AFTER the paid period ends.
  *
@@ -261,6 +297,21 @@ export function mountBillingRoutes(app: any, pool: Pool, opts: { secret: string 
     return (r.rowCount ?? 0) > 0;
   }
 
+  // ── Public: what it costs ────────────────────────────────────────────────
+  // No session required. A price list is the one thing a stranger must be able
+  // to read before deciding whether to ask for an account at all, so this is
+  // deliberately the only billing route with no gate in front of it. It
+  // contains prices and nothing else — no teacher, no room, no count.
+  app.get('/api/pricing', (_req: Request, res: Response) => {
+    res.set('Cache-Control', 'public, max-age=600');
+    res.json({
+      priceRupees: PRICE_RUPEES,
+      trialDays: TRIAL_DAYS,
+      graceDays: GRACE_DAYS,
+      plans: PLANS.map(p => ({ ...p, perMonth: perMonth(p.months) })),
+    });
+  });
+
   // ── The teacher's own view of their subscription ─────────────────────────
   app.get('/api/billing/status', async (req: Request, res: Response) => {
     const user = requireUser(req, res); if (!user) return;
@@ -277,6 +328,7 @@ export function mountBillingRoutes(app: any, pool: Pool, opts: { secret: string 
         ...access,
         admin: await isAdmin(user),
         pendingClaim: open.rows[0] ?? null,
+        plans: PLANS.map(p => ({ ...p, perMonth: perMonth(p.months) })),
         upiId: process.env.PAYTM_UPI_ID || null,
         payeeName: process.env.PAYTM_PAYEE_NAME || 'MathsLive',
       });
@@ -299,7 +351,7 @@ export function mountBillingRoutes(app: any, pool: Pool, opts: { secret: string 
 
     if (vpa) {
       const name = process.env.PAYTM_PAYEE_NAME || 'MathsLive';
-      const amount = (PRICE_RUPEES * months).toFixed(2);
+      const amount = priceFor(months).toFixed(2);
       // The standard UPI deep link every Indian payment app understands.
       const link =
         `upi://pay?pa=${encodeURIComponent(vpa)}` +
@@ -338,7 +390,10 @@ export function mountBillingRoutes(app: any, pool: Pool, opts: { secret: string 
     const b = (req.body || {}) as { reference?: string; note?: string; months?: number };
     const reference = String(b.reference || '').trim().slice(0, 120);
     const note = String(b.note || '').trim().slice(0, 500);
-    const months = Math.min(12, Math.max(1, Number(b.months) || 1));
+    // Only the offered plans. Without this a caller could claim 7 months and
+    // be charged the fallback rate for a plan that was never sold.
+    const asked = Number(b.months) || 1;
+    const months = PLANS.some(p => p.months === asked) ? asked : 1;
     if (!reference) {
       return res.status(400).json({ error: 'Please enter the UPI reference number from your payment.' });
     }
@@ -357,14 +412,14 @@ export function mountBillingRoutes(app: any, pool: Pool, opts: { secret: string 
       const r = await pool.query(
         `INSERT INTO payment_claims (id, teacher_id, amount_rupees, months, reference, note)
          VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, claimed_at`,
-        [id(), user.id, PRICE_RUPEES * months, months, reference, note || null],
+        [id(), user.id, priceFor(months), months, reference, note || null],
       );
 
       void notifyOwner(
-        `MathsLive: ${user.email} says they paid ₹${PRICE_RUPEES * months}`,
+        `MathsLive: ${user.email} says they paid ₹${priceFor(months)}`,
         [
           `Teacher : ${user.email}`,
-          `Amount  : ₹${PRICE_RUPEES * months} (${months} month${months === 1 ? '' : 's'})`,
+          `Amount  : ₹${priceFor(months)} (${months} month${months === 1 ? '' : 's'})`,
           `Ref     : ${reference}`,
           note ? `Note    : ${note}` : '',
           '',
@@ -422,7 +477,7 @@ export function mountBillingRoutes(app: any, pool: Pool, opts: { secret: string 
           await sendMail([email], 'MathsLive — payment received', [
             'Thank you — your payment has been confirmed.',
             '',
-            `Amount    : ₹${PRICE_RUPEES * months} (${months} month${months === 1 ? '' : 's'})`,
+            `Amount    : ₹${priceFor(months)} (${months} month${months === 1 ? '' : 's'})`,
             `Paid up to: ${niceDate(paidUntil)}`,
             '',
             'Nothing else is needed. Your classes and students are exactly as you left them.',

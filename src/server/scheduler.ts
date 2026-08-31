@@ -136,6 +136,13 @@ async function sendOwnerDigest(pool: Pool, day: string): Promise<boolean> {
   const q = await pool.query(
     `SELECT
        (SELECT count(*) FROM users u WHERE ${NOT_ADMIN} AND u.paid_until > now())::int   AS paying,
+       (SELECT COALESCE(sum(
+          COALESCE((SELECT pc.amount_rupees::numeric / NULLIF(pc.months, 0)
+                      FROM payment_claims pc
+                     WHERE pc.teacher_id = u.id AND pc.confirmed_at IS NOT NULL
+                     ORDER BY pc.confirmed_at DESC LIMIT 1), $2::numeric)
+        ), 0)::int FROM users u
+         WHERE ${NOT_ADMIN} AND u.paid_until > now())::int                               AS mrr,
        (SELECT count(*) FROM users u WHERE ${NOT_ADMIN}
           AND (u.paid_until IS NULL OR u.paid_until <= now())
           AND u.trial_started_at + ($1::int * INTERVAL '1 day') > now())::int            AS trialing,
@@ -147,7 +154,7 @@ async function sendOwnerDigest(pool: Pool, day: string): Promise<boolean> {
          WHERE started_at >= current_date - 1 AND started_at < current_date)::int        AS lessons_yesterday,
        (SELECT count(*) FROM users u WHERE ${NOT_ADMIN}
           AND u.created_at > now() - INTERVAL '1 day')::int                              AS new_signups`,
-    [TRIAL_DAYS],
+    [TRIAL_DAYS, PRICE_RUPEES],
   );
   const d = q.rows[0];
 
@@ -174,7 +181,7 @@ async function sendOwnerDigest(pool: Pool, day: string): Promise<boolean> {
   );
 
   const lines = [
-    `Paying ${d.paying}  ·  on trial ${d.trialing}  ·  ₹${d.paying * PRICE_RUPEES}/month`,
+    `Paying ${d.paying}  ·  on trial ${d.trialing}  ·  ₹${d.mrr}/month`,
     `Collected this month: ₹${d.collected_month}`,
     '',
     `Lessons yesterday: ${d.lessons_yesterday}`,

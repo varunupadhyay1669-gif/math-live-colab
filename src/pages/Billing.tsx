@@ -65,7 +65,10 @@ export default function Billing() {
     }
   };
 
-  const amount = (status?.priceRupees ?? 500) * months;
+  const plans = status?.plans ?? [{ months: 1, rupees: 500, perMonth: 500 }];
+  const plan = plans.find(p => p.months === months) ?? plans[0];
+  const amount = plan.rupees;
+  const monthly = status?.priceRupees ?? 500;
   const pending = status?.pendingClaim ?? null;
 
   return (
@@ -126,7 +129,34 @@ export default function Billing() {
                   <div className="ml-bill-cols">
                     {/* Pay */}
                     <div className="ml-bill-card">
-                      <h2 className="ml-bill-h2">1 · Pay ₹{amount}</h2>
+                      <h2 className="ml-bill-h2">1 · Choose, then pay ₹{amount.toLocaleString("en-IN")}</h2>
+                      {/* The monthly price never moves. What gets cheaper is
+                          committing for longer, so the saving is shown against
+                          the plan rather than dressed up as a discount. */}
+                      <div className="ml-plan-list" role="radiogroup" aria-label="How long to pay for">
+                        {plans.map((p) => {
+                          const saving = monthly * p.months - p.rupees;
+                          return (
+                            <button
+                              key={p.months}
+                              type="button"
+                              role="radio"
+                              aria-checked={months === p.months}
+                              className={`ml-plan${months === p.months ? " is-on" : ""}`}
+                              onClick={() => setMonths(p.months)}
+                            >
+                              <span className="ml-plan-term">
+                                {p.months} month{p.months === 1 ? "" : "s"}
+                              </span>
+                              <span className="ml-plan-price">₹{p.rupees.toLocaleString("en-IN")}</span>
+                              <span className="ml-plan-rate">
+                                ₹{p.perMonth}/month
+                                {saving > 0 && <em> · save ₹{saving.toLocaleString("en-IN")}</em>}
+                              </span>
+                            </button>
+                          );
+                        })}
+                      </div>
                       <p className="ml-bill-muted">
                         Scan with any UPI app — Paytm, PhonePe, Google Pay, or your bank's app.
                       </p>
@@ -152,20 +182,6 @@ export default function Billing() {
                         </p>
                       )}
 
-                      <label className="ml-bill-label">
-                        Paying for
-                        <select
-                          className="ml-dark-input"
-                          value={months}
-                          onChange={(e) => setMonths(Number(e.target.value))}
-                        >
-                          {[1, 3, 6, 12].map((m) => (
-                            <option key={m} value={m}>
-                              {m} month{m === 1 ? "" : "s"} — ₹{(status?.priceRupees ?? 500) * m}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
                     </div>
 
                     {/* Tell us */}

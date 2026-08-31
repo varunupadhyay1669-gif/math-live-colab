@@ -111,15 +111,27 @@ export function mountOwnerDashRoutes(app: any, pool: Pool, opts: OwnerDashOption
            (SELECT count(*) FROM teaching_sessions
              WHERE started_at > now() - INTERVAL '7 days')::int                         AS lessons_7d,
            (SELECT count(DISTINCT teacher_id) FROM teaching_sessions
-             WHERE started_at > now() - INTERVAL '7 days')::int                         AS teachers_active_7d`,
-        [TRIAL_DAYS, GRACE_DAYS],
+             WHERE started_at > now() - INTERVAL '7 days')::int                         AS teachers_active_7d,
+           -- Real monthly run-rate. A teacher on the yearly plan bills ₹400 a
+           -- month, not ₹500, so counting everyone at list price would
+           -- overstate the single number this whole plan is steered by. Taken
+           -- from each teacher's most recent confirmed payment; teachers given
+           -- access by hand, with no payment, count at list.
+           (SELECT COALESCE(sum(
+              COALESCE(
+                (SELECT pc.amount_rupees::numeric / NULLIF(pc.months, 0)
+                   FROM payment_claims pc
+                  WHERE pc.teacher_id = u.id AND pc.confirmed_at IS NOT NULL
+                  ORDER BY pc.confirmed_at DESC LIMIT 1),
+                $3::numeric)
+            ), 0)::int
+              FROM users u
+             WHERE ${NOT_ADMIN} AND u.paid_until > now())::int                          AS mrr`,
+        [TRIAL_DAYS, GRACE_DAYS, PRICE_RUPEES],
       );
       const o = r.rows[0];
       res.json({
         ...o,
-        // Monthly run-rate, stated the honest way: what the current paying
-        // teachers bill in a month. Not annualised, not projected.
-        mrr: o.paying * PRICE_RUPEES,
         priceRupees: PRICE_RUPEES,
         trialDays: TRIAL_DAYS,
         graceDays: GRACE_DAYS,

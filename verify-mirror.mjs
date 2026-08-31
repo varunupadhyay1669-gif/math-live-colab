@@ -19,7 +19,7 @@ import { JSDOM } from 'jsdom';
 import { mirrorScriptFor, stripLessonScripts } from './src/lib/mirrorScript.ts';
 import { checkLesson } from './src/lib/lessonCheck.ts';
 import { parseDataUrl, externaliseBoardImages } from './src/server/boardImages.ts';
-import { accessFrom, TRIAL_DAYS, PRICE_RUPEES, GRACE_DAYS } from './src/server/billing.ts';
+import { accessFrom, TRIAL_DAYS, PRICE_RUPEES, GRACE_DAYS, PLANS, priceFor, perMonth } from './src/server/billing.ts';
 import { _warningFor } from './src/server/scheduler.ts';
 import QRCode from 'qrcode';
 import jsQR from 'jsqr';
@@ -404,6 +404,41 @@ assert(_warningFor('grace', 2) === 'grace', 'a teacher on grace is told they are
 assert(_warningFor('expired', 0) === null,
   'an already-expired teacher is not emailed daily forever');
 
+section('OFFLINE — what the plans cost');
+
+// Pricing is the one place where a quiet arithmetic slip is charged to a real
+// person. Two directions to get it wrong: a plan that costs MORE than paying
+// monthly (nobody would buy it, and it looks like a trick), or one so cheap it
+// gives the product away.
+{
+  assert(priceFor(1) === PRICE_RUPEES, 'one month is the plain monthly price');
+
+  for (const p of PLANS) {
+    const list = PRICE_RUPEES * p.months;
+    assert(p.rupees <= list,
+      `the ${p.months}-month plan never costs more than paying monthly`,
+      `${p.rupees} vs ${list}`);
+    assert(p.rupees >= list * 0.7,
+      `the ${p.months}-month plan does not give the product away`,
+      `${p.rupees} vs ${list}`);
+    assert(perMonth(p.months) === Math.round(p.rupees / p.months),
+      `the ${p.months}-month per-month figure matches its price`);
+  }
+
+  // Longer must always be cheaper per month, or the ladder makes no argument.
+  for (let i = 1; i < PLANS.length; i++) {
+    assert(perMonth(PLANS[i].months) < perMonth(PLANS[i - 1].months),
+      `${PLANS[i].months} months beats ${PLANS[i - 1].months} months per month`,
+      `${perMonth(PLANS[i].months)} vs ${perMonth(PLANS[i - 1].months)}`);
+  }
+
+  // An unsold plan length must fall back to full price, never a discount.
+  assert(priceFor(7) === PRICE_RUPEES * 7,
+    'a plan length that is not sold falls back to the plain rate');
+  assert(priceFor(2) === PRICE_RUPEES * 2,
+    'two months, which is not offered, is not silently discounted');
+}
+
 section('OFFLINE — the payment QR says what it should');
 
 // The QR is money. A wrong digit in the UPI id sends a teacher's ₹500 to a
@@ -417,7 +452,7 @@ section('OFFLINE — the payment QR says what it should');
   const qrFor = (months) =>
     'upi://pay?pa=' + encodeURIComponent(VPA) +
     '&pn=' + encodeURIComponent(NAME) +
-    '&am=' + (PRICE_RUPEES * months).toFixed(2) + '&cu=INR' +
+    '&am=' + priceFor(months).toFixed(2) + '&cu=INR' +
     '&tn=' + encodeURIComponent(`MathsLive ${months}m`);
 
   for (const months of [1, 3, 12]) {
@@ -434,8 +469,8 @@ section('OFFLINE — the payment QR says what it should');
     if (got) {
       const q = Object.fromEntries(new URLSearchParams(got.data.split('?')[1]));
       assert(q.pa === VPA, `the ${months}-month QR pays the right UPI id`, q.pa);
-      assert(Number(q.am) === PRICE_RUPEES * months,
-        `the ${months}-month QR asks for the right amount`, q.am);
+      assert(Number(q.am) === priceFor(months),
+        `the ${months}-month QR asks for the plan price, not months × list`, q.am);
     }
   }
 }
