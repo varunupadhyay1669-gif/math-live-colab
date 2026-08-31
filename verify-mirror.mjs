@@ -19,7 +19,10 @@ import { JSDOM } from 'jsdom';
 import { mirrorScriptFor, stripLessonScripts } from './src/lib/mirrorScript.ts';
 import { checkLesson } from './src/lib/lessonCheck.ts';
 import { parseDataUrl, externaliseBoardImages } from './src/server/boardImages.ts';
-import { accessFrom, TRIAL_DAYS } from './src/server/billing.ts';
+import { accessFrom, TRIAL_DAYS, PRICE_RUPEES } from './src/server/billing.ts';
+import QRCode from 'qrcode';
+import jsQR from 'jsqr';
+import { PNG } from 'pngjs';
 
 let passed = 0, failed = 0;
 const ok = (n) => { passed++; console.log(`  ✓ ${n}`); };
@@ -351,6 +354,42 @@ assert(accessFrom({ trial_started_at: null, paid_until: null }).state === 'expir
 
 assert(accessFrom(null).state === 'expired',
   'a missing row is not access');
+
+section('OFFLINE — the payment QR says what it should');
+
+// The QR is money. A wrong digit in the UPI id sends a teacher's ₹500 to a
+// stranger, and nothing in the product would notice — the teacher would type a
+// perfectly real reference number and Varun would have no payment to match it
+// to. So the code is generated, decoded back, and checked against what it was
+// meant to say.
+{
+  const VPA = '6376154428@ptyes';
+  const NAME = 'Varun Upadhyay';
+  const qrFor = (months) =>
+    'upi://pay?pa=' + encodeURIComponent(VPA) +
+    '&pn=' + encodeURIComponent(NAME) +
+    '&am=' + (PRICE_RUPEES * months).toFixed(2) + '&cu=INR' +
+    '&tn=' + encodeURIComponent(`MathsLive ${months}m`);
+
+  for (const months of [1, 3, 12]) {
+    const link = qrFor(months);
+    const buf = await QRCode.toBuffer(link, {
+      type: 'png', width: 512, margin: 1, errorCorrectionLevel: 'M',
+    });
+    const png = PNG.sync.read(buf);
+    const got = jsQR(new Uint8ClampedArray(png.data), png.width, png.height);
+    assert(got && got.data === link,
+      `a ${months}-month QR decodes back to exactly what was encoded`,
+      got ? got.data : 'unreadable');
+
+    if (got) {
+      const q = Object.fromEntries(new URLSearchParams(got.data.split('?')[1]));
+      assert(q.pa === VPA, `the ${months}-month QR pays the right UPI id`, q.pa);
+      assert(Number(q.am) === PRICE_RUPEES * months,
+        `the ${months}-month QR asks for the right amount`, q.am);
+    }
+  }
+}
 
 // LIVE — the protocol, against a running server.
 // ─────────────────────────────────────────────────────────────────────────

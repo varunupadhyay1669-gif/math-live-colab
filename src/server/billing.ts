@@ -21,6 +21,7 @@ import type { Request, Response } from 'express';
 import { randomBytes } from 'crypto';
 import { readFile } from 'fs/promises';
 import path from 'path';
+import QRCode from 'qrcode';
 import type { Pool } from 'pg';
 import { userFromRequest, type SessionUser } from './identity';
 
@@ -78,8 +79,9 @@ const DAY_MS = 86_400_000;
 /**
  * Decide what a teacher is entitled to right now.
  *
- * Paid time always wins over trial time, so confirming a payment during a
- * trial does not shorten anything — the teacher gets the later of the two.
+ * The teacher gets whichever runs out LATER — trial end or paid-until — so
+ * confirming a payment mid-trial adds to the days they had rather than
+ * replacing them.
  */
 export function accessFrom(row: BillingRow | null | undefined, now = new Date()): Access {
   const base = { priceRupees: PRICE_RUPEES, trialDays: TRIAL_DAYS };
@@ -273,9 +275,42 @@ export function mountBillingRoutes(app: any, pool: Pool, opts: { secret: string 
     } catch (err) { fail(res, err, 'check your subscription'); }
   });
 
-  // The QR image itself, kept on disk rather than in the bundle so it can be
-  // replaced without a rebuild.
-  app.get('/api/billing/qr', async (_req: Request, res: Response) => {
+  // The payment QR.
+  //
+  // Generated per request with the AMOUNT already in it, rather than serving a
+  // photographed static QR. A static personal QR asks the payer to type the
+  // amount themselves, and in a system where a human matches payments to
+  // claims by hand, every wrong amount is a conversation. Encoding ₹500 (or
+  // ₹1500 for three months) removes that entirely.
+  //
+  // Falls back to an image file, so a screenshotted QR still works for anyone
+  // who would rather install one than set PAYTM_UPI_ID.
+  app.get('/api/billing/qr', async (req: Request, res: Response) => {
+    const months = Math.min(12, Math.max(1, Number(req.query.months) || 1));
+    const vpa = process.env.PAYTM_UPI_ID;
+
+    if (vpa) {
+      const name = process.env.PAYTM_PAYEE_NAME || 'MathsLive';
+      const amount = (PRICE_RUPEES * months).toFixed(2);
+      // The standard UPI deep link every Indian payment app understands.
+      const link =
+        `upi://pay?pa=${encodeURIComponent(vpa)}` +
+        `&pn=${encodeURIComponent(name)}` +
+        `&am=${amount}&cu=INR` +
+        `&tn=${encodeURIComponent(`MathsLive ${months}m`)}`;
+      try {
+        const png = await QRCode.toBuffer(link, {
+          type: 'png', width: 512, margin: 1, errorCorrectionLevel: 'M',
+        });
+        res.set('Content-Type', 'image/png');
+        res.set('Cache-Control', 'public, max-age=3600');
+        return res.send(png);
+      } catch (err) {
+        console.error('QR generation failed:', (err as Error).message);
+        // fall through to the file
+      }
+    }
+
     const file = process.env.PAYTM_QR_PATH || path.join(process.cwd(), 'deploy', 'paytm-qr.png');
     try {
       const bytes = await readFile(file);

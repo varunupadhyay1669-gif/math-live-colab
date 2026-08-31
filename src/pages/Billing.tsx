@@ -132,9 +132,10 @@ export default function Billing() {
                       ) : (
                         <img
                           className="ml-bill-qr"
-                          src="/api/billing/qr"
+                          src={`/api/billing/qr?months=${months}`}
                           alt="Scan this QR code with a UPI app to pay"
                           onError={() => setQrBroken(true)}
+                          key={months}
                         />
                       )}
 
