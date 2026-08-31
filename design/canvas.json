@@ -1,0 +1,25 @@
+{
+  "artboards": [
+    { "file": "Main.dc.html", "x": 0, "y": 0, "w": 1200, "h": 2280, "title": "Landing page", "is_interactive": true, "print": "flow" },
+    { "file": "Mobile.dc.html", "x": 1320, "y": 0, "w": 390, "h": 844, "title": "On a phone", "is_interactive": true },
+    { "file": "DirectionB.dc.html", "x": 1320, "y": 1000, "w": 880, "h": 900, "title": "Direction B — Chalkboard" },
+    { "file": "DirectionC.dc.html", "x": 1320, "y": 2020, "w": 980, "h": 760, "title": "Direction C — What the parent sees" }
+  ],
+  "annotations": [
+    {
+      "id": "note-main",
+      "x": 0,
+      "y": -150,
+      "w": 460,
+      "text": "The page.\n\nThe hero is the product running, not a picture of it — tap two numbers and the maths moves. Everything else is subordinate to that one interaction.\n\nThe competitor named is Zoom, because that is the truth."
+    },
+    {
+      "id": "note-alts",
+      "x": 1320,
+      "y": -150,
+      "w": 460,
+      "text": "Phone view is designed, not reflowed — three tiles stay on one row, because that row is the idea.\n\nBelow it: two other directions, kept rough on purpose. Each says why it might win and what it costs. Pick one and I will build it properly."
+    }
+  ],
+  "launch": { "view": "focused", "file": "Main.dc.html" }
+}

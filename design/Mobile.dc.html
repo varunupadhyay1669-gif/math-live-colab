@@ -1,0 +1,132 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Newsreader:opsz,wght@6..72,400;6..72,500;6..72,600&family=Public+Sans:wght@400;500;600;700&display=swap">
+  <style>
+    body { margin: 0; font-family: 'Public Sans', system-ui, sans-serif; }
+    a { color: #4F46E5; } a:hover { color: #3730A3; }
+    .paper {
+      background-color: #F4F6FA;
+      background-image:
+        linear-gradient(rgba(15,30,51,.05) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(15,30,51,.05) 1px, transparent 1px);
+      background-size: 22px 22px, 22px 22px;
+    }
+  </style>
+</helmet>
+
+<!-- The same page at 390px. Most Indian tutors will meet this page on a phone,
+     so it is designed here rather than left to reflow: headline down to 34px,
+     the three tiles still on ONE row (that row IS the idea), and every tap
+     target over 44px. No fake status bar — the real one renders on top. -->
+<div class="paper" style="min-height: 100%; color: #0F1E33; padding: 0 0 40px;">
+
+  <div style="display: flex; align-items: center; justify-content: space-between; padding: 18px 20px; border-bottom: 1px solid rgba(15,30,51,.10);">
+    <span style="font-family: 'Newsreader', Georgia, serif; font-size: 19px; font-weight: 600;">
+      Maths<span style="color: #4F46E5;">Live</span>
+    </span>
+    <span style="padding: 9px 15px; border-radius: 8px; background: #4F46E5; color: #fff; font-size: 13.5px; font-weight: 600;">Start free</span>
+  </div>
+
+  <div style="padding: 28px 20px 0; display: flex; flex-direction: column; gap: 14px;">
+    <span style="font-size: 11.5px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: #4F46E5;">For one-to-one maths tutors</span>
+    <h1 style="font-family: 'Newsreader', Georgia, serif; font-weight: 500; font-size: 34px; line-height: 1.06; letter-spacing: -0.025em; margin: 0;">
+      Stop pointing a phone at your notebook.
+    </h1>
+    <p style="margin: 0; font-size: 15.5px; line-height: 1.6; color: #46516A;">
+      Your student opens one link and lands on the same board you are working on — from
+      their own iPad. Not a video of your screen. The thing itself.
+    </p>
+  </div>
+
+  <div style="margin: 22px 20px 0; background: #fff; border: 1px solid rgba(15,30,51,.12); border-radius: 16px; padding: 20px 18px; box-shadow: 0 18px 36px -26px rgba(15,30,51,.45);">
+    <div style="display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin-bottom: 16px;">
+      <span style="font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: #4F46E5;">Try it</span>
+      <span style="font-size: 11.5px; color: #8892A6;">tap two</span>
+    </div>
+    <div style="display: flex; gap: 9px; justify-content: center; margin-bottom: 18px;">
+      <sc-for list="{{tiles}}" as="tile" hint-placeholder-count="3">
+        <button onClick="{{tile.pick}}" style="{{tile.style}}">{{tile.n}}</button>
+      </sc-for>
+    </div>
+    <div style="min-height: 92px; display: flex; flex-direction: column; justify-content: center; gap: 7px; text-align: center;">
+      <sc-if value="{{idle}}" hint-placeholder-val="{{true}}">
+        <p style="margin: 0; font-family: 'Newsreader', Georgia, serif; font-size: 23px; color: #46516A;">4 × 21 × 5</p>
+        <p style="margin: 0; font-size: 13px; color: #8892A6;">Any order works. Which two first?</p>
+      </sc-if>
+      <sc-if value="{{solved}}" hint-placeholder-val="{{false}}">
+        <p style="margin: 0; font-family: 'Newsreader', Georgia, serif; font-size: 22px; color: #0F1E33; line-height: 1.3;">
+          {{a}} × {{b}} = {{first}}<br>
+          {{first}} × {{rest}} = <span style="color: #4F46E5;">{{total}}</span>
+        </p>
+        <p style="margin: 0; font-size: 13px; line-height: 1.5; color: {{verdictColor}};">{{verdict}}</p>
+      </sc-if>
+    </div>
+  </div>
+
+  <div style="padding: 24px 20px 0; display: flex; flex-direction: column; gap: 11px;">
+    <span style="display: block; text-align: center; padding: 16px 20px; border-radius: 10px; background: #4F46E5; color: #fff; font-size: 15.5px; font-weight: 700;">Teach your next lesson free</span>
+    <p style="margin: 0; text-align: center; font-size: 13px; color: #6B7488;">
+      7 days, no card. Then <strong style="color: #0F1E33;">₹500 a month</strong>.
+    </p>
+  </div>
+</div>
+</x-dc>
+
+<script data-dc-script data-props='{"$preview":{"width":390,"height":844}}'>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.state = { picked: [] };
+  }
+
+  renderVals() {
+    const NUMBERS = [4, 21, 5];
+    const picked = this.state.picked;
+    // 62px wide, 60px tall: comfortably past the 44px hit-target floor with
+    // three still fitting one row at 390px.
+    const base = 'min-width:62px;padding:15px 10px;border-radius:12px;cursor:pointer;'
+      + "font-family:'Newsreader',Georgia,serif;font-size:28px;font-weight:500;"
+      + 'font-variant-numeric:tabular-nums;line-height:1;transition:all .14s ease;';
+
+    const tiles = NUMBERS.map((n, i) => {
+      const on = picked.indexOf(i) !== -1;
+      return {
+        n,
+        style: base + (on
+          ? 'background:#4F46E5;color:#fff;border:2px solid #4F46E5;'
+          : 'background:#F4F6FA;color:#0F1E33;border:2px solid rgba(15,30,51,.14);'),
+        pick: () => {
+          const p = this.state.picked.slice();
+          const at = p.indexOf(i);
+          if (at !== -1) p.splice(at, 1);
+          else if (p.length >= 2) { p.shift(); p.push(i); }
+          else p.push(i);
+          this.setState({ picked: p });
+        },
+      };
+    });
+
+    if (picked.length !== 2) {
+      return { tiles, idle: true, solved: false, a: 0, b: 0, first: 0, rest: 0, total: 0, verdict: '', verdictColor: '#6B7488' };
+    }
+    const a = NUMBERS[picked[0]], b = NUMBERS[picked[1]];
+    const rest = NUMBERS[[0, 1, 2].filter((k) => picked.indexOf(k) === -1)[0]];
+    const first = a * b;
+    const easy = first % 10 === 0;
+    return {
+      tiles, idle: false, solved: true, a, b, first, rest, total: first * rest,
+      verdict: easy ? 'A step you do in your head.' : 'That one you write down. Try 4 and 5.',
+      verdictColor: easy ? '#0D7A5F' : '#6B7488',
+    };
+  }
+}
+</script>
+</body>
+</html>

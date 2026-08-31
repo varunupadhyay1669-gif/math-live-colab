@@ -1,0 +1,69 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Caveat:wght@500;600&family=Public+Sans:wght@400;600;700&display=swap">
+  <style>
+    body { margin: 0; font-family: 'Public Sans', system-ui, sans-serif; }
+    a { color: #F2C94C; } a:hover { color: #E0B43A; }
+  </style>
+</helmet>
+
+<!-- DIRECTION B — "Chalkboard".
+     AXIS: emotional register. Main is editorial and premium; this is the
+     classroom a tutor already stands in — slate, chalk, handwriting.
+     WHY IT MIGHT WIN: instantly legible as maths teaching, warm rather than
+     corporate, and it makes the ₹500 feel like a tool rather than software.
+     THE TRADEOFF: dark and nostalgic reads cheaper to some buyers, chalk
+     script hurts legibility at small sizes, and it fights the app's own light
+     UI — a visitor would cross a visual seam on signing up. -->
+<div style="min-height:100%;background:#1F2A24;color:#E8EDE9;padding:40px 44px;font-size:15px;">
+  <div style="display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid rgba(232,237,233,.16);padding-bottom:18px;margin-bottom:36px;">
+    <span style="font-family:'Caveat',cursive;font-size:28px;">MathsLive</span>
+    <span style="border:1px dashed rgba(232,237,233,.4);padding:8px 16px;border-radius:4px;font-size:13px;">Start free</span>
+  </div>
+
+  <p style="font-family:'Caveat',cursive;font-size:22px;color:#F2C94C;margin:0 0 10px;">for tutors who teach one child at a time</p>
+  <h1 style="font-family:'Caveat',cursive;font-weight:600;font-size:62px;line-height:1.05;margin:0 0 18px;max-width:16ch;">
+    The board they can actually write on.
+  </h1>
+  <p style="margin:0 0 30px;max-width:46ch;line-height:1.6;color:#B6C2BA;">
+    One link. Their iPad. The same board as yours, moving as you move it.
+  </p>
+
+  <div style="border:2px solid rgba(232,237,233,.25);border-radius:8px;padding:26px;margin-bottom:28px;">
+    <p style="font-family:'Caveat',cursive;font-size:20px;color:#F2C94C;margin:0 0 16px;">tap two to multiply first</p>
+    <div style="display:flex;gap:14px;">
+      <div style="width:78px;height:78px;border:2px solid #E8EDE9;border-radius:6px;display:flex;align-items:center;justify-content:center;font-family:'Caveat',cursive;font-size:38px;">4</div>
+      <div style="width:78px;height:78px;border:2px solid rgba(232,237,233,.35);border-radius:6px;display:flex;align-items:center;justify-content:center;font-family:'Caveat',cursive;font-size:38px;color:#B6C2BA;">21</div>
+      <div style="width:78px;height:78px;border:2px solid #E8EDE9;border-radius:6px;display:flex;align-items:center;justify-content:center;font-family:'Caveat',cursive;font-size:38px;">5</div>
+    </div>
+    <p style="font-family:'Caveat',cursive;font-size:26px;margin:18px 0 0;">4 × 5 = 20 → 20 × 21 = <span style="color:#F2C94C;">420</span></p>
+  </div>
+
+  <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;margin-bottom:28px;">
+    <div style="border:1px dashed rgba(232,237,233,.28);border-radius:6px;padding:18px;">
+      <p style="margin:0 0 6px;font-family:'Caveat',cursive;font-size:19px;color:#B6C2BA;">Zoom + phone</p>
+      <div style="height:8px;background:rgba(232,237,233,.16);border-radius:3px;margin-bottom:7px;"></div>
+      <div style="height:8px;width:70%;background:rgba(232,237,233,.16);border-radius:3px;"></div>
+    </div>
+    <div style="border:1px solid #F2C94C;border-radius:6px;padding:18px;">
+      <p style="margin:0 0 6px;font-family:'Caveat',cursive;font-size:19px;color:#F2C94C;">MathsLive · ₹500</p>
+      <div style="height:8px;background:rgba(242,201,76,.4);border-radius:3px;margin-bottom:7px;"></div>
+      <div style="height:8px;width:70%;background:rgba(242,201,76,.4);border-radius:3px;"></div>
+    </div>
+  </div>
+
+  <div style="border-top:1px solid rgba(232,237,233,.16);padding-top:20px;">
+    <p style="font-family:'Caveat',cursive;font-size:30px;margin:0 0 12px;">Use it on your next lesson.</p>
+    <span style="display:inline-block;background:#F2C94C;color:#1F2A24;padding:12px 24px;border-radius:5px;font-weight:700;">Teach free for 7 days</span>
+  </div>
+</div>
+</x-dc>
+</body>
+</html>

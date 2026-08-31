@@ -1,0 +1,75 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;600;700;800&display=swap">
+  <style>
+    body { margin: 0; font-family: 'Public Sans', system-ui, sans-serif; }
+    a { color: #4F46E5; } a:hover { color: #3730A3; }
+  </style>
+</helmet>
+
+<!-- DIRECTION C — "What the parent sees".
+     AXIS: what the hero argues. Main and B both sell the TOOL — the shared
+     board, the demo. This sells the OUTCOME: the message a tutor sends the
+     parent after class, which is what actually justifies their fee and gets
+     them re-booked.
+     WHY IT MIGHT WIN: tutors do not buy software, they buy retained students;
+     "your parents will see this" is a stronger reason to pay ₹500 than "the
+     board is shared". It also differentiates from every whiteboard product.
+     THE TRADEOFF: it leads with a feature that is only half built (the recap
+     is E1 in the plan, not shipped), and it buries the one thing that is
+     genuinely unmatched — the live interactive — below the fold. -->
+<div style="min-height:100%;background:#FFFFFF;color:#0A0A0F;padding:44px;">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:44px;">
+    <span style="font-weight:800;font-size:19px;letter-spacing:-0.02em;">Maths<span style="color:#4F46E5;">Live</span></span>
+    <span style="background:#4F46E5;color:#fff;padding:9px 17px;border-radius:7px;font-size:13.5px;font-weight:700;">Start free</span>
+  </div>
+
+  <div style="display:grid;grid-template-columns:1.15fr 1fr;gap:44px;align-items:center;">
+    <div>
+      <h1 style="font-size:52px;font-weight:800;line-height:1.05;letter-spacing:-0.035em;margin:0 0 16px;">
+        Give the parent a reason to keep booking you.
+      </h1>
+      <p style="margin:0 0 26px;font-size:17px;line-height:1.6;color:#4A5163;max-width:40ch;">
+        After every lesson MathsLive hands you a recap worth sending: what you covered,
+        what she got stuck on, what is next. Two taps to WhatsApp.
+      </p>
+      <span style="display:inline-block;background:#4F46E5;color:#fff;padding:14px 28px;border-radius:9px;font-size:15.5px;font-weight:700;">Try it on your next lesson</span>
+      <p style="margin:14px 0 0;font-size:13.5px;color:#6B7280;">7 days free · then ₹500/month</p>
+    </div>
+
+    <!-- Low-fi sketch of the artefact itself: a phone showing the recap. -->
+    <div style="border:1px solid rgba(10,10,15,.14);border-radius:22px;padding:16px;background:#F7F7F9;">
+      <div style="background:#fff;border-radius:14px;padding:18px;box-shadow:0 10px 26px -18px rgba(10,10,15,.5);">
+        <p style="margin:0 0 4px;font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#6B7280;">Today&#39;s class · 45 min</p>
+        <p style="margin:0 0 14px;font-size:16px;font-weight:700;">Multiplying in a convenient order</p>
+        <div style="height:9px;background:#EEEFF3;border-radius:4px;margin-bottom:7px;"></div>
+        <div style="height:9px;width:88%;background:#EEEFF3;border-radius:4px;margin-bottom:7px;"></div>
+        <div style="height:9px;width:64%;background:#EEEFF3;border-radius:4px;margin-bottom:16px;"></div>
+        <div style="border-left:3px solid #4F46E5;padding-left:11px;margin-bottom:16px;">
+          <p style="margin:0;font-size:13px;color:#4A5163;line-height:1.5;">Got 4 × 21 × 5 as 2100 first, then found 420 by pairing 4 and 5.</p>
+        </div>
+        <div style="height:74px;background:#EEEFF3;border-radius:8px;margin-bottom:12px;"></div>
+        <p style="margin:0;font-size:11.5px;color:#9AA0AE;">board from today</p>
+      </div>
+    </div>
+  </div>
+
+  <div style="margin-top:52px;padding-top:28px;border-top:1px solid rgba(10,10,15,.1);">
+    <p style="margin:0 0 16px;font-size:13px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#6B7280;">and during the lesson</p>
+    <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:18px;">
+      <div><div style="height:8px;width:52%;background:#0A0A0F;border-radius:3px;margin-bottom:9px;"></div><div style="height:7px;background:#EEEFF3;border-radius:3px;margin-bottom:5px;"></div><div style="height:7px;width:80%;background:#EEEFF3;border-radius:3px;"></div></div>
+      <div><div style="height:8px;width:66%;background:#0A0A0F;border-radius:3px;margin-bottom:9px;"></div><div style="height:7px;background:#EEEFF3;border-radius:3px;margin-bottom:5px;"></div><div style="height:7px;width:72%;background:#EEEFF3;border-radius:3px;"></div></div>
+      <div><div style="height:8px;width:44%;background:#0A0A0F;border-radius:3px;margin-bottom:9px;"></div><div style="height:7px;background:#EEEFF3;border-radius:3px;margin-bottom:5px;"></div><div style="height:7px;width:86%;background:#EEEFF3;border-radius:3px;"></div></div>
+    </div>
+  </div>
+</div>
+</x-dc>
+</body>
+</html>
