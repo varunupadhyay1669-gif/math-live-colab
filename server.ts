@@ -13,6 +13,7 @@ import { IDENTITY_SCHEMA_SQL, mountAuthRoutes, userFromCookieHeader } from './sr
 import { mountRecordRoutes } from './src/server/records';
 import { BOARD_IMAGE_SCHEMA_SQL, mountBoardImageRoutes, externaliseBoardImages } from './src/server/boardImages';
 import { BILLING_SCHEMA_SQL, mountBillingRoutes, accessForTeacher } from './src/server/billing';
+import { mountOwnerDashRoutes, type LiveRoom } from './src/server/ownerDash';
 
 interface FileEntry {
   id: string;
@@ -4419,6 +4420,31 @@ Build a widget that teaches: ${safePrompt}`;
     mountRecordRoutes(app, appPool, { secret: sessionSecret });
     mountBoardImageRoutes(app, appPool);
     mountBillingRoutes(app, appPool, { secret: sessionSecret });
+    mountOwnerDashRoutes(app, appPool, {
+      secret: sessionSecret,
+      // Names only, and only for rooms that are actually occupied. The admin
+      // screen answers "who is teaching right now", which needs no lesson
+      // content, no board, and no chat — so none of it leaves the process.
+      liveRooms: (): LiveRoom[] => {
+        const out: LiveRoom[] = [];
+        for (const [roomId, room] of rooms) {
+          if (room.users.size === 0) continue;
+          let teacher: string | null = null;
+          const students: string[] = [];
+          for (const [socketId, u] of room.users) {
+            if (u.role === 'teacher' && socketId === room.teacherSocketId) teacher = u.name;
+            else if (u.role === 'student') students.push(u.name);
+          }
+          out.push({
+            roomId, teacher, students,
+            startedAt: room.createdAt,
+            lastActivityAt: room.lastActivityAt,
+            paused: room.isPaused,
+          });
+        }
+        return out.sort((a, b) => b.lastActivityAt - a.lastActivityAt);
+      },
+    });
     console.log('\ud83d\udd11 Teacher accounts: this server\u2019s own database');
     console.log('\ud83d\udd12 Teacher ownership enforcement: ON (registered classes are owner-only)');
   } else {

@@ -12,7 +12,7 @@ import type { Request, Response } from 'express';
 import { randomBytes } from 'crypto';
 import type { Pool } from 'pg';
 import { userFromRequest, type SessionUser } from './identity';
-import { accessForTeacher } from './billing';
+import { accessForTeacher, accessFrom } from './billing';
 
 function id(prefix: string): string {
   return `${prefix}_${randomBytes(9).toString('base64').replace(/[^a-zA-Z0-9]/g, '').slice(0, 12)}`;
@@ -260,10 +260,21 @@ export function mountRecordRoutes(app: any, pool: Pool, opts: { secret: string }
                (SELECT count(*) FROM teaching_sessions s WHERE s.teacher_id = u.id
                   AND s.started_at > now() - interval '7 days')::int AS lessons_7d,
                (SELECT max(s.started_at) FROM teaching_sessions s WHERE s.teacher_id = u.id) AS last_lesson,
-               (SELECT sum(s.taught_seconds) FROM teaching_sessions s WHERE s.teacher_id = u.id)::int AS taught_seconds
+               (SELECT sum(s.taught_seconds) FROM teaching_sessions s WHERE s.teacher_id = u.id)::int AS taught_seconds,
+               u.trial_started_at, u.paid_until,
+               EXISTS (SELECT 1 FROM platform_admins p WHERE p.email = u.email) AS is_admin
           FROM users u
       ORDER BY u.created_at DESC`);
-      res.json({ tutors: r.rows });
+      // Entitlement is decided in ONE place. The admin screen showing a
+      // different answer from the socket gate would be worse than showing
+      // nothing, so both go through accessFrom().
+      const tutors = r.rows.map(t => ({
+        ...t,
+        billing: t.is_admin
+          ? { state: 'admin' as const, until: null, daysLeft: null }
+          : (() => { const a = accessFrom(t); return { state: a.state, until: a.until, daysLeft: a.daysLeft }; })(),
+      }));
+      res.json({ tutors });
     } catch (err) { fail(res, err, 'read tutor usage'); }
   });
 

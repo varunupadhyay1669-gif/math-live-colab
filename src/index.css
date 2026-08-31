@@ -4201,19 +4201,73 @@ html, body, #root { background: var(--bg-primary); }
 .ml-bill-ok  { margin: 0; font-size: 13px; color: var(--accent-indigo); font-weight: 600; }
 .ml-bill-err { margin: 0; font-size: 13px; color: #d9534f; font-weight: 600; }
 
-/* Payment claims on /admin. */
+/* ═══════════════════════════════════════════════════════════════
+   THE OWNER'S COCKPIT  (/admin)
+   This surface is deliberately dark ALWAYS — .ml-admin paints #0B1020
+   regardless of the viewer's theme — so everything here uses literal
+   colours from that palette. Theme tokens would render white cards with
+   dark text on navy the moment a viewer is in light mode.
+   ═══════════════════════════════════════════════════════════════ */
 .ml-claims { display: flex; flex-direction: column; gap: 8px; }
 .ml-claim {
   display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
   padding: 12px 14px; border-radius: 10px;
-  border: 1px solid var(--border-default); background: var(--bg-card);
-  font-size: 13px;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  background: rgba(255, 255, 255, 0.04);
+  font-size: 13px; color: #E2E8F0;
 }
-.ml-claim-open { border-color: #c8a13a; box-shadow: 0 0 0 3px rgba(200, 161, 58, 0.10); }
+.ml-claim-open { border-color: rgba(245, 158, 11, 0.5); box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.10); }
 .ml-claim-main { flex: 1; min-width: 220px; display: flex; flex-direction: column; gap: 2px; }
-.ml-claim-who  { font-weight: 700; color: var(--text-primary); }
-.ml-claim-meta { font-size: 11.5px; color: var(--text-muted); font-family: 'JetBrains Mono', monospace; }
-.ml-claim-done { font-size: 12px; font-weight: 600; color: var(--text-muted); }
+.ml-claim-who  { font-weight: 700; color: #F1F5F9; }
+.ml-claim-meta { font-size: 11.5px; color: #94A3B8; font-family: 'JetBrains Mono', monospace; }
+.ml-claim-done { font-size: 12px; font-weight: 600; color: #94A3B8; }
+
+/* Numbers that mean something. Tone is meaning, not decoration. */
+.ml-admin-stats-sub { margin-top: -12px; }
+.ml-admin-stats-sub .ml-admin-stat { padding: 10px 13px; }
+.ml-admin-stats-sub .ml-admin-stat-value { font-size: 17px; font-weight: 700; }
+.ml-admin-stat.t-money {
+  background: rgba(16, 185, 129, 0.10); border-color: rgba(16, 185, 129, 0.28);
+}
+.ml-admin-stat.t-money .ml-admin-stat-value { color: #6EE7B7; }
+.ml-admin-stat.t-warn {
+  background: rgba(245, 158, 11, 0.10); border-color: rgba(245, 158, 11, 0.32);
+}
+.ml-admin-stat.t-warn .ml-admin-stat-value { color: #FCD34D; }
+.ml-admin-stat.t-live {
+  background: rgba(59, 130, 246, 0.10); border-color: rgba(59, 130, 246, 0.32);
+}
+.ml-admin-stat.t-live .ml-admin-stat-value { color: #93C5FD; }
+
+/* Billing state, readable at a glance without reading the word. */
+.ml-bill-pill {
+  display: inline-block; padding: 3px 9px; border-radius: 999px;
+  font-size: 11px; font-weight: 700; white-space: nowrap;
+}
+.ml-bill-pill.b-active  { background: rgba(16, 185, 129, 0.16); color: #6EE7B7; }
+.ml-bill-pill.b-trial   { background: rgba(59, 130, 246, 0.16); color: #93C5FD; }
+.ml-bill-pill.b-expired { background: rgba(239, 68, 68, 0.16);  color: #FCA5A5; }
+.ml-bill-pill.b-admin   { background: rgba(148, 163, 184, 0.16); color: #CBD5E1; }
+.ml-bill-pill.b-pending { background: rgba(245, 158, 11, 0.16); color: #FCD34D; }
+
+/* A row that needs acting on today. */
+.ml-admin-table tr.ml-row-urgent td { background: rgba(245, 158, 11, 0.07); }
+.ml-urgent { color: #FCD34D; font-weight: 700; }
+
+/* Who is teaching right now. */
+.ml-live-room { border-color: rgba(59, 130, 246, 0.30); }
+.ml-live-dot {
+  width: 9px; height: 9px; border-radius: 50%; flex: none;
+  background: #34D399; box-shadow: 0 0 0 3px rgba(52, 211, 153, 0.18);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .ml-live-dot { animation: ml-live-pulse 2.4s ease-in-out infinite; }
+  @keyframes ml-live-pulse {
+    0%, 100% { box-shadow: 0 0 0 3px rgba(52, 211, 153, 0.18); }
+    50%      { box-shadow: 0 0 0 6px rgba(52, 211, 153, 0.06); }
+  }
+}
+.ml-live-with { font-weight: 500; color: #94A3B8; }
 
 @media (max-width: 640px) {
   .ml-bill-banner { flex-direction: column; align-items: stretch; }

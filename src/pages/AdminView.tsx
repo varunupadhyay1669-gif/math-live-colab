@@ -2,7 +2,9 @@ import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { useAuth } from '../lib/auth';
 import {
   checkAdminAccess, fetchTutorUsage, fetchStudentUsage, activityStatus, agoLabel,
-  AdminNotInstalled, type TutorUsage, type StudentUsage, type AdminAccess,
+  AdminNotInstalled, getOverview, getRenewals, getLiveRooms, untilLabel,
+  type TutorUsage, type StudentUsage, type AdminAccess,
+  type Overview, type Renewal, type LiveRoom,
 } from '../lib/admin';
 import { humanTeachingTime } from '../lib/teachingTime';
 import { listClaims, confirmClaim, rejectClaim, type ClaimRow } from '../lib/billing';
@@ -17,12 +19,12 @@ import { listClaims, confirmClaim, rejectClaim, type ClaimRow } from '../lib/bil
 // control is in Postgres (migration 004): the RPCs behind this refuse anyone
 // not listed in platform_admins, so calling them by hand gets you nothing.
 
-type Tab = 'tutors' | 'students' | 'payments';
+type Tab = 'money' | 'tutors' | 'students' | 'payments' | 'live';
 
 export default function AdminView() {
   const auth = useAuth();
   const [access, setAccess] = useState<AdminAccess | null>(null);
-  const [tab, setTab] = useState<Tab>('tutors');
+  const [tab, setTab] = useState<Tab>('money');
   const [tutors, setTutors] = useState<TutorUsage[]>([]);
   const [students, setStudents] = useState<StudentUsage[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -31,6 +33,9 @@ export default function AdminView() {
   const [sent, setSent] = useState(false);
   const [claims, setClaims] = useState<ClaimRow[]>([]);
   const [claimBusy, setClaimBusy] = useState<string | null>(null);
+  const [overview, setOverview] = useState<Overview | null>(null);
+  const [renewals, setRenewals] = useState<Renewal[]>([]);
+  const [live, setLive] = useState<LiveRoom[]>([]);
 
   useEffect(() => {
     if (auth.loading) return;
@@ -61,6 +66,28 @@ export default function AdminView() {
     catch { /* the rest of admin still works without this */ }
   }, []);
   useEffect(() => { if (access === 'admin') void loadClaims(); }, [access, loadClaims]);
+
+  const loadBusiness = useCallback(async () => {
+    // Settled, not all: the revenue figures are the point of this screen and
+    // must survive a renewals or live-rooms failure.
+    const [o, r] = await Promise.allSettled([getOverview(), getRenewals()]);
+    if (o.status === 'fulfilled') setOverview(o.value);
+    if (r.status === 'fulfilled') setRenewals(r.value.renewals);
+  }, []);
+  useEffect(() => { if (access === 'admin') void loadBusiness(); }, [access, loadBusiness]);
+
+  // Who is teaching right now, refreshed while the tab is open. Cheap: it is
+  // read from the server's memory, never the database.
+  const loadLive = useCallback(async () => {
+    try { setLive((await getLiveRooms()).rooms); } catch { /* panel stays as it was */ }
+  }, []);
+  useEffect(() => {
+    if (access !== 'admin') return;
+    void loadLive();
+    if (tab !== 'live') return;
+    const t = setInterval(() => { void loadLive(); }, 10_000);
+    return () => clearInterval(t);
+  }, [access, tab, loadLive]);
 
   const decide = async (id: string, yes: boolean) => {
     setClaimBusy(id);
@@ -164,22 +191,41 @@ export default function AdminView() {
 
   return (
     <Shell wide>
+      {/* The business first. Usage is interesting; revenue is what decides
+          whether there is a company, so it reads before anything else. */}
       <div className="ml-admin-stats">
+        <Stat label="Monthly revenue" value={overview ? `₹${overview.mrr.toLocaleString('en-IN')}` : '—'} tone="money" />
+        <Stat label="Paying" value={overview ? String(overview.paying) : '—'} tone="money" />
+        <Stat label="On trial" value={overview ? String(overview.trialing) : '—'} />
+        <Stat label="Expiring ≤7d" value={overview ? String(overview.expiring_7d + overview.trials_ending_3d) : '—'}
+              tone={overview && (overview.expiring_7d + overview.trials_ending_3d) > 0 ? 'warn' : undefined} />
+        <Stat label="Awaiting confirm" value={overview ? String(overview.claims_pending) : '—'}
+              tone={overview && overview.claims_pending > 0 ? 'warn' : undefined} />
+        <Stat label="Lapsed" value={overview ? String(overview.expired) : '—'} />
+        <Stat label="Teaching now" value={String(live.length)} tone={live.length > 0 ? 'live' : undefined} />
+      </div>
+      <div className="ml-admin-stats ml-admin-stats-sub">
+        <Stat label="Collected, all time" value={overview ? `₹${overview.collected_total.toLocaleString('en-IN')}` : '—'} />
+        <Stat label="This month" value={overview ? `₹${overview.collected_month.toLocaleString('en-IN')}` : '—'} />
         <Stat label="Tutors" value={String(tutors.length)} />
-        <Stat label="Active this week" value={String(activeThisWeek)} />
         <Stat label="Students" value={String(students.length)} />
-        <Stat label="Lessons" value={String(totalLessons)} />
+        <Stat label="Lessons today" value={overview ? String(overview.lessons_today) : '—'} />
+        <Stat label="Lessons, 7d" value={overview ? String(overview.lessons_7d) : '—'} />
         <Stat label="Taught" value={totalTaught > 0 ? humanTeachingTime(totalTaught) : '—'} />
       </div>
 
       <div className="ml-admin-tabs">
+        <button className={tab === 'money' ? 'is-on' : ''} onClick={() => setTab('money')}>Renewals</button>
         <button className={tab === 'tutors' ? 'is-on' : ''} onClick={() => setTab('tutors')}>Tutors</button>
         <button className={tab === 'students' ? 'is-on' : ''} onClick={() => setTab('students')}>Students</button>
         <button className={tab === 'payments' ? 'is-on' : ''} onClick={() => setTab('payments')}>
           Payments{openClaims > 0 ? ` (${openClaims})` : ''}
         </button>
+        <button className={tab === 'live' ? 'is-on' : ''} onClick={() => setTab('live')}>
+          Live{live.length > 0 ? ` (${live.length})` : ''}
+        </button>
         <div style={{ flex: 1 }} />
-        <button className="ml-admin-btn" onClick={() => void load()} disabled={busy}>
+        <button className="ml-admin-btn" onClick={() => { void load(); void loadBusiness(); void loadClaims(); void loadLive(); }} disabled={busy}>
           {busy ? 'Loading…' : 'Refresh'}
         </button>
         <button className="ml-admin-btn" onClick={() => void auth.signOut()}>Sign out</button>
@@ -192,7 +238,7 @@ export default function AdminView() {
           <table className="ml-admin-table">
             <thead>
               <tr>
-                <th>Tutor</th><th>Status</th><th>Students</th><th>Lessons</th>
+                <th>Tutor</th><th>Billing</th><th>Renews</th><th>Status</th><th>Students</th><th>Lessons</th>
                 <th>Last 30d</th><th>Last 7d</th><th>Taught</th><th>Last lesson</th><th>Joined</th>
               </tr>
             </thead>
@@ -202,6 +248,12 @@ export default function AdminView() {
                 return (
                   <tr key={t.user_id}>
                     <td className="ml-admin-strong">{t.email}</td>
+                    <td><span className={`ml-bill-pill b-${t.billing.state}`}>
+                      {t.billing.state === 'active' ? 'paid'
+                        : t.billing.state === 'admin' ? 'admin'
+                        : t.billing.state === 'trial' ? `trial · ${t.billing.daysLeft}d` : 'lapsed'}
+                    </span></td>
+                    <td className="ml-admin-mono">{t.billing.state === 'admin' ? '—' : untilLabel(t.billing.until).text}</td>
                     <td><span className={`ml-admin-pill s-${status.replace(/\s+/g, '-')}`}>{status}</span></td>
                     <td>{t.students}</td>
                     <td>{t.lessons}</td>
@@ -214,7 +266,7 @@ export default function AdminView() {
                 );
               })}
               {tutors.length === 0 && !busy && (
-                <tr><td colSpan={9} className="ml-admin-muted">No tutors yet.</td></tr>
+                <tr><td colSpan={11} className="ml-admin-muted">No tutors yet.</td></tr>
               )}
             </tbody>
           </table>
@@ -244,6 +296,77 @@ export default function AdminView() {
           </table>
         </div>
       ) : null}
+
+      {tab === 'money' && (
+        <div className="ml-admin-table-wrap">
+          <table className="ml-admin-table">
+            <thead>
+              <tr>
+                <th>Tutor</th><th>On</th><th>Ends</th><th>When</th>
+                <th>Students</th><th>Last lesson</th><th>Payments</th><th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {renewals.map(r => {
+                const u = untilLabel(r.ends_at);
+                const lapsed = u.days !== null && u.days < 0;
+                return (
+                  <tr key={r.id} className={u.urgent ? 'ml-row-urgent' : ''}>
+                    <td className="ml-admin-strong">{r.email}</td>
+                    <td><span className={`ml-bill-pill b-${lapsed ? 'expired' : r.kind === 'paid' ? 'active' : 'trial'}`}>
+                      {lapsed ? 'lapsed' : r.kind === 'paid' ? 'paid' : 'trial'}
+                    </span></td>
+                    <td className="ml-admin-mono">
+                      {r.ends_at ? new Date(r.ends_at).toLocaleDateString(undefined, { day: 'numeric', month: 'short' }) : '—'}
+                    </td>
+                    <td className={`ml-admin-mono${u.urgent ? ' ml-urgent' : ''}`}>{u.text}</td>
+                    <td>{r.students}</td>
+                    <td>{agoLabel(r.last_lesson)}</td>
+                    <td>{r.payments || '—'}</td>
+                    <td>{r.claim_pending && <span className="ml-bill-pill b-pending">confirm</span>}</td>
+                  </tr>
+                );
+              })}
+              {renewals.length === 0 && (
+                <tr><td colSpan={8} className="ml-admin-muted">No tutors yet.</td></tr>
+              )}
+            </tbody>
+          </table>
+          <p className="ml-admin-note">
+            Sorted by the date each tutor runs out — the order to work through them in.
+            “Lapsed” means they cannot take the teacher seat until they pay; their students and
+            classes are untouched.
+          </p>
+        </div>
+      )}
+
+      {tab === 'live' && (
+        <div className="ml-claims">
+          {live.length === 0 && (
+            <p className="ml-admin-muted">Nobody is teaching right now.</p>
+          )}
+          {live.map(r => (
+            <div key={r.roomId} className="ml-claim ml-live-room">
+              <span className="ml-live-dot" aria-hidden="true" />
+              <div className="ml-claim-main">
+                <span className="ml-claim-who">
+                  {r.teacher || 'No teacher in the seat'}
+                  {r.students.length > 0 && <span className="ml-live-with"> with {r.students.join(', ')}</span>}
+                </span>
+                <span className="ml-claim-meta">
+                  /live/{r.roomId} · open {humanTeachingTime(Math.round((Date.now() - r.startedAt) / 1000))}
+                  {r.paused && ' · paused'}
+                </span>
+              </div>
+              <span className="ml-claim-done">{r.students.length} student{r.students.length === 1 ? '' : 's'}</span>
+            </div>
+          ))}
+          <p className="ml-admin-note">
+            Read from the server’s memory, not the database, and refreshed every 10 seconds while
+            this tab is open. Names only — no board, lesson or chat content leaves the server.
+          </p>
+        </div>
+      )}
 
       {tab === 'payments' && (
         <div className="ml-claims">
@@ -307,9 +430,17 @@ export default function AdminView() {
   );
 }
 
-function Stat({ label, value }: { label: string; value: string }) {
+/**
+ * One number on the strip.
+ *
+ * `tone` encodes meaning, not decoration: money is the figure the business is
+ * steered by, warn is a number that means someone must act today, and live is
+ * something happening right now. A number that needs attention should read as
+ * needing attention without being counted first.
+ */
+function Stat({ label, value, tone }: { label: string; value: string; tone?: 'money' | 'warn' | 'live' }) {
   return (
-    <div className="ml-admin-stat">
+    <div className={`ml-admin-stat${tone ? ` t-${tone}` : ''}`}>
       <div className="ml-admin-stat-value">{value}</div>
       <div className="ml-admin-stat-label">{label}</div>
     </div>

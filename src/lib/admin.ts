@@ -24,6 +24,56 @@ export interface TutorUsage {
   lessons_7d: number;
   last_lesson: string | null;
   taught_seconds: number | null;
+  /** Decided by the server, never recomputed here — one answer, one place. */
+  billing: {
+    state: 'trial' | 'active' | 'expired' | 'admin';
+    until: string | null;
+    daysLeft: number | null;
+  };
+}
+
+/** The business, in numbers. */
+export interface Overview {
+  paying: number;
+  trialing: number;
+  expired: number;
+  expiring_7d: number;
+  trials_ending_3d: number;
+  claims_pending: number;
+  collected_total: number;
+  collected_month: number;
+  students: number;
+  lessons_today: number;
+  lessons_7d: number;
+  teachers_active_7d: number;
+  mrr: number;
+  priceRupees: number;
+  trialDays: number;
+  liveRooms: number;
+}
+
+/** One teacher on the collections calendar. */
+export interface Renewal {
+  id: string;
+  email: string;
+  kind: 'paid' | 'trial';
+  ends_at: string | null;
+  paid_until: string | null;
+  trial_started_at: string | null;
+  students: number;
+  last_lesson: string | null;
+  payments: number;
+  claim_pending: boolean;
+}
+
+/** A room with people in it, right now. */
+export interface LiveRoom {
+  roomId: string;
+  teacher: string | null;
+  students: string[];
+  startedAt: number;
+  lastActivityAt: number;
+  paused: boolean;
 }
 
 export interface StudentUsage {
@@ -97,3 +147,24 @@ export async function fetchStudentUsage(): Promise<StudentUsage[]> {
 // nothing — so a test of "is this tutor dormant" does not have to construct an
 // API client to find out.
 export { activityStatus, agoLabel, classifyAdminError, type ActivityStatus } from './adminLabels';
+
+
+// ── The owner's cockpit ────────────────────────────────────────────────────
+// Three separate calls on purpose: a failure in one panel must not blank the
+// others. The revenue figures matter more than the live view, and should not
+// disappear because a room lookup threw.
+export const getOverview = () => api.get<Overview>('/api/admin/overview');
+export const getRenewals = () => api.get<{ renewals: Renewal[]; trialDays: number }>('/api/admin/renewals');
+export const getLiveRooms = () => api.get<{ rooms: LiveRoom[]; at: number }>('/api/admin/live');
+
+/** "in 3 days", "today", "6 days ago" — for a date that may be in either direction. */
+export function untilLabel(iso: string | null): { text: string; days: number | null; urgent: boolean } {
+  if (!iso) return { text: '—', days: null, urgent: false };
+  const ms = new Date(iso).getTime() - Date.now();
+  if (!Number.isFinite(ms)) return { text: '—', days: null, urgent: false };
+  const days = Math.ceil(ms / 86_400_000);
+  if (days < 0) return { text: `${Math.abs(days)}d ago`, days, urgent: true };
+  if (days === 0) return { text: 'today', days, urgent: true };
+  if (days === 1) return { text: 'tomorrow', days, urgent: true };
+  return { text: `in ${days}d`, days, urgent: days <= 7 };
+}
