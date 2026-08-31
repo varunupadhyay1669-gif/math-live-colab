@@ -258,3 +258,33 @@ cd /opt/mathslive && sudo -u mathslive git pull \
 and change nothing, or move to Oracle Always Free or Hetzner. Every file in
 this directory works unchanged on any Ubuntu box — the move is this runbook
 again, plus the newest dump from step 8.
+
+## Watchdog and backups
+
+Not installed by `bootstrap.sh`, because they can be added to a box that is
+already serving lessons without touching the running service:
+
+```
+sudo bash /opt/mathslive/deploy/install-ops.sh
+```
+
+That installs two systemd timers and takes one backup immediately:
+
+- **`mathslive-watchdog.timer`** — every minute. Three consecutive failed
+  health checks trigger a restart (three, not one: a single missed probe
+  during a deploy is not an outage, and restarting on it would cut a live
+  lesson in half). Also warns on memory above 92%, disk above 88%, and a
+  backup that has not run in 48 hours. Alerts are rate-limited to one an hour
+  per kind — a watchdog that emails every minute during an outage trains the
+  one person who can fix it to ignore its mail.
+- **`mathslive-backup.timer`** — 21:00 UTC (02:30 IST), after the last lesson
+  and before the first. `pg_dump -Fc`, verified by reading the dump back and
+  checking the tables that would actually be missed are present, 14 days kept.
+
+Two honest gaps:
+
+1. The dumps live on the same disk as the database. That covers a bad
+   migration or a mistaken delete; it does not cover losing the instance. Set
+   `BACKUP_REMOTE` to an rclone target when a destination exists.
+2. A watchdog on the box cannot report that the box is gone. The 8am digest
+   email covers that: if it stops arriving, the box is down.
