@@ -404,6 +404,46 @@ assert(_warningFor('grace', 2) === 'grace', 'a teacher on grace is told they are
 assert(_warningFor('expired', 0) === null,
   'an already-expired teacher is not emailed daily forever');
 
+section('OFFLINE — the demo has a clock, real lessons do not');
+
+// B4. Two ways to get this wrong and only one is visible: a demo that never
+// ends is a paywall anyone can walk around, and a clock started on a real
+// teacher's lesson cuts off a class with a child in it. The second is the one
+// nobody reports — they just never come back.
+{
+  const DEMO_MS = 30 * 60_000;
+  // Mirrors the server rule: a clock is set only when NOT signed in AND the
+  // room is not a registered class; a signed-in teacher always clears it.
+  const clockFor = ({ signedIn, registered, existing = null, now = 0 }) => {
+    if (signedIn) return null;
+    if (existing) return existing;
+    return registered ? null : now + DEMO_MS;
+  };
+
+  assert(clockFor({ signedIn: false, registered: false }) !== null,
+    'an anonymous ad-hoc room starts a demo clock');
+  assert(clockFor({ signedIn: true, registered: false }) === null,
+    'a signed-in teacher in an ad-hoc room is not on a clock');
+  assert(clockFor({ signedIn: false, registered: true }) === null,
+    'a registered class is never a demo, even if nobody is signed in');
+  assert(clockFor({ signedIn: true, registered: false, existing: 12345 }) === null,
+    'a real teacher taking the seat clears a clock already running');
+  assert(clockFor({ signedIn: false, registered: false, existing: 999 }) === 999,
+    'the clock is set once and not extended by re-joining');
+
+  // A database hiccup must fail OPEN — treating an unreadable class table as
+  // "not registered" would start a countdown on a paying teacher's lesson.
+  const clockOnDbError = clockFor({ signedIn: false, registered: true });
+  assert(clockOnDbError === null,
+    'when the class lookup fails we assume registered, never demo');
+
+  const expired = (until, now) => until !== null && now > until;
+  assert(expired(DEMO_MS, DEMO_MS + 1), 'a demo past its clock is over');
+  assert(!expired(DEMO_MS, DEMO_MS - 1), 'a demo inside its clock keeps teaching');
+  assert(!expired(null, Number.MAX_SAFE_INTEGER),
+    'a lesson with no clock never expires, however long it runs');
+}
+
 section('OFFLINE — what the plans cost');
 
 // Pricing is the one place where a quiet arithmetic slip is charged to a real

@@ -30,6 +30,13 @@ interface RoomData {
   users: Map<string, { name: string; role: 'teacher' | 'student'; joinedAt: number; whiteboardSync: boolean; tz?: string }>;
   isPaused: boolean;
   teacherSocketId: string | null;
+  /**
+   * B4 — when an anonymous demo room stops teaching, or null if this is not
+   * a demo. Set the first time someone takes the teacher seat with no signed-in
+   * account in a room that is not a registered class; cleared the moment a real
+   * teacher takes the seat, because then it is somebody's lesson.
+   */
+  demoUntil?: number | null;
   createdAt: number;
   lastActivityAt: number;
   studentLeftAt: number | null; // When the last student disconnected (for 2hr expiry)
@@ -341,6 +348,8 @@ async function startServer() {
     return idleWindowFor(pressureFrom(process.memoryUsage().heapUsed, MEMORY_POLICY), MEMORY_POLICY);
   }
   const SWEEP_INTERVAL_MS = Number(process.env.SWEEP_INTERVAL_MS) || 10 * 60 * 1000;
+  /** B4 — how long an anonymous "Start teaching" room may run. */
+  const DEMO_MINUTES = Number(process.env.DEMO_MINUTES) || 30;
   // Sweep every 10 minutes:
   //  - Rooms past their claim-aware TTL (24h anonymous OR 30d claimed)
   //  - Rooms where last student left > 2 hours ago AND no students currently connected
@@ -354,6 +363,26 @@ async function startServer() {
     const idleWindow = currentIdleWindow();
 
     for (const [roomId, room] of rooms.entries()) {
+      // B4: a demo that is still running past its clock. Ends the lesson
+      // rather than only refusing the next join — otherwise one anonymous room
+      // opened this morning teaches all day.
+      //
+      // Reuses join_error because both clients already show it: a person is
+      // told why, in a sentence, instead of watching the board stop responding.
+      if (room.demoUntil && now > room.demoUntil && room.users.size > 0) {
+        io.to(roomId).emit('join_error', {
+          code: 'demo_over',
+          retryable: false,
+          message: 'This free demo has ended. Sign up to keep teaching — the first 7 days are free.',
+        });
+        for (const socketId of room.users.keys()) {
+          io.sockets.sockets.get(socketId)?.disconnect(true);
+        }
+        room.users.clear();
+        room.teacherSocketId = null;
+        console.log(`⏳ Demo room ${roomId} reached its ${DEMO_MINUTES}-minute limit`);
+      }
+
       // AUTONOMOUS: Claim-aware expiry. Anonymous rooms die at
       // createdAt+24h; claimed rooms get 30 days. Mirrors Miro.
       const expiresAt = computeExpiresAt(room);
@@ -1836,6 +1865,48 @@ async function startServer() {
             console.error(`Subscription check failed for ${who.email} (failing open):`, (err as Error).message);
           }
         }
+      }
+
+      // ── B4: the anonymous demo has a clock ──
+      //
+      // "Start teaching" needs no account, which is right — a tutor deciding
+      // whether this is for them should not have to sign up to find out. Left
+      // unbounded it is also a way to use the product forever without ever
+      // meeting the paywall.
+      //
+      // So it stays, with a limit: an ad-hoc room driven by nobody in
+      // particular teaches for DEMO_MINUTES and then stops. That converts
+      // better as a demo than it costs as a leak.
+      //
+      // The instant a signed-in teacher in good standing takes the seat, the
+      // clock is cleared — at that point it is somebody's lesson, not a demo.
+      if (role === 'teacher') {
+        const signedIn = sessionSecret
+          ? userFromCookieHeader(socket.handshake.headers.cookie, sessionSecret)
+          : null;
+        if (signedIn) {
+          room.demoUntil = null;
+        } else if (!room.demoUntil) {
+          let registered = false;
+          if (appPool && ownershipEnabled()) {
+            try {
+              const cls = await appPool.query('SELECT 1 FROM classes WHERE room_code = $1', [roomId]);
+              registered = (cls.rowCount ?? 0) > 0;
+            } catch {
+              // Fail OPEN: a database hiccup must not start a countdown on a
+              // real teacher's lesson.
+              registered = true;
+            }
+          }
+          if (!registered) room.demoUntil = Date.now() + DEMO_MINUTES * 60_000;
+        }
+      }
+      if (room.demoUntil && Date.now() > room.demoUntil) {
+        socket.emit('join_error', {
+          code: 'demo_over', retryable: false,
+          message: `This free demo room has ended. Sign up — it takes a minute, and the first ${'7'} days are free.`,
+        });
+        return;
       }
 
       // ── Teacher-takeover gate ──
