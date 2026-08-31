@@ -26,6 +26,7 @@ import { newStrokesSince, strokeBounds, boardRectToScreen, padRect, cropCanvas }
 import { outlineExplainer, explainerTitle } from "../lib/explainerOutline";
 import { closestQuestionBlock, optionIndexOf, readCorrectness, summariseInteractives, withUnattempted, type RecordedAttempt } from "../lib/interactives";
 import type { PackEvent, PackSurface, PackExplainerOutline, PackInteractive } from "../lib/packSchema";
+import SessionPrompt from '../components/SessionPrompt';
 import { Narrator, narrationSupported, getNarrationChoice, setNarrationChoice } from "../lib/narration";
 import { localTimezone } from "../lib/tz";
 import { socketAuth, isPasscodeError, refusePasscode } from "../lib/passcode";
@@ -405,6 +406,11 @@ export default function Room() {
   const homeworkKindRef = useRef<HomeworkItem['kind']>('submission');
   const [intentBefore, setIntentBefore] = useState('');
   const [noteAfter, setNoteAfter] = useState('');
+  // 1.1: ask for the two things only the tutor knows, at the moment each is
+  // cheapest to answer. 'before' appears once the room settles; 'after' stands
+  // between the export button and the export.
+  const [prompt, setPrompt] = useState<'before' | 'after' | null>(null);
+  const [askedBefore, setAskedBefore] = useState(false);
   // Narration: transcribe what's said, on both sides, into the pack's timeline.
   // OFF until switched on — it is a recording of a child's voice being turned
   // into text, so it is never silent or implicit.
@@ -2920,7 +2926,7 @@ export default function Room() {
   }, []);
 
   /** Force a picture of whatever surface is in front, right now. */
-  const captureSurfaceNow = useCallback(async (reason: 'session_end' | 'interactive_answered' | 'surface_changed' = 'session_end') => {
+  const captureSurfaceNow = useCallback(async (reason: 'session_end' | 'interactive_answered' | 'surface_changed' | 'session_start' = 'session_end') => {
     if (whiteboardMode) { captureBoardNow('Whiteboard (final)'); return; }
     const shot = await captureLesson(iframeRef.current, annotationCanvasRef.current);
     const label = showTempContent ? (tempContent?.name ? `Explainer — ${tempContent.name}` : 'Explainer') : 'Lesson';
@@ -2928,6 +2934,31 @@ export default function Room() {
       setPackCounts(packRef.current.counts);
     }
   }, [whiteboardMode, showTempContent, tempContent, captureBoardNow]);
+
+  // 1.2: arm capture at t=0.
+  //
+  // The board was only ever photographed once someone wrote on it, so a lesson
+  // that opened on a pasted exercise and worked through it for fourteen minutes
+  // produced its first frame at t=842s — an entire exercise with no visual
+  // record at all, and no way for a reader to know it had been missed.
+  //
+  // Retried a few times because at mount the surface is often not painted yet;
+  // a baseline frame of a blank canvas would be worse than none, since it looks
+  // like evidence that the board was empty.
+  useEffect(() => {
+    let cancelled = false;
+    let tries = 0;
+    const attempt = async () => {
+      if (cancelled || tries >= 6) return;
+      tries++;
+      const before = packRef.current.counts.snapshots;
+      await captureSurfaceNow('session_start');
+      if (cancelled) return;
+      if (packRef.current.counts.snapshots === before) setTimeout(attempt, 1500);
+    };
+    const first = setTimeout(attempt, 1200);
+    return () => { cancelled = true; clearTimeout(first); };
+  }, [captureSurfaceNow]);
 
   const startNarration = useCallback((announce: boolean) => {
     if (!narrationSupported() || narratorRef.current) return false;
@@ -3015,7 +3046,12 @@ export default function Room() {
       });
     }
     packEventsRef.current.push({ t, type: 'surface_changed', surface_id: id });
-  }, [whiteboardMode, showTempContent, activeExplanationId, tempContent]);
+    // 1.2: a baseline frame of the surface we just moved to. Without this the
+    // first record of a surface is whenever someone happened to write on it —
+    // which is how a fixture ended up with fourteen minutes of board work and
+    // no picture of any of it.
+    void captureSurfaceNow('surface_changed');
+  }, [whiteboardMode, showTempContent, activeExplanationId, tempContent, captureSurfaceNow]);
 
   // ── P0-2: read the explainer for what it teaches ──
   // Done while the page is on screen, because the DOM is the only place the
@@ -3094,6 +3130,17 @@ export default function Room() {
   // refresh at minute 40 is unrecoverable, because the lesson is over. Restore
   // anything already captured for this room today, then keep saving.
   const [packRestored, setPackRestored] = useState(false);
+
+  useEffect(() => {
+    if (askedBefore || !packRestored) return;
+    const t = setTimeout(() => {
+      // Only if it is still unanswered — a restored pack already has it.
+      setPrompt(cur => (cur === null && !intentBefore.trim() ? 'before' : cur));
+      setAskedBefore(true);
+    }, 4000);
+    return () => clearTimeout(t);
+  }, [askedBefore, packRestored, intentBefore]);
+
   useEffect(() => {
     if (!roomId || packRestored) return;
     let cancelled = false;
@@ -3290,6 +3337,22 @@ export default function Room() {
     } catch (e) {
       showNotif(`⚠️ Could not attach that file (${e instanceof Error ? e.message : 'unknown'})`);
     }
+  };
+
+  /**
+   * 1.1: ask for the closing note before exporting, once.
+   *
+   * The note is worth most in the ten seconds after a lesson ends and nothing
+   * afterwards, so the export button is the only place it will ever reliably
+   * be asked for. Skipping is one click and the export proceeds regardless —
+   * a prompt that can block a tutor from getting their file would be traded
+   * for the tutor never pressing the button again.
+   */
+  const [noteAsked, setNoteAsked] = useState(false);
+  const requestClassPack = () => {
+    if (packBusy) return;
+    if (!noteAsked && !noteAfter.trim()) { setNoteAsked(true); setPrompt('after'); return; }
+    void downloadClassPack();
   };
 
   const downloadClassPack = async () => {
@@ -3499,6 +3562,21 @@ export default function Room() {
       onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
       onDragLeave={(e) => { if (e.currentTarget === e.target) setIsDragging(false); }}
       onDrop={handleDrop}>
+      {prompt && (
+        <SessionPrompt
+          kind={prompt}
+          value={prompt === 'before' ? intentBefore : noteAfter}
+          onChange={prompt === 'before' ? setIntentBefore : setNoteAfter}
+          autoSkipS={prompt === 'before' ? 20 : 0}
+          onDone={() => {
+            const wasAfter = prompt === 'after';
+            setPrompt(null);
+            // Skipping the closing note must still export. The file is the
+            // point; the note is a bonus we asked for once.
+            if (wasAfter) void downloadClassPack();
+          }}
+        />
+      )}
 
       {/* ═══ DROP OVERLAY ═══
           pointerEvents:'none' is load-bearing, not cosmetic. Being fixed+inset-0
@@ -4087,7 +4165,7 @@ export default function Room() {
               videoActive={videoActive}
               onShowVideo={() => setVideoPromptOpen(true)}
               onStopVideo={() => socket?.emit('video_close', { roomId })}
-              onDownloadPack={downloadClassPack}
+              onDownloadPack={requestClassPack}
               onOpenNotes={() => setShowHomework(true)}
               notesCount={homeworkItems.length}
               narrationOn={narrationOn}

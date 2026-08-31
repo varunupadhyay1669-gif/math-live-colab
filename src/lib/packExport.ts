@@ -3,7 +3,9 @@ import {
   type ClassPackJson, type PackEvent, type PackSnapshot, type PackSurface,
   type PackTranscriptLine, type PackMaterial, type PackExplainerOutline,
   type PackInteractive, type PackCaptureReport, type PackParticipant,
+  type PackDerived,
 } from './packSchema';
+import { classifySilences, flagsFor, summariseAsrConfidence } from './packDerive';
 import { buildZip, dataUrlToBytes, type ZipEntry } from './zip';
 import { mergeTranscript, type NarrationLine } from './narration';
 
@@ -65,6 +67,12 @@ export interface PackInputs {
   narration: NarrationLine[];
   /** Confidence keyed by "speaker|t|text" so it survives the merge. */
   confidenceOf?: (line: NarrationLine) => { confidence: number | null; alternates: string[] };
+  /** 1.2 — the model's reading of the lesson, when one ran. */
+  derived?: PackDerived | null;
+  /** 1.2 — the human-readable summary written alongside `derived`. */
+  summaryMd?: string | null;
+  /** 1.2 — what was set for next time. */
+  homeworkAssigned?: { text: string | null; material_id?: string | null; item_range?: string | null } | null;
   events: PackEvent[];
   surfaces: PackSurface[];
   snapshots: RawSnapshot[];
@@ -125,6 +133,9 @@ export function buildTranscript(inputs: PackInputs): PackTranscriptLine[] {
       confidence: conf.confidence,
       low_confidence: conf.confidence !== null && conf.confidence < LOW_CONFIDENCE_THRESHOLD,
       alternates: conf.alternates || [],
+      // 1.2: why this line is suspect when the engine offers no number. The
+      // text itself is left exactly as recognised — flagging is not editing.
+      flags: flagsFor(line.text),
       surface_id: surfaceAt(inputs.events, t, inputs.surfaces[0]?.id ?? null),
     };
   });
@@ -226,16 +237,29 @@ export function buildPackJson(inputs: PackInputs): ClassPackJson {
     });
   });
 
+  // Counted from reality: real confidence numbers where the engine gave them,
+  // heuristic flags where it did not. The old zero meant "nothing was ever
+  // measured", which read as "nothing was wrong".
+  const asrConfidence = summariseAsrConfidence(transcript);
   const capture_report: PackCaptureReport = {
     board_snapshots_kept: snapshots.length,
     duplicates_suppressed: inputs.duplicatesSuppressed,
     snapshots_with_new_ink: snapshots.filter(s => s.has_new_ink).length,
     screens_recorded: materials.filter(m => m.image).length,
-    asr_lines_low_confidence: transcript.filter(l => l.low_confidence).length,
+    asr_lines_low_confidence: asrConfidence.lowConfidenceCount,
+    asr_confidence_available: asrConfidence.available,
     failures: [...inputs.failures],
   };
   // State the known gaps rather than leaving a reader to wonder whether a zero
   // meant "nothing happened" or "this never ran".
+  if (!asrConfidence.available && transcript.length > 0
+      && !capture_report.failures.some(f => f.what === 'asr_confidence')) {
+    capture_report.failures.push({
+      what: 'asr_confidence',
+      why: 'the speech recogniser returned no per-line confidence; suspect lines '
+         + 'are marked with heuristic flags instead, and the count reflects those',
+    });
+  }
   if (!capture_report.failures.some(f => f.what === 'ocr')) {
     capture_report.failures.push({
       what: 'ocr',
@@ -269,10 +293,13 @@ export function buildPackJson(inputs: PackInputs): ClassPackJson {
       tutor_note_after: inputs.noteAfter,
     },
     transcript,
-    events: [
-      ...inputs.events,
-      ...silenceSpans(transcript, 30, durationS),
-    ].sort((a, b) => a.t - b.t),
+    // 1.2: each silence is asked whether the board was moving during it, so a
+    // seven-minute gap reads as "she was working" or "we have no record",
+    // rather than leaving a consumer to guess between them.
+    events: classifySilences(
+      [...inputs.events, ...silenceSpans(transcript, 30, durationS)].sort((a, b) => a.t - b.t),
+      snapshots,
+    ),
     surfaces: inputs.surfaces,
     snapshots,
     materials,
@@ -285,8 +312,10 @@ export function buildPackJson(inputs: PackInputs): ClassPackJson {
         .map((h, i) => ({ h, i }))
         .filter(x => x.h.kind === 'submission')
         .map(x => x.h.dataUrl ? `materials/hw_${x.i + 1}.jpg` : `materials/hw_${x.i + 1}${extensionFor(x.h.mime)}`),
+      assigned: inputs.homeworkAssigned ?? null,
     },
     capture_report,
+    ...(inputs.derived ? { derived: inputs.derived } : {}),
   };
 }
 
@@ -299,6 +328,9 @@ export function buildPackArchive(pdf: Uint8Array, json: ClassPackJson, inputs: P
   const entries: ZipEntry[] = [];
   const text = (s: string) => new TextEncoder().encode(s);
 
+  // summary.md sits at the root, before the PDF, because it is the entry point
+  // for the readers this pack is mostly for.
+  if (inputs.summaryMd) entries.push({ name: 'summary.md', data: text(inputs.summaryMd) });
   entries.push({ name: `${baseName}.pdf`, data: pdf });
   entries.push({ name: `${baseName}.json`, data: text(JSON.stringify(json, null, 2)) });
 
@@ -330,7 +362,7 @@ export function buildPackArchive(pdf: Uint8Array, json: ClassPackJson, inputs: P
     } catch { /* an unreadable attachment should not sink the archive */ }
   });
 
-  entries.push({ name: 'README.txt', data: text(readme(baseName)) });
+  entries.push({ name: 'README.txt', data: text(readme(baseName, json, !!inputs.summaryMd)) });
   return buildZip(entries);
 }
 
@@ -341,24 +373,67 @@ function extensionFor(mime: string): string {
   return '.bin';
 }
 
-function readme(baseName: string): string {
-  return [
-    'MathsLive class pack',
-    '',
-    `${baseName}.pdf   - the lesson, for a person to read.`,
-    `${baseName}.json  - the same lesson for a language model: transcript with`,
-    '                    timings and confidence, every practice question the',
-    '                    student attempted and what she chose, the explainer',
-    '                    content as structure rather than source, and each board',
-    '                    snapshot linked to what was being said at the time.',
-    'snapshots/        - board and lesson frames referenced by the JSON.',
-    '                    *_delta.jpg crops show only what was newly written.',
-    'materials/        - anything shown during the lesson, plus explainer source.',
-    '',
-    'Start with the JSON. Every id in it is stable across re-exports of the',
-    'same session, so two packs can be diffed.',
-    '',
-  ].join('\n');
+/**
+ * The manifest, generated from what the archive actually contains.
+ *
+ * It used to be a fixed string promising materials, explainer content and
+ * "every practice question the student attempted and what she chose" — in a
+ * pack where all three were empty. An agent that trusts the manifest then goes
+ * looking for data that was never there and reports the pack as broken; one
+ * that learns not to trust it stops reading the manifest at all. Either way
+ * the promise cost more than it bought.
+ *
+ * So: a section is listed only if it has contents. Nothing is promised.
+ */
+function readme(baseName: string, pack: ClassPackJson, hasSummary: boolean): string {
+  const lines: string[] = ['MathsLive class pack', ''];
+  const has = (n: number) => n > 0;
+
+  if (hasSummary) {
+    lines.push('summary.md        - a short, plain-language reading of the lesson,');
+    lines.push('                    written by a model from the data in this pack.');
+  }
+  lines.push(`${baseName}.pdf   - the lesson, for a person to read.`);
+  lines.push(`${baseName}.json  - the same lesson as data.`);
+
+  const inJson: string[] = [];
+  inJson.push(`transcript (${pack.transcript.length} lines)`);
+  if (pack.derived) inJson.push('derived: segments, attempts and error patterns, each citing evidence');
+  if (has(pack.snapshots.length)) inJson.push(`snapshots (${pack.snapshots.length}) linked to what was being said`);
+  if (has(pack.materials.length)) inJson.push(`materials (${pack.materials.length})`);
+  if (has(pack.interactives.length)) inJson.push(`interactives (${pack.interactives.length}) with what was attempted`);
+  if (has(pack.explainer_outlines.length)) inJson.push(`explainer outlines (${pack.explainer_outlines.length})`);
+  for (const item of inJson) lines.push(`                    - ${item}`);
+
+  if (has(pack.snapshots.length)) {
+    lines.push('snapshots/        - board and lesson frames referenced by the JSON.');
+    if (pack.snapshots.some(s => s.ink_delta_image)) {
+      lines.push('                    *_delta.jpg crops show only what was newly written.');
+    }
+  }
+  if (has(pack.materials.length)) {
+    lines.push('materials/        - what was shown during the lesson.');
+  }
+
+  lines.push('');
+  lines.push('For AI agents: read summary.md first, then `derived` in the JSON, then');
+  lines.push('follow evidence pointers into transcript/snapshots. The full snapshot set');
+  lines.push('is fallback, not the entry point.');
+  lines.push('');
+
+  // The gaps, in the manifest rather than buried in the JSON. A reader who
+  // knows the student was never recorded reads the transcript differently.
+  const failures = pack.capture_report.failures ?? [];
+  if (failures.length > 0) {
+    lines.push('Known gaps in this pack:');
+    for (const f of failures) lines.push(`  - ${f.what}: ${f.why}`);
+    lines.push('');
+  }
+
+  lines.push('Every id is stable across re-exports of the same session, so two packs');
+  lines.push('can be diffed.');
+  lines.push('');
+  return lines.join('\n');
 }
 
 /** A stable, readable id fragment from a display name. */

@@ -9,7 +9,7 @@
 // absent — and every id is stable across re-exports of the same session so a
 // consumer can diff two exports meaningfully.
 
-export const SCHEMA_VERSION = '1.1';
+export const SCHEMA_VERSION = '1.2';
 
 /**
  * Any 1.x pack is valid. New fields in a minor version are optional additions,
@@ -59,6 +59,12 @@ export interface PackTranscriptLine {
   confidence: number | null;
   low_confidence: boolean;
   alternates: string[];
+  /**
+   * 1.2 — why a line is suspect when the engine gives us no number.
+   * e.g. "number_garble" for digit-density anomalies. Heuristic, and labelled
+   * as such: a flag is a reason to look, never a claim about what was said.
+   */
+  flags?: string[];
   /** Which surface was on screen when this was said (P0-4, forward link). */
   surface_id: string | null;
 }
@@ -75,6 +81,14 @@ export interface PackEvent {
   /** For 'silence', how long it lasted. */
   duration_s?: number;
   text?: string;
+  /**
+   * 1.2 — for 'silence': was the board being worked on while nobody spoke?
+   * Derived by joining snapshot timestamps into the silence window. It says
+   * the board changed, NOT who changed it — authorship arrives in Phase 3.
+   */
+  board_activity?: 'active' | 'inactive';
+  /** 1.2 — snapshot ids falling inside this silence. Evidence for the above. */
+  ink_snapshots_during?: string[];
 }
 
 export interface PackSurface {
@@ -85,7 +99,9 @@ export interface PackSurface {
 
 export type SnapshotReason =
   | 'ink_committed' | 'surface_changed' | 'scrolled'
-  | 'interactive_answered' | 'periodic' | 'session_end';
+  | 'interactive_answered' | 'periodic' | 'session_end'
+  /** 1.2 — the baseline frame taken when capture arms, so t=0 is not a blank. */
+  | 'session_start';
 
 export interface PackSnapshot {
   id: string;
@@ -99,6 +115,8 @@ export interface PackSnapshot {
   scroll_y: number;
   ocr_text: string | null;     // null: no OCR engine ships with the app
   transcript_window: string[]; // ids of lines spoken around this moment (P0-4)
+  /** 1.2 — materials visible in this frame. */
+  material_ids?: string[];
 }
 
 export interface PackMaterial {
@@ -112,6 +130,13 @@ export interface PackMaterial {
   detected_question_numbers: string[];
   /** For html materials: a pointer to the source kept in the archive. */
   source_ref: string | null;
+  /** 1.2 — when it appeared, and where it came from. */
+  t_added?: number;
+  surface_id?: string;
+  bbox?: [number, number, number, number] | null;
+  origin?: 'paste' | 'file' | 'url';
+  /** 1.2 — content hash, so the same picture pasted twice is one material. */
+  sha256?: string;
 }
 
 /** A worked example lifted out of an explainer, rather than its raw HTML. */
@@ -161,12 +186,76 @@ export interface PackInteractive {
   final_state: 'correct_first_try' | 'correct_after_retry' | 'incorrect' | 'unanswered';
 }
 
+// ── 1.2: the derive block ───────────────────────────────────────────────────
+//
+// Everything under `derived` is MACHINE-WRITTEN and says so. It never
+// overwrites raw data — transcript, events and snapshots are untouched — and
+// every claim carries pointers back into them, so a downstream agent can
+// disbelieve any single statement and go check.
+
+export interface DerivedEvidence {
+  transcript_ids: string[];
+  snapshot_ids: string[];
+}
+
+export interface DerivedSegment {
+  id: string;
+  t_start: number;
+  t_end: number;
+  label: string;
+  description: string;
+}
+
+export interface DerivedResponse {
+  t_approx: number;
+  answer: string;
+  verdict: 'correct' | 'incorrect' | 'unclear';
+  evidence: DerivedEvidence;
+}
+
+export interface DerivedAttempt {
+  id: string;
+  segment_id: string;
+  question: { text: string; material_id?: string; first_seen_t: number };
+  responses: DerivedResponse[];
+  resolution: { final_answer?: string; how: 'independent' | 'tutor_led' | 'unresolved' };
+  confidence: 'high' | 'medium' | 'low';
+}
+
+export interface DerivedErrorPattern {
+  id: string;
+  pattern: string;
+  example_attempt_ids: string[];
+  evidence: DerivedEvidence;
+  confidence: 'high' | 'medium' | 'low';
+}
+
+export interface PackDerived {
+  generated_at: string;
+  /** The model that wrote this, so a reader can weigh it. */
+  generator: string;
+  prompt_version: string;
+  segments: DerivedSegment[];
+  attempts: DerivedAttempt[];
+  error_patterns: DerivedErrorPattern[];
+  /** The board that matters: final state per problem. Capped at 10. */
+  key_frames: string[];
+}
+
 export interface PackCaptureReport {
   board_snapshots_kept: number;
   duplicates_suppressed: number;
   snapshots_with_new_ink: number;
   screens_recorded: number;
   asr_lines_low_confidence: number;
+  /**
+   * 1.2 — whether the engine gave us confidence numbers at all.
+   *
+   * When false, asr_lines_low_confidence is counted from heuristic flags
+   * instead, and the reader is told so rather than being handed a zero that
+   * means "we never looked". A lying zero is worse than an honest absence.
+   */
+  asr_confidence_available?: boolean;
   failures: Array<{ what: string; why: string }>;
 }
 
@@ -181,8 +270,16 @@ export interface ClassPackJson {
   materials: PackMaterial[];
   explainer_outlines: PackExplainerOutline[];
   interactives: PackInteractive[];
-  homework: { previous_pack: string | null; submitted: boolean; submissions: string[] };
+  homework: {
+    previous_pack: string | null;
+    submitted: boolean;
+    submissions: string[];
+    /** 1.2 — what was set for next time, in the tutor's own words. */
+    assigned?: { text: string | null; material_id?: string | null; item_range?: string | null } | null;
+  };
   capture_report: PackCaptureReport;
+  /** 1.2 — machine-written reading of the lesson. Absent if no model ran. */
+  derived?: PackDerived;
 }
 
 // ── Validation ──────────────────────────────────────────────────────────────
@@ -312,6 +409,128 @@ export function validatePack(pack: unknown): string[] {
   req(isArr(p.explainer_outlines), 'explainer_outlines must be an array');
   req(isArr(p.events), 'events must be an array');
 
+  // ── 1.2 invariants ────────────────────────────────────────────────────────
+  // These are what make the pack trustworthy rather than merely well-formed.
+
+  for (const [i, e] of list<any>(p.events).entries()) {
+    if (e.board_activity !== undefined) {
+      req(e.board_activity === 'active' || e.board_activity === 'inactive',
+        `events[${i}].board_activity must be "active" or "inactive"`);
+    }
+    if (e.ink_snapshots_during !== undefined) {
+      req(isArr(e.ink_snapshots_during), `events[${i}].ink_snapshots_during must be an array`);
+      for (const id of list<any>(e.ink_snapshots_during)) {
+        req(snapIds.has(id), `events[${i}].ink_snapshots_during references unknown snapshot "${id}"`);
+      }
+      // Saying the board was active while naming no frame is an unevidenced
+      // claim, which is the one thing this pack must not contain.
+      if (e.board_activity === 'active') {
+        req(list<any>(e.ink_snapshots_during).length > 0,
+          `events[${i}] claims board_activity "active" but lists no snapshots`);
+      }
+    }
+  }
+
+  const materialIds = new Set(list<any>(p.materials).map(m => m.id));
+  for (const [i, m] of list<any>(p.materials).entries()) {
+    if (m.origin !== undefined) {
+      req(['paste', 'file', 'url'].includes(m.origin), `materials[${i}].origin invalid`);
+    }
+    if (m.t_added !== undefined) req(isNum(m.t_added), `materials[${i}].t_added must be a number`);
+    if (m.sha256 !== undefined) req(isStr(m.sha256), `materials[${i}].sha256 must be a string`);
+    if (m.surface_id !== undefined && m.surface_id !== null) {
+      req(surfaceIds.has(m.surface_id), `materials[${i}].surface_id "${m.surface_id}" is not a known surface`);
+    }
+  }
+
+  for (const [i, sn] of list<any>(p.snapshots).entries()) {
+    if (sn.material_ids !== undefined) {
+      req(isArr(sn.material_ids), `snapshots[${i}].material_ids must be an array`);
+      for (const id of list<any>(sn.material_ids)) {
+        req(materialIds.has(id), `snapshots[${i}].material_ids references unknown material "${id}"`);
+      }
+    }
+  }
+
+  for (const [i, l] of list<any>(p.transcript).entries()) {
+    if (l.flags !== undefined) {
+      req(isArr(l.flags) && list<any>(l.flags).every(isStr), `transcript[${i}].flags must be strings`);
+    }
+  }
+
+  const d = p.derived;
+  if (d !== undefined && d !== null) {
+    req(isStr(d.generated_at), 'derived.generated_at must be a string');
+    req(isStr(d.generator) && d.generator.length > 0, 'derived.generator must name the model that wrote it');
+    req(isStr(d.prompt_version), 'derived.prompt_version must be a string');
+
+    req(isArr(d.segments), 'derived.segments must be an array');
+    const segIds = new Set(list<any>(d.segments).map(x => x.id));
+    for (const [i, seg] of list<any>(d.segments).entries()) {
+      req(isStr(seg.id) && seg.id.length > 0, `derived.segments[${i}].id missing`);
+      req(isNum(seg.t_start) && isNum(seg.t_end), `derived.segments[${i}] needs numeric t_start/t_end`);
+      req(seg.t_end >= seg.t_start, `derived.segments[${i}] ends before it starts`);
+      req(isStr(seg.label), `derived.segments[${i}].label must be a string`);
+    }
+
+    // The contract that makes any of this worth reading: every claim points at
+    // something a reader can go and check, and every pointer resolves.
+    const checkEvidence = (ev: any, where: string) => {
+      req(!!ev && typeof ev === 'object', `${where}.evidence missing`);
+      if (!ev) return;
+      req(isArr(ev.transcript_ids), `${where}.evidence.transcript_ids must be an array`);
+      req(isArr(ev.snapshot_ids), `${where}.evidence.snapshot_ids must be an array`);
+      for (const id of list<any>(ev.transcript_ids)) {
+        req(lineIds.has(id), `${where} cites transcript line "${id}", which is not in this pack`);
+      }
+      for (const id of list<any>(ev.snapshot_ids)) {
+        req(snapIds.has(id), `${where} cites snapshot "${id}", which is not in this pack`);
+      }
+      req(list<any>(ev.transcript_ids).length + list<any>(ev.snapshot_ids).length > 0,
+        `${where} makes a claim with no evidence at all`);
+    };
+
+    req(isArr(d.attempts), 'derived.attempts must be an array');
+    const attemptIds = new Set(list<any>(d.attempts).map(x => x.id));
+    for (const [i, a] of list<any>(d.attempts).entries()) {
+      req(isStr(a.id) && a.id.length > 0, `derived.attempts[${i}].id missing`);
+      req(segIds.has(a.segment_id), `derived.attempts[${i}].segment_id "${a.segment_id}" is not a known segment`);
+      req(!!a.question && isStr(a.question.text), `derived.attempts[${i}].question.text missing`);
+      if (a.question?.material_id) {
+        req(materialIds.has(a.question.material_id),
+          `derived.attempts[${i}].question.material_id "${a.question.material_id}" is not a known material`);
+      }
+      req(isArr(a.responses), `derived.attempts[${i}].responses must be an array`);
+      for (const [j, r] of list<any>(a.responses).entries()) {
+        req(['correct', 'incorrect', 'unclear'].includes(r.verdict),
+          `derived.attempts[${i}].responses[${j}].verdict invalid`);
+        checkEvidence(r.evidence, `derived.attempts[${i}].responses[${j}]`);
+      }
+      req(['independent', 'tutor_led', 'unresolved'].includes(a.resolution?.how),
+        `derived.attempts[${i}].resolution.how invalid`);
+      req(['high', 'medium', 'low'].includes(a.confidence), `derived.attempts[${i}].confidence invalid`);
+    }
+
+    req(isArr(d.error_patterns), 'derived.error_patterns must be an array');
+    for (const [i, ep] of list<any>(d.error_patterns).entries()) {
+      req(isStr(ep.pattern) && ep.pattern.length > 0, `derived.error_patterns[${i}].pattern missing`);
+      for (const id of list<any>(ep.example_attempt_ids)) {
+        req(attemptIds.has(id), `derived.error_patterns[${i}] cites unknown attempt "${id}"`);
+      }
+      checkEvidence(ep.evidence, `derived.error_patterns[${i}]`);
+      req(['high', 'medium', 'low'].includes(ep.confidence), `derived.error_patterns[${i}].confidence invalid`);
+    }
+
+    req(isArr(d.key_frames), 'derived.key_frames must be an array');
+    // Capped because the point of key_frames is to be the SHORT list. An
+    // unbounded one is just the snapshot array again, and helps nobody.
+    req(list<any>(d.key_frames).length <= 10,
+      `derived.key_frames must be 10 or fewer (got ${list<any>(d.key_frames).length})`);
+    for (const id of list<any>(d.key_frames)) {
+      req(snapIds.has(id), `derived.key_frames references unknown snapshot "${id}"`);
+    }
+  }
+
   const cr = p.capture_report;
   req(!!cr, 'capture_report missing');
   if (cr) {
@@ -320,6 +539,17 @@ export function validatePack(pack: unknown): string[] {
     req(isNum(cr.snapshots_with_new_ink), 'capture_report.snapshots_with_new_ink must be a number');
     req(isNum(cr.asr_lines_low_confidence), 'capture_report.asr_lines_low_confidence must be a number');
     req(isArr(cr.failures), 'capture_report.failures must be an array');
+    if (cr.asr_confidence_available !== undefined) {
+      req(isBool(cr.asr_confidence_available), 'capture_report.asr_confidence_available must be boolean');
+      // The lying zero, caught. If the engine gave us no confidence numbers AND
+      // the count is zero, then reporting "0 low-confidence lines" claims a
+      // check that never happened — unless nothing was flagged either.
+      if (cr.asr_confidence_available === false && cr.asr_lines_low_confidence === 0) {
+        const flagged = list<any>(p.transcript).filter(l => list<any>(l.flags).length > 0).length;
+        req(flagged === 0,
+          `capture_report says 0 low-confidence lines, but ${flagged} transcript line(s) carry flags`);
+      }
+    }
   }
 
   return errs;
