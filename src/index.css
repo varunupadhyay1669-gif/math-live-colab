@@ -4614,3 +4614,85 @@ html, body, #root { background: var(--bg-primary); }
   .ml-land-cta { width: 100%; }
   .ml-land-aside { text-align: center; }
 }
+
+/* ── Both sides of the same board ──────────────────────────────────────────
+   The page's central claim, drawn rather than asserted. Two panes with the
+   SAME working on them, so a visitor can see that "their screen" is not a
+   video of yours. The student pane is the one that carries the accent,
+   because the student's side is the part being doubted. */
+.ml-sides {
+  display: grid; gap: 14px; align-items: stretch;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+}
+.ml-side {
+  margin: 0; display: flex; flex-direction: column; gap: 10px;
+  padding: 18px; border-radius: 16px;
+  background: rgba(255,255,255,.6); border: 1px solid rgba(15,30,51,.12);
+}
+.ml-side.is-student {
+  background: #fff; border-color: #4F46E5;
+  box-shadow: 0 20px 44px -30px rgba(79,70,229,.5);
+}
+.ml-side-cap { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.ml-side-who { font-size: 13.5px; font-weight: 700; color: #0F1E33; }
+.ml-side.is-student .ml-side-who { color: #4F46E5; }
+.ml-side-dev {
+  font-size: 11px; font-weight: 600; letter-spacing: .06em;
+  text-transform: uppercase; color: #8892A6;
+}
+/* The board itself: ruled, like the page, so the two read as one surface. */
+.ml-side-board {
+  position: relative; flex: 1;
+  display: flex; flex-direction: column; gap: 4px; align-items: flex-start;
+  padding: 20px 18px 22px; border-radius: 11px; min-height: 168px;
+  background-color: #FCFCFD;
+  background-image:
+    linear-gradient(rgba(15,30,51,.05) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(15,30,51,.05) 1px, transparent 1px);
+  background-size: 20px 20px, 20px 20px;
+  border: 1px solid rgba(15,30,51,.08);
+  font-family: 'Newsreader', Georgia, serif;
+  font-variant-numeric: tabular-nums;
+}
+.ml-side-sum { font-size: 25px; color: #0F1E33; margin-bottom: 4px; }
+.ml-side-work { font-size: 19px; color: #46516A; }
+.ml-side-ans { font-size: 23px; color: #4F46E5; }
+/* A nib resting on the board — the teacher's side is the one being written. */
+.ml-side-pen {
+  position: absolute; right: 20px; bottom: 20px;
+  width: 10px; height: 10px; border-radius: 50%;
+  background: #0F1E33; box-shadow: 0 0 0 4px rgba(15,30,51,.10);
+}
+.ml-side-theirs {
+  position: absolute; right: 18px; bottom: 17px;
+  font-family: 'Inter', system-ui, sans-serif;
+  font-size: 11.5px; font-weight: 700; color: #4F46E5;
+  padding: 4px 9px; border-radius: 999px;
+  background: rgba(79,70,229,.10);
+}
+.ml-sides-link {
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px;
+  padding: 0 4px;
+}
+.ml-sides-dot { flex: 1; width: 1px; background: rgba(15,30,51,.16); min-height: 22px; }
+.ml-sides-word {
+  font-size: 10.5px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase;
+  color: #8892A6; writing-mode: vertical-rl; transform: rotate(180deg);
+}
+
+/* ── The doubts, answered ─────────────────────────────────────────────────
+   Not an accordion: a tutor deciding in fifteen seconds should not have to
+   click four times to find out whether their student needs an account. */
+.ml-faq { display: grid; gap: 18px 32px; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); }
+.ml-faq-q h3 {
+  margin: 0 0 6px; font-size: 16px; font-weight: 700; letter-spacing: -0.01em; color: #0F1E33;
+}
+.ml-faq-q p { margin: 0; font-size: 15px; line-height: 1.6; color: #56607A; }
+
+@media (max-width: 760px) {
+  .ml-sides { grid-template-columns: minmax(0, 1fr); }
+  /* The connector reads vertically between stacked panes. */
+  .ml-sides-link { flex-direction: row; padding: 2px 0; }
+  .ml-sides-dot { flex: 1; height: 1px; width: auto; min-height: 0; }
+  .ml-sides-word { writing-mode: horizontal-tb; transform: none; }
+}

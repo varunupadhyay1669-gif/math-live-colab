@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import ConvenientOrderDemo from '../components/ConvenientOrderDemo';
+import BothSides from '../components/BothSides';
 import { getPublicPricing, type PublicPricing } from '../lib/billing';
 
 // The page that has to convince a tutor in about fifteen seconds.
@@ -70,6 +71,55 @@ export default function Landing() {
           </div>
         </section>
 
+        {/* The claim the hero makes, shown rather than repeated. */}
+        <section className="ml-land-sec">
+          <h2 className="ml-land-h2">What your student actually gets</h2>
+          <p className="ml-land-sub">
+            Not a video of your screen — the board itself, on their own device, which
+            they can write on too.
+          </p>
+          <BothSides />
+        </section>
+
+        {/* The three doubts a tutor has before they will try anything. */}
+        <section className="ml-land-sec">
+          <h2 className="ml-land-h2">The bits people ask about</h2>
+          <div className="ml-faq">
+            <div className="ml-faq-q">
+              <h3>Does my student need an account, or an app?</h3>
+              <p>
+                Neither. You send them a link — the same link every week — and they tap it.
+                No sign-up, no password, no download. It opens in the browser they already have.
+              </p>
+            </div>
+            <div className="ml-faq-q">
+              <h3>Will it work on an old iPad and ordinary home internet?</h3>
+              <p>
+                That is what it was built for. The board is sent as drawing instructions
+                rather than video, so it stays sharp and keeps up on connections that make
+                a video call stutter.
+              </p>
+            </div>
+            <div className="ml-faq-q">
+              <h3>What happens to my work if I stop paying?</h3>
+              <p>
+                Nothing is deleted. Your students, their links and every saved board stay
+                exactly as they are — you simply cannot start a new lesson until you renew.
+                There are three days of grace either way, so a class in your diary is never
+                cancelled at the door.
+              </p>
+            </div>
+            <div className="ml-faq-q">
+              <h3>How do I pay?</h3>
+              <p>
+                A UPI QR with the amount already in it — Paytm, PhonePe, Google Pay, your
+                bank&#39;s app. No card is stored and nothing is charged automatically. When
+                the month ends, it ends, and you decide whether to pay again.
+              </p>
+            </div>
+          </div>
+        </section>
+
         {/* The honest comparison. Naming Zoom is the credibility. */}
         <section className="ml-land-sec">
           <h2 className="ml-land-h2">What you are using today</h2>
@@ -133,7 +183,8 @@ export default function Landing() {
             Teach your next lesson free
           </button>
           <span className="ml-land-by">
-            Built and run by a maths tutor, in India. Payments by UPI, to a person.
+            Built and run by a maths tutor in India, who teaches on it every day.
+            139 students set up since May. Payments by UPI, to a person.
           </span>
         </section>
       </main>
