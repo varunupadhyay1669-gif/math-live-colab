@@ -20,7 +20,7 @@ import {
  * all. Nothing here reads a room, a class, or a teacher — it is a page of
  * prices and promises.
  */
-const PUBLIC_PATHS = new Set(['/pricing']);
+const PUBLIC_PATHS = new Set(['/pricing', '/welcome']);
 
 interface Props {
   children: ReactNode;
