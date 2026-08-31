@@ -19,7 +19,7 @@
 import type { Request, Response } from 'express';
 import type { Pool } from 'pg';
 import { userFromRequest, type SessionUser } from './identity';
-import { TRIAL_DAYS, PRICE_RUPEES } from './billing';
+import { TRIAL_DAYS, PRICE_RUPEES, GRACE_DAYS } from './billing';
 
 /** One room, as the admin screen sees it. Built from the live rooms map. */
 export interface LiveRoom {
@@ -83,7 +83,14 @@ export function mountOwnerDashRoutes(app: any, pool: Pool, opts: OwnerDashOption
            (SELECT count(*) FROM users u
              WHERE ${NOT_ADMIN} AND (u.paid_until IS NULL OR u.paid_until <= now())
                AND (u.trial_started_at IS NULL
-                    OR u.trial_started_at + ($1::int * INTERVAL '1 day') <= now()))::int AS expired,
+                    OR u.trial_started_at + (($1::int + $2::int) * INTERVAL '1 day') <= now()))::int AS expired,
+           -- Past the end but still teaching on grace. Counting these as
+           -- "lapsed" would overstate the damage and hide the ones who can
+           -- still be saved with a phone call today.
+           (SELECT count(*) FROM users u
+             WHERE ${NOT_ADMIN} AND (u.paid_until IS NULL OR u.paid_until <= now())
+               AND u.trial_started_at + ($1::int * INTERVAL '1 day') <= now()
+               AND u.trial_started_at + (($1::int + $2::int) * INTERVAL '1 day') > now())::int AS in_grace,
            (SELECT count(*) FROM users u
              WHERE ${NOT_ADMIN} AND u.paid_until > now()
                AND u.paid_until < now() + INTERVAL '7 days')::int                       AS expiring_7d,
@@ -105,7 +112,7 @@ export function mountOwnerDashRoutes(app: any, pool: Pool, opts: OwnerDashOption
              WHERE started_at > now() - INTERVAL '7 days')::int                         AS lessons_7d,
            (SELECT count(DISTINCT teacher_id) FROM teaching_sessions
              WHERE started_at > now() - INTERVAL '7 days')::int                         AS teachers_active_7d`,
-        [TRIAL_DAYS],
+        [TRIAL_DAYS, GRACE_DAYS],
       );
       const o = r.rows[0];
       res.json({
@@ -115,6 +122,7 @@ export function mountOwnerDashRoutes(app: any, pool: Pool, opts: OwnerDashOption
         mrr: o.paying * PRICE_RUPEES,
         priceRupees: PRICE_RUPEES,
         trialDays: TRIAL_DAYS,
+        graceDays: GRACE_DAYS,
         liveRooms: liveRooms().length,
       });
     } catch (err) { fail(res, err, 'read the business overview'); }
@@ -149,7 +157,7 @@ export function mountOwnerDashRoutes(app: any, pool: Pool, opts: OwnerDashOption
           ORDER BY ends_at ASC NULLS LAST`,
         [TRIAL_DAYS],
       );
-      res.json({ renewals: r.rows, trialDays: TRIAL_DAYS });
+      res.json({ renewals: r.rows, trialDays: TRIAL_DAYS, graceDays: GRACE_DAYS });
     } catch (err) { fail(res, err, 'read the renewals calendar'); }
   });
 

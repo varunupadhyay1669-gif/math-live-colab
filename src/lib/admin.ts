@@ -26,7 +26,7 @@ export interface TutorUsage {
   taught_seconds: number | null;
   /** Decided by the server, never recomputed here — one answer, one place. */
   billing: {
-    state: 'trial' | 'active' | 'expired' | 'admin';
+    state: 'trial' | 'active' | 'grace' | 'expired' | 'admin';
     until: string | null;
     daysLeft: number | null;
   };
@@ -37,6 +37,7 @@ export interface Overview {
   paying: number;
   trialing: number;
   expired: number;
+  in_grace: number;
   expiring_7d: number;
   trials_ending_3d: number;
   claims_pending: number;
@@ -49,6 +50,7 @@ export interface Overview {
   mrr: number;
   priceRupees: number;
   trialDays: number;
+  graceDays: number;
   liveRooms: number;
 }
 
@@ -154,7 +156,8 @@ export { activityStatus, agoLabel, classifyAdminError, type ActivityStatus } fro
 // others. The revenue figures matter more than the live view, and should not
 // disappear because a room lookup threw.
 export const getOverview = () => api.get<Overview>('/api/admin/overview');
-export const getRenewals = () => api.get<{ renewals: Renewal[]; trialDays: number }>('/api/admin/renewals');
+export const getRenewals = () =>
+  api.get<{ renewals: Renewal[]; trialDays: number; graceDays: number }>('/api/admin/renewals');
 export const getLiveRooms = () => api.get<{ rooms: LiveRoom[]; at: number }>('/api/admin/live');
 
 /** "in 3 days", "today", "6 days ago" — for a date that may be in either direction. */

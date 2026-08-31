@@ -4150,6 +4150,7 @@ html, body, #root { background: var(--bg-primary); }
 .ml-bill-banner-text strong { color: var(--text-primary); }
 .ml-bill-banner-cta { flex: 0 0 auto; height: 38px; padding: 0 18px; font-size: 13px; }
 .ml-bill-banner-trial   { border-color: var(--accent-indigo); background: var(--accent-indigo-light, var(--bg-card)); }
+.ml-bill-banner-grace   { border-color: #c8860d; box-shadow: 0 0 0 3px rgba(200, 134, 13, 0.14); }
 .ml-bill-banner-expired { border-color: #d9534f; box-shadow: 0 0 0 3px rgba(217, 83, 79, 0.12); }
 
 /* The subscribe page. */
@@ -4196,6 +4197,7 @@ html, body, #root { background: var(--bg-primary); }
 }
 .ml-bill-state strong, .ml-bill-pending strong { font-size: 14.5px; color: var(--text-primary); }
 .ml-bill-state-expired { border-color: #d9534f; }
+.ml-bill-state-grace   { border-color: #c8860d; }
 .ml-bill-state-trial   { border-color: var(--accent-indigo); }
 .ml-bill-pending       { border-color: #c8a13a; }
 .ml-bill-ok  { margin: 0; font-size: 13px; color: var(--accent-indigo); font-weight: 600; }
@@ -4246,6 +4248,7 @@ html, body, #root { background: var(--bg-primary); }
 }
 .ml-bill-pill.b-active  { background: rgba(16, 185, 129, 0.16); color: #6EE7B7; }
 .ml-bill-pill.b-trial   { background: rgba(59, 130, 246, 0.16); color: #93C5FD; }
+.ml-bill-pill.b-grace   { background: rgba(245, 158, 11, 0.16); color: #FCD34D; }
 .ml-bill-pill.b-expired { background: rgba(239, 68, 68, 0.16);  color: #FCA5A5; }
 .ml-bill-pill.b-admin   { background: rgba(148, 163, 184, 0.16); color: #CBD5E1; }
 .ml-bill-pill.b-pending { background: rgba(245, 158, 11, 0.16); color: #FCD34D; }

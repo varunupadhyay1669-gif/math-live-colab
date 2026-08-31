@@ -6,7 +6,7 @@
 // teacher who edits their way past this screen gains nothing.
 import { api } from './api';
 
-export type AccessState = 'trial' | 'active' | 'expired';
+export type AccessState = 'trial' | 'active' | 'grace' | 'expired';
 
 export interface PendingClaim {
   id: string;
@@ -23,6 +23,7 @@ export interface BillingStatus {
   daysLeft: number;
   priceRupees: number;
   trialDays: number;
+  graceDays: number;
   admin: boolean;
   pendingClaim: PendingClaim | null;
   upiId: string | null;
@@ -68,5 +69,10 @@ export function describe(s: BillingStatus): string {
     if (s.daysLeft <= 1) return 'Free trial ends today';
     return `Free trial — ${s.daysLeft} days left`;
   }
-  return 'Free trial ended';
+  if (s.state === 'grace') {
+    return s.daysLeft <= 1
+      ? 'Access ends today — please renew'
+      : `Access ended — ${s.daysLeft} days of grace left`;
+  }
+  return 'Access has ended';
 }

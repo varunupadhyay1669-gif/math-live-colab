@@ -14,6 +14,7 @@ import { mountRecordRoutes } from './src/server/records';
 import { BOARD_IMAGE_SCHEMA_SQL, mountBoardImageRoutes, externaliseBoardImages } from './src/server/boardImages';
 import { BILLING_SCHEMA_SQL, mountBillingRoutes, accessForTeacher } from './src/server/billing';
 import { mountOwnerDashRoutes, type LiveRoom } from './src/server/ownerDash';
+import { MAIL_LOG_SCHEMA_SQL, startDailyJobs } from './src/server/scheduler';
 
 interface FileEntry {
   id: string;
@@ -791,7 +792,8 @@ async function startServer() {
   // replacing Supabase adds no migration step anyone has to remember.
   // Billing comes after identity because it ALTERs users, and these run in
   // order as one statement batch.
-  const SCHEMA_SQL = IDENTITY_SCHEMA_SQL + BOARD_IMAGE_SCHEMA_SQL + BILLING_SCHEMA_SQL + `
+  const SCHEMA_SQL = IDENTITY_SCHEMA_SQL + BOARD_IMAGE_SCHEMA_SQL + BILLING_SCHEMA_SQL
+    + MAIL_LOG_SCHEMA_SQL + `
     -- The durable copy of a live class. One JSON document per room, which is
     -- the shape the server already used; what Postgres adds is surviving a
     -- redeploy. Rooms used to live on the container filesystem, so every deploy
@@ -4445,6 +4447,7 @@ Build a widget that teaches: ${safePrompt}`;
         return out.sort((a, b) => b.lastActivityAt - a.lastActivityAt);
       },
     });
+    startDailyJobs(appPool);
     console.log('\ud83d\udd11 Teacher accounts: this server\u2019s own database');
     console.log('\ud83d\udd12 Teacher ownership enforcement: ON (registered classes are owner-only)');
   } else {

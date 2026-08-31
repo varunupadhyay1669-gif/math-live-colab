@@ -36,6 +36,7 @@ export default function AdminView() {
   const [overview, setOverview] = useState<Overview | null>(null);
   const [renewals, setRenewals] = useState<Renewal[]>([]);
   const [live, setLive] = useState<LiveRoom[]>([]);
+  const [graceDays, setGraceDays] = useState(3);
 
   useEffect(() => {
     if (auth.loading) return;
@@ -72,7 +73,7 @@ export default function AdminView() {
     // must survive a renewals or live-rooms failure.
     const [o, r] = await Promise.allSettled([getOverview(), getRenewals()]);
     if (o.status === 'fulfilled') setOverview(o.value);
-    if (r.status === 'fulfilled') setRenewals(r.value.renewals);
+    if (r.status === 'fulfilled') { setRenewals(r.value.renewals); setGraceDays(r.value.graceDays); }
   }, []);
   useEffect(() => { if (access === 'admin') void loadBusiness(); }, [access, loadBusiness]);
 
@@ -201,6 +202,8 @@ export default function AdminView() {
               tone={overview && (overview.expiring_7d + overview.trials_ending_3d) > 0 ? 'warn' : undefined} />
         <Stat label="Awaiting confirm" value={overview ? String(overview.claims_pending) : '—'}
               tone={overview && overview.claims_pending > 0 ? 'warn' : undefined} />
+        <Stat label="In grace" value={overview ? String(overview.in_grace) : '—'}
+              tone={overview && overview.in_grace > 0 ? 'warn' : undefined} />
         <Stat label="Lapsed" value={overview ? String(overview.expired) : '—'} />
         <Stat label="Teaching now" value={String(live.length)} tone={live.length > 0 ? 'live' : undefined} />
       </div>
@@ -251,7 +254,8 @@ export default function AdminView() {
                     <td><span className={`ml-bill-pill b-${t.billing.state}`}>
                       {t.billing.state === 'active' ? 'paid'
                         : t.billing.state === 'admin' ? 'admin'
-                        : t.billing.state === 'trial' ? `trial · ${t.billing.daysLeft}d` : 'lapsed'}
+                        : t.billing.state === 'trial' ? `trial · ${t.billing.daysLeft}d`
+                        : t.billing.state === 'grace' ? `grace · ${t.billing.daysLeft}d` : 'lapsed'}
                     </span></td>
                     <td className="ml-admin-mono">{t.billing.state === 'admin' ? '—' : untilLabel(t.billing.until).text}</td>
                     <td><span className={`ml-admin-pill s-${status.replace(/\s+/g, '-')}`}>{status}</span></td>
@@ -309,12 +313,16 @@ export default function AdminView() {
             <tbody>
               {renewals.map(r => {
                 const u = untilLabel(r.ends_at);
-                const lapsed = u.days !== null && u.days < 0;
+                // Past the end but inside the grace window is still teaching,
+                // and reads differently from genuinely lost.
+                const past = u.days !== null && u.days < 0;
+                const inGrace = past && Math.abs(u.days!) <= graceDays;
+                const lapsed = past && !inGrace;
                 return (
                   <tr key={r.id} className={u.urgent ? 'ml-row-urgent' : ''}>
                     <td className="ml-admin-strong">{r.email}</td>
-                    <td><span className={`ml-bill-pill b-${lapsed ? 'expired' : r.kind === 'paid' ? 'active' : 'trial'}`}>
-                      {lapsed ? 'lapsed' : r.kind === 'paid' ? 'paid' : 'trial'}
+                    <td><span className={`ml-bill-pill b-${lapsed ? 'expired' : inGrace ? 'grace' : r.kind === 'paid' ? 'active' : 'trial'}`}>
+                      {lapsed ? 'lapsed' : inGrace ? 'grace' : r.kind === 'paid' ? 'paid' : 'trial'}
                     </span></td>
                     <td className="ml-admin-mono">
                       {r.ends_at ? new Date(r.ends_at).toLocaleDateString(undefined, { day: 'numeric', month: 'short' }) : '—'}

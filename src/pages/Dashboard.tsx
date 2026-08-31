@@ -171,13 +171,15 @@ export default function Dashboard() {
                 <strong>{describe(billing)}</strong>
                 {billing.state === "expired"
                   ? " — your classes are safe, but you need to subscribe to keep teaching."
+                  : billing.state === "grace"
+                  ? " — you can still teach while you renew. Nothing has been lost."
                   : ` — ₹${billing.priceRupees}/month after that.`}
               </span>
               <button
                 className="ml-dark-btn ml-dark-btn-primary ml-bill-banner-cta"
                 onClick={() => navigate("/billing")}
               >
-                {billing.state === "expired" ? "Subscribe" : "Subscribe now"}
+                {billing.state === "trial" ? "Subscribe now" : "Subscribe"}
               </button>
             </div>
           )}

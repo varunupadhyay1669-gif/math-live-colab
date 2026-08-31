@@ -19,7 +19,8 @@ import { JSDOM } from 'jsdom';
 import { mirrorScriptFor, stripLessonScripts } from './src/lib/mirrorScript.ts';
 import { checkLesson } from './src/lib/lessonCheck.ts';
 import { parseDataUrl, externaliseBoardImages } from './src/server/boardImages.ts';
-import { accessFrom, TRIAL_DAYS, PRICE_RUPEES } from './src/server/billing.ts';
+import { accessFrom, TRIAL_DAYS, PRICE_RUPEES, GRACE_DAYS } from './src/server/billing.ts';
+import { _warningFor } from './src/server/scheduler.ts';
 import QRCode from 'qrcode';
 import jsQR from 'jsqr';
 import { PNG } from 'pngjs';
@@ -330,14 +331,19 @@ assert(accessFrom({ trial_started_at: at(0), paid_until: null }).daysLeft === TR
 assert(accessFrom({ trial_started_at: at(-(TRIAL_DAYS - 1)), paid_until: null }).state === 'trial',
   'the last day of the trial still counts as trial');
 
-assert(accessFrom({ trial_started_at: at(-(TRIAL_DAYS + 1)), paid_until: null }).state === 'expired',
-  'the day after the trial ends, teaching stops');
+// The boundary moved when the grace window was added: teaching no longer
+// stops the day after the trial, it stops after grace. The guarantee this
+// test protects is unchanged — access DOES end — only the day it ends on.
+assert(accessFrom({ trial_started_at: at(-(TRIAL_DAYS + 1)), paid_until: null }).state === 'grace',
+  'the day after the trial ends, teaching continues on grace');
+assert(accessFrom({ trial_started_at: at(-(TRIAL_DAYS + GRACE_DAYS + 1)), paid_until: null }).state === 'expired',
+  'once the trial AND its grace are used up, teaching stops');
 
 assert(accessFrom({ trial_started_at: at(-90), paid_until: at(20) }).state === 'active',
   'a paid teacher whose trial ended long ago can teach');
 
-assert(accessFrom({ trial_started_at: at(-90), paid_until: at(-1) }).state === 'expired',
-  'a subscription that lapsed yesterday is expired');
+assert(accessFrom({ trial_started_at: at(-90), paid_until: at(-1) }).state === 'grace',
+  'a subscription that lapsed yesterday is on grace, not cut off');
 
 // Paying during the trial must not shorten anything. If paid_until were
 // allowed to win while EARLIER than the trial end, paying early would cost
@@ -354,6 +360,49 @@ assert(accessFrom({ trial_started_at: null, paid_until: null }).state === 'expir
 
 assert(accessFrom(null).state === 'expired',
   'a missing row is not access');
+
+section('OFFLINE — grace, and who gets warned');
+
+// The grace window exists so a Tuesday class is never hostage to a Monday
+// night UPI delay. Two ways to get it wrong, both silent: teaching stops a day
+// early (a furious tutor mid-lesson), or grace never ends (free forever).
+{
+  const graceRow = (daysPastEnd) => ({
+    trial_started_at: at(-(TRIAL_DAYS + daysPastEnd)), paid_until: null,
+  });
+
+  assert(accessFrom(graceRow(0.5)).state === 'grace',
+    'the day after a trial ends, teaching continues on grace');
+
+  assert(accessFrom(graceRow(GRACE_DAYS - 0.5)).state === 'grace',
+    `the last day of the ${GRACE_DAYS}-day grace still teaches`);
+
+  assert(accessFrom(graceRow(GRACE_DAYS + 0.5)).state === 'expired',
+    'once grace is used up, the seat is refused');
+
+  // daysLeft must mean "how long until I actually lose it" in EVERY state, or
+  // the banner tells a tutor on grace that they have zero days and they panic.
+  const g = accessFrom(graceRow(1));
+  assert(g.daysLeft > 0 && g.daysLeft <= GRACE_DAYS,
+    'during grace, daysLeft counts the grace remaining, not zero',
+    JSON.stringify(g));
+
+  // A paid teacher gets grace too, not just trials.
+  assert(accessFrom({ trial_started_at: at(-90), paid_until: at(-1) }).state === 'grace',
+    'a lapsed subscription also gets grace');
+  assert(accessFrom({ trial_started_at: at(-90), paid_until: at(-(GRACE_DAYS + 1)) }).state === 'expired',
+    'a subscription lapsed beyond grace is expired');
+}
+
+// Which warning a teacher is owed. Sending two-days-left on the wrong day is
+// how a ₹500 product starts feeling like spam.
+assert(_warningFor('trial', 2) === 'warn_2', 'two days out earns the first warning');
+assert(_warningFor('trial', 1) === 'warn_1', 'the last day earns the final warning');
+assert(_warningFor('trial', 3) === null, 'three days out is too early to nag');
+assert(_warningFor('active', 2) === 'warn_2', 'paying teachers are warned before renewal too');
+assert(_warningFor('grace', 2) === 'grace', 'a teacher on grace is told they are on grace');
+assert(_warningFor('expired', 0) === null,
+  'an already-expired teacher is not emailed daily forever');
 
 section('OFFLINE — the payment QR says what it should');
 

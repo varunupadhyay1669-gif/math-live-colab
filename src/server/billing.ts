@@ -24,11 +24,23 @@ import path from 'path';
 import QRCode from 'qrcode';
 import type { Pool } from 'pg';
 import { userFromRequest, type SessionUser } from './identity';
+import { sendMail, ownerAddresses, siteUrl, niceDate } from './mailer';
 
 /** How long a new teacher may use everything before paying. */
 export const TRIAL_DAYS = 7;
 /** The monthly price, in rupees. Shown on the payment page and stored per claim. */
 export const PRICE_RUPEES = 500;
+/**
+ * Days of teaching allowed AFTER the paid period ends.
+ *
+ * A tutor's Tuesday class must not be hostage to a Monday-night UPI delay.
+ * Payment here is manual on both sides — the teacher types a reference, a
+ * human confirms it — so a few hours of human latency is normal and must not
+ * land on a child waiting in a room. Three days costs at most ~₹50 of
+ * goodwill and removes the single worst experience this product can deliver:
+ * a lesson that will not start.
+ */
+export const GRACE_DAYS = 3;
 
 export const BILLING_SCHEMA_SQL = `
   ALTER TABLE users ADD COLUMN IF NOT EXISTS trial_started_at timestamptz;
@@ -57,16 +69,21 @@ export const BILLING_SCHEMA_SQL = `
     WHERE confirmed_at IS NULL AND rejected_at IS NULL;
 `;
 
-export type AccessState = 'trial' | 'active' | 'expired';
+export type AccessState = 'trial' | 'active' | 'grace' | 'expired';
 
 export interface Access {
   state: AccessState;
-  /** When the current entitlement runs out. Null only if there is no trial date. */
+  /** When the paid/trial entitlement runs out. Null only if there is no trial date. */
   until: string | null;
-  /** Whole days remaining, floored at 0. */
+  /**
+   * Whole days until teaching actually stops — which during grace is the
+   * grace remaining, not zero. The banner and the emails both want the
+   * honest "how long have I got", and that is this number in every state.
+   */
   daysLeft: number;
   priceRupees: number;
   trialDays: number;
+  graceDays: number;
 }
 
 interface BillingRow {
@@ -84,7 +101,7 @@ const DAY_MS = 86_400_000;
  * replacing them.
  */
 export function accessFrom(row: BillingRow | null | undefined, now = new Date()): Access {
-  const base = { priceRupees: PRICE_RUPEES, trialDays: TRIAL_DAYS };
+  const base = { priceRupees: PRICE_RUPEES, trialDays: TRIAL_DAYS, graceDays: GRACE_DAYS };
   const t = now.getTime();
 
   const paid = row?.paid_until ? new Date(row.paid_until).getTime() : null;
@@ -109,6 +126,15 @@ export function accessFrom(row: BillingRow | null | undefined, now = new Date())
   // of you" is not a reason to hand out the product.
   if (!Number.isFinite(ends)) return { ...base, state: 'expired', until: null, daysLeft: 0 };
   if (ends <= t) {
+    // Past the end, but inside the grace window: still teaching, and told so
+    // loudly. Only past THAT is the seat actually refused.
+    const graceEnds = ends + GRACE_DAYS * DAY_MS;
+    if (graceEnds > t) {
+      return {
+        ...base, state: 'grace', until: new Date(ends).toISOString(),
+        daysLeft: Math.ceil((graceEnds - t) / DAY_MS),
+      };
+    }
     return { ...base, state: 'expired', until: new Date(ends).toISOString(), daysLeft: 0 };
   }
 
@@ -138,7 +164,7 @@ export async function accessForTeacher(pool: Pool, teacherId: string): Promise<A
   const row = r.rows[0];
   if (row?.is_admin) {
     return { state: 'active', until: null, daysLeft: Number.MAX_SAFE_INTEGER,
-      priceRupees: PRICE_RUPEES, trialDays: TRIAL_DAYS };
+      priceRupees: PRICE_RUPEES, trialDays: TRIAL_DAYS, graceDays: GRACE_DAYS };
   }
   return accessFrom(row);
 }
@@ -200,29 +226,7 @@ async function sendWhatsApp(text: string): Promise<boolean> {
 }
 
 async function sendOwnerEmail(subject: string, body: string): Promise<boolean> {
-  const key = process.env.RESEND_API_KEY;
-  // Comma-separated, because the person running this has more than one address
-  // and an alert that lands in the inbox they are not reading is the same as no
-  // alert at all — which is exactly how the first test "failed".
-  const to = (process.env.OWNER_EMAIL || '')
-    .split(',').map(s => s.trim()).filter(Boolean);
-  if (!key || to.length === 0) return false;
-  const from = process.env.AUTH_EMAIL_FROM || 'MathsLive <login@matheinstein.com>';
-  try {
-    const res = await fetch('https://api.resend.com/emails', {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ from, to, subject, text: body }),
-    });
-    if (!res.ok) {
-      console.error('Resend refused the owner alert:', res.status, (await res.text()).slice(0, 200));
-      return false;
-    }
-    return true;
-  } catch (err) {
-    console.error('Owner email failed:', (err as Error).message);
-    return false;
-  }
+  return (await sendMail(ownerAddresses(), subject, body)).ok;
 }
 
 /** Both channels, plus the log — which is the one that never fails. */
@@ -406,6 +410,30 @@ export function mountBillingRoutes(app: any, pool: Pool, opts: { secret: string 
       }
       const { teacher_id, months } = claim.rows[0];
       const paidUntil = await confirmPayment(pool, teacher_id, months);
+
+      // Tell the teacher, immediately. Until now the only way to discover a
+      // payment had been accepted was to notice a banner had changed, which
+      // is not how anyone should learn that their money arrived.
+      void (async () => {
+        try {
+          const t = await pool.query('SELECT email FROM users WHERE id = $1', [teacher_id]);
+          const email = t.rows[0]?.email;
+          if (!email) return;
+          await sendMail([email], 'MathsLive — payment received', [
+            'Thank you — your payment has been confirmed.',
+            '',
+            `Amount    : ₹${PRICE_RUPEES * months} (${months} month${months === 1 ? '' : 's'})`,
+            `Paid up to: ${niceDate(paidUntil)}`,
+            '',
+            'Nothing else is needed. Your classes and students are exactly as you left them.',
+            `Your subscription: ${siteUrl()}/billing`,
+          ].join('\n'));
+        } catch (err) {
+          // A receipt that fails to send must not undo a confirmed payment.
+          console.error('Could not send the receipt:', (err as Error).message);
+        }
+      })();
+
       res.json({ ok: true, paidUntil });
     } catch (err) { fail(res, err, 'confirm the payment'); }
   });

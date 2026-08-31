@@ -94,6 +94,12 @@ export default function Billing() {
                   {status.state === "expired" && (
                     <span>Pay below to carry on teaching. Your students and classes are all still here.</span>
                   )}
+                  {status.state === "grace" && (
+                    <span>
+                      You can still teach while you renew — no lesson will be cut off in the
+                      meantime. Pay below and it is sorted.
+                    </span>
+                  )}
                   {status.state === "trial" && (
                     <span>Everything works during the trial. Pay any time — days you have left are added on, not lost.</span>
                   )}
