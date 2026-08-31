@@ -44,7 +44,7 @@ export default function BothSides() {
           <span className="ml-side-work">= 20 × 21</span>
           <span className="ml-side-ans">= 420</span>
           {/* The point of the whole product: they can write too. */}
-          <span className="ml-side-theirs">their turn →</span>
+          <span className="ml-side-theirs">they can move it</span>
         </div>
       </figure>
     </div>

@@ -51,7 +51,7 @@ export default function ConvenientOrderDemo({ compact = false }: { compact?: boo
   return (
     <div className={`ml-demo${compact ? ' is-compact' : ''}`}>
       <div className="ml-demo-head">
-        <span className="ml-demo-label">Try it yourself</span>
+        <span className="ml-demo-label">Running now — try it</span>
         <span className="ml-demo-nudge">tap two to multiply first</span>
       </div>
 

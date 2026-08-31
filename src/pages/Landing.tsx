@@ -6,20 +6,23 @@ import { getPublicPricing, type PublicPricing } from '../lib/billing';
 
 // The page that has to convince a tutor in about fifteen seconds.
 //
-// The old front door was the app itself: a room-code box and a "start
-// teaching" button, which answers "how do I use this?" for someone who already
-// decided, and nothing at all for someone deciding.
+// THE POSITION, which took two attempts to get right. The first version sold a
+// better whiteboard against Zoom. That is not the idea: a whiteboard is a
+// surface you write on, and there are dozens.
 //
-// The design commits to one idea rather than hedging. The headline promises
-// "not a photo of your notebook", so the page IS a notebook — ruled paper,
-// serif numerals, the working shown rather than described. It reads as maths
-// rather than as software, which is the register the reader lives in.
+// The idea is that the tutor stops being a scribe and becomes a PRESENTER.
+// The board does not hold ink, it RUNS things — simulations, animations,
+// interactives — and the student does not watch them, they reach in and move
+// them. That is a change of what teaching is, not a change of stationery, and
+// it is what the mirror engine exists for.
 //
-// Written for one person: a tutor in India teaching on Zoom with a phone
-// pointed at paper, quietly aware that is not good enough. Hence the
-// competitor named is Zoom — not another tutoring platform — because that is
-// the truth and pretending otherwise is exactly what makes marketing pages
-// unreadable to the people they are aimed at.
+// So the page argues the philosophy first and the features after, and the hero
+// demo is a running interactive rather than a picture of handwriting.
+//
+// What it does NOT claim: that the product writes the interactives for you.
+// Generation exists in the codebase and is switched off (no key). The board
+// running what you give it is true today; anything more would be a promise the
+// first trial would catch.
 export default function Landing() {
   const navigate = useNavigate();
   const [p, setP] = useState<PublicPricing | null>(null);
@@ -40,19 +43,18 @@ export default function Landing() {
       </header>
 
       <main className="ml-land">
-        {/* Type on the left, the working thing on the right. */}
         <section className="ml-land-hero">
           <div className="ml-land-say">
-            <span className="ml-land-eyebrow">For one-to-one maths tutors</span>
-            <h1 className="ml-land-h1">Stop pointing a phone<br />at your notebook.</h1>
+            <span className="ml-land-eyebrow">A whiteboard that runs</span>
+            <h1 className="ml-land-h1">Stop writing maths.<br />Start presenting it.</h1>
             <p className="ml-land-lede">
-              Your student opens one link and lands on the same board you are working
-              on — writing on it, moving things on it, from their own iPad. Not a video
-              of your screen. The thing itself.
+              A board that does not hold ink — it runs things. Drop in a simulation, an
+              animation, an interactive you built this morning, and it plays live in the
+              lesson. Your student does not watch it. They reach in and move it themselves.
             </p>
             <div className="ml-land-act">
               <button className="ml-land-cta" onClick={() => navigate('/')}>
-                Teach your next lesson free
+                Present your next lesson free
               </button>
               <span className="ml-land-aside">{trialDays} days, no card</span>
             </div>
@@ -65,23 +67,52 @@ export default function Landing() {
           <div className="ml-land-show">
             <ConvenientOrderDemo />
             <p className="ml-land-caption">
-              Your student sees exactly this, moving as you move it — on a tablet, on
-              home broadband. That is the whole difference.
+              That is not a picture of a lesson — it is one, running. Your student gets
+              the same thing on their own iPad, and can move it while you talk.
             </p>
           </div>
         </section>
 
-        {/* The claim the hero makes, shown rather than repeated. */}
         <section className="ml-land-sec">
           <h2 className="ml-land-h2">What your student actually gets</h2>
           <p className="ml-land-sub">
-            Not a video of your screen — the board itself, on their own device, which
-            they can write on too.
+            Not a video of your screen — the live thing itself, on their own device,
+            which they can work on too.
           </p>
           <BothSides />
         </section>
 
-        {/* The three doubts a tutor has before they will try anything. */}
+        {/* The order a tutor meets these in: make it, present it, they use it. */}
+        <section className="ml-land-three">
+          <div className="ml-land-item">
+            <span className="ml-land-num">01</span>
+            <h3>Bring anything that runs</h3>
+            <p>
+              If it is a web page, it works: a geometry sketch, a graph that redraws as you
+              drag it, a probability machine. Paste it in and it is on the board — no
+              conversion, no plugin, no upload queue.
+            </p>
+          </div>
+          <div className="ml-land-item">
+            <span className="ml-land-num">02</span>
+            <h3>Present it, do not narrate it</h3>
+            <p>
+              Step through it, pause it, hand control to the student and take it back.
+              You are running a demonstration, not describing one — which is the difference
+              between a child watching and a child understanding.
+            </p>
+          </div>
+          <div className="ml-land-item">
+            <span className="ml-land-num">03</span>
+            <h3>Every lesson is kept</h3>
+            <p>
+              Each board, topic and minute taught, saved per student. Open a child's page
+              before the next lesson and you know exactly where you stopped.
+            </p>
+          </div>
+        </section>
+
+        {/* The doubts that actually stop a purchase. */}
         <section className="ml-land-sec">
           <h2 className="ml-land-h2">The bits people ask about</h2>
           <div className="ml-faq">
@@ -90,6 +121,14 @@ export default function Landing() {
               <p>
                 Neither. You send them a link — the same link every week — and they tap it.
                 No sign-up, no password, no download. It opens in the browser they already have.
+              </p>
+            </div>
+            <div className="ml-faq-q">
+              <h3>Where do the simulations come from?</h3>
+              <p>
+                You bring them. Anything that runs in a browser works, including the ones
+                people now build in a minute by asking an AI for them. MathsLive is what
+                puts one in front of a child and lets them touch it.
               </p>
             </div>
             <div className="ml-faq-q">
@@ -109,78 +148,41 @@ export default function Landing() {
                 cancelled at the door.
               </p>
             </div>
-            <div className="ml-faq-q">
-              <h3>How do I pay?</h3>
-              <p>
-                A UPI QR with the amount already in it — Paytm, PhonePe, Google Pay, your
-                bank&#39;s app. No card is stored and nothing is charged automatically. When
-                the month ends, it ends, and you decide whether to pay again.
-              </p>
-            </div>
           </div>
         </section>
 
-        {/* The honest comparison. Naming Zoom is the credibility. */}
+        {/* Named honestly. The rival is not another platform. */}
         <section className="ml-land-sec">
-          <h2 className="ml-land-h2">What you are using today</h2>
+          <h2 className="ml-land-h2">What teaching looks like without it</h2>
           <p className="ml-land-sub">
-            Not another tutoring platform. The thing you would actually be replacing.
+            Not another tutoring platform. The way the lesson actually runs today.
           </p>
           <div className="ml-land-vs">
             <div className="ml-land-col">
-              <span className="ml-land-tag">Zoom, and a phone on a stand</span>
-              <p>They watch you write. They cannot write with you.</p>
+              <span className="ml-land-tag">A call, and you writing</span>
+              <p>You describe the moving thing. They picture it, or they do not.</p>
+              <p>They watch you write. They cannot touch anything.</p>
               <p>Nothing is kept. Last week's working is gone.</p>
               <p>The parent sees a video call and wonders what they are paying for.</p>
-              <p>Free — which is the honest part.</p>
             </div>
             <div className="ml-land-col is-us">
               <span className="ml-land-tag">MathsLive</span>
-              <p>They work on the same board, from their own screen.</p>
-              <p>Every board and every topic saved, per student.</p>
-              <p>Something worth sending the parent after each class.</p>
+              <p>The moving thing is on the board, moving.</p>
+              <p>They take hold of it from their own screen.</p>
+              <p>Every board and topic saved, per student.</p>
               <p>₹{price} a month, paid by UPI, cancel by not paying.</p>
             </div>
           </div>
         </section>
 
-        {/* Numbered because these are the three things in order of what a
-            tutor meets first, not because a list wanted decoration. */}
-        <section className="ml-land-three">
-          <div className="ml-land-item">
-            <span className="ml-land-num">01</span>
-            <h3>They tap one link</h3>
-            <p>
-              A permanent link per student. No account, no app, no password — ever.
-              A ten-year-old on a shared iPad taps it and is in the lesson.
-            </p>
-          </div>
-          <div className="ml-land-item">
-            <span className="ml-land-num">02</span>
-            <h3>The board is properly shared</h3>
-            <p>
-              Write, draw, paste a textbook page, run something they can drag. It
-              arrives on their screen as it happens, sharp enough to read on a tablet.
-            </p>
-          </div>
-          <div className="ml-land-item">
-            <span className="ml-land-num">03</span>
-            <h3>The lesson is kept</h3>
-            <p>
-              Every board, topic and minute taught, saved per student. Open a child's
-              page before the next lesson and you know where you stopped.
-            </p>
-          </div>
-        </section>
-
         <section className="ml-land-close">
-          <h2>Use it on your next lesson.</h2>
+          <h2>Present your next lesson.</h2>
           <p>
             {trialDays} days free, no card. If you stop paying, nothing is deleted —
             your students, your boards and your links stay exactly where they are.
           </p>
           <button className="ml-land-cta is-light" onClick={() => navigate('/')}>
-            Teach your next lesson free
+            Start free
           </button>
           <span className="ml-land-by">
             Built and run by a maths tutor in India, who teaches on it every day.
