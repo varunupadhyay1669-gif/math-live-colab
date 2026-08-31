@@ -19,6 +19,7 @@ import { JSDOM } from 'jsdom';
 import { mirrorScriptFor, stripLessonScripts } from './src/lib/mirrorScript.ts';
 import { checkLesson } from './src/lib/lessonCheck.ts';
 import { parseDataUrl, externaliseBoardImages } from './src/server/boardImages.ts';
+import { accessFrom, TRIAL_DAYS } from './src/server/billing.ts';
 
 let passed = 0, failed = 0;
 const ok = (n) => { passed++; console.log(`  ✓ ${n}`); };
@@ -309,6 +310,48 @@ for (const [html, name, expect] of cases) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
+section('OFFLINE — who is allowed to teach');
+
+// Money logic, so the failure modes are: a paying teacher locked out (loses a
+// customer), or an expired one still teaching free (loses revenue). Both are
+// silent, which is why they are tested rather than eyeballed.
+const DAY = 86_400_000;
+const at = (d) => new Date(Date.now() + d * DAY);
+
+assert(accessFrom({ trial_started_at: at(0), paid_until: null }).state === 'trial',
+  'a teacher who just signed up is on trial');
+
+assert(accessFrom({ trial_started_at: at(0), paid_until: null }).daysLeft === TRIAL_DAYS,
+  `a fresh trial has all ${TRIAL_DAYS} days`);
+
+assert(accessFrom({ trial_started_at: at(-(TRIAL_DAYS - 1)), paid_until: null }).state === 'trial',
+  'the last day of the trial still counts as trial');
+
+assert(accessFrom({ trial_started_at: at(-(TRIAL_DAYS + 1)), paid_until: null }).state === 'expired',
+  'the day after the trial ends, teaching stops');
+
+assert(accessFrom({ trial_started_at: at(-90), paid_until: at(20) }).state === 'active',
+  'a paid teacher whose trial ended long ago can teach');
+
+assert(accessFrom({ trial_started_at: at(-90), paid_until: at(-1) }).state === 'expired',
+  'a subscription that lapsed yesterday is expired');
+
+// Paying during the trial must not shorten anything. If paid_until were
+// allowed to win while EARLIER than the trial end, paying early would cost
+// days — the exact bug that makes people stop paying early.
+const early = accessFrom({ trial_started_at: at(0), paid_until: at(2) });
+assert(early.state !== 'expired' && early.daysLeft >= TRIAL_DAYS - 1,
+  'paying early never costs a teacher days they already had',
+  JSON.stringify(early));
+
+// Fail CLOSED here, unlike the runtime checks which fail open: a row with no
+// trial date is a data bug, and the safe reading of "unknown" is "not paid".
+assert(accessFrom({ trial_started_at: null, paid_until: null }).state === 'expired',
+  'a teacher with no trial date on record is not silently granted access');
+
+assert(accessFrom(null).state === 'expired',
+  'a missing row is not access');
+
 // LIVE — the protocol, against a running server.
 // ─────────────────────────────────────────────────────────────────────────
 const PORT = process.env.PORT;

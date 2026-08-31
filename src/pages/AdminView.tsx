@@ -5,6 +5,7 @@ import {
   AdminNotInstalled, type TutorUsage, type StudentUsage, type AdminAccess,
 } from '../lib/admin';
 import { humanTeachingTime } from '../lib/teachingTime';
+import { listClaims, confirmClaim, rejectClaim, type ClaimRow } from '../lib/billing';
 
 // MathsLive Admin — who is using the platform.
 //
@@ -16,7 +17,7 @@ import { humanTeachingTime } from '../lib/teachingTime';
 // control is in Postgres (migration 004): the RPCs behind this refuse anyone
 // not listed in platform_admins, so calling them by hand gets you nothing.
 
-type Tab = 'tutors' | 'students';
+type Tab = 'tutors' | 'students' | 'payments';
 
 export default function AdminView() {
   const auth = useAuth();
@@ -28,6 +29,8 @@ export default function AdminView() {
   const [busy, setBusy] = useState(false);
   const [email, setEmail] = useState('');
   const [sent, setSent] = useState(false);
+  const [claims, setClaims] = useState<ClaimRow[]>([]);
+  const [claimBusy, setClaimBusy] = useState<string | null>(null);
 
   useEffect(() => {
     if (auth.loading) return;
@@ -52,6 +55,23 @@ export default function AdminView() {
   }, []);
 
   useEffect(() => { if (access === 'admin') void load(); }, [access, load]);
+
+  const loadClaims = useCallback(async () => {
+    try { setClaims((await listClaims()).claims); }
+    catch { /* the rest of admin still works without this */ }
+  }, []);
+  useEffect(() => { if (access === 'admin') void loadClaims(); }, [access, loadClaims]);
+
+  const decide = async (id: string, yes: boolean) => {
+    setClaimBusy(id);
+    setError(null);
+    try {
+      if (yes) await confirmClaim(id); else await rejectClaim(id);
+      await loadClaims();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not update that payment.');
+    } finally { setClaimBusy(null); }
+  };
 
   // ── Not signed in ──
   if (auth.loading || access === null) {
@@ -140,6 +160,7 @@ export default function AdminView() {
   const totalLessons = tutors.reduce((n, t) => n + Number(t.lessons || 0), 0);
   const totalTaught = tutors.reduce((n, t) => n + Number(t.taught_seconds || 0), 0);
   const activeThisWeek = tutors.filter(t => activityStatus(t.last_signed_in) === 'active this week').length;
+  const openClaims = claims.filter(c => !c.confirmed_at && !c.rejected_at).length;
 
   return (
     <Shell wide>
@@ -154,6 +175,9 @@ export default function AdminView() {
       <div className="ml-admin-tabs">
         <button className={tab === 'tutors' ? 'is-on' : ''} onClick={() => setTab('tutors')}>Tutors</button>
         <button className={tab === 'students' ? 'is-on' : ''} onClick={() => setTab('students')}>Students</button>
+        <button className={tab === 'payments' ? 'is-on' : ''} onClick={() => setTab('payments')}>
+          Payments{openClaims > 0 ? ` (${openClaims})` : ''}
+        </button>
         <div style={{ flex: 1 }} />
         <button className="ml-admin-btn" onClick={() => void load()} disabled={busy}>
           {busy ? 'Loading…' : 'Refresh'}
@@ -195,7 +219,7 @@ export default function AdminView() {
             </tbody>
           </table>
         </div>
-      ) : (
+      ) : tab === 'students' ? (
         <div className="ml-admin-table-wrap">
           <table className="ml-admin-table">
             <thead>
@@ -218,6 +242,58 @@ export default function AdminView() {
               )}
             </tbody>
           </table>
+        </div>
+      ) : null}
+
+      {tab === 'payments' && (
+        <div className="ml-claims">
+          {claims.length === 0 && (
+            <p className="ml-admin-muted">No payments yet.</p>
+          )}
+          {claims.map(c => {
+            const open = !c.confirmed_at && !c.rejected_at;
+            return (
+              <div key={c.id} className={`ml-claim${open ? ' ml-claim-open' : ''}`}>
+                <div className="ml-claim-main">
+                  <span className="ml-claim-who">{c.teacher_email}</span>
+                  <span className="ml-claim-meta">
+                    &#8377;{c.amount_rupees} &middot; {c.months} month{c.months === 1 ? '' : 's'}
+                    {' '}&middot; ref {c.reference || '—'}
+                    {' '}&middot; {new Date(c.claimed_at).toLocaleString()}
+                  </span>
+                  {c.note && <span className="ml-admin-muted">{c.note}</span>}
+                </div>
+                {open ? (
+                  <>
+                    <button
+                      className="ml-admin-btn"
+                      disabled={claimBusy === c.id}
+                      onClick={() => void decide(c.id, true)}
+                    >
+                      {claimBusy === c.id ? 'Working…' : 'Confirm'}
+                    </button>
+                    <button
+                      className="ml-admin-btn"
+                      disabled={claimBusy === c.id}
+                      onClick={() => void decide(c.id, false)}
+                    >
+                      Reject
+                    </button>
+                  </>
+                ) : (
+                  <span className="ml-claim-done">
+                    {c.confirmed_at
+                      ? `Confirmed ✓ — paid until ${c.paid_until ? new Date(c.paid_until).toLocaleDateString() : '—'}`
+                      : 'Rejected'}
+                  </span>
+                )}
+              </div>
+            );
+          })}
+          <p className="ml-admin-note">
+            Confirming adds the months to that teacher&rsquo;s account, counting from whichever
+            is later — today, or the date they already had. Paying early never costs them days.
+          </p>
         </div>
       )}
 

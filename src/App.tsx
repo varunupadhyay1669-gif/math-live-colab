@@ -27,6 +27,7 @@ const Dashboard = lazy(() => import('./pages/Dashboard'));
 const StudentDashboard = lazy(() => import('./pages/StudentDashboard'));
 const ReplayView = lazy(() => import('./pages/ReplayView'));
 const DeployView = lazy(() => import('./pages/DeployView'));
+const Billing = lazy(() => import('./pages/Billing'));
 
 // Tiny fallback while the route chunk loads. Matches the home page
 // background colour so there's no flash of wrong-colour content. The
@@ -107,6 +108,8 @@ export default function App() {
             <Routes>
               <Route path="/" element={<Home />} />
               <Route path="/dashboard" element={<Dashboard />} />
+              {/* Trial status, the payment QR, and "I have paid" */}
+              <Route path="/billing" element={<Billing />} />
               {/* One student: profile, goals, and their lesson history */}
               <Route path="/student-dashboard/:roomCode" element={<StudentDashboard />} />
               <Route path="/room/:roomId" element={<Room />} />

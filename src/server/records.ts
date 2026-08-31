@@ -12,6 +12,7 @@ import type { Request, Response } from 'express';
 import { randomBytes } from 'crypto';
 import type { Pool } from 'pg';
 import { userFromRequest, type SessionUser } from './identity';
+import { accessForTeacher } from './billing';
 
 function id(prefix: string): string {
   return `${prefix}_${randomBytes(9).toString('base64').replace(/[^a-zA-Z0-9]/g, '').slice(0, 12)}`;
@@ -60,6 +61,17 @@ export function mountRecordRoutes(app: any, pool: Pool, opts: { secret: string }
     const studentName = String(body.studentName || '').trim().slice(0, 80);
     if (!studentName) return res.status(400).json({ error: 'A student name is required.' });
     try {
+      // Adding students is a paid action; reading the ones you already have is
+      // not. An expired teacher can still see their roster and pay — locking
+      // them out of their own list would just make it harder to become a
+      // customer again.
+      const access = await accessForTeacher(pool, user.id);
+      if (access.state === 'expired') {
+        return res.status(402).json({
+          error: 'Your free trial has ended. Subscribe to add more students.',
+          code: 'subscription_expired',
+        });
+      }
       // Prefer the student's own name as the room code — a child can type it
       // from memory. Only fall back to a suffix when it is genuinely taken.
       const base = slug(studentName) || 'class';

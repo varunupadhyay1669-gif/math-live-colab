@@ -12,6 +12,7 @@ const { Pool } = pg;
 import { IDENTITY_SCHEMA_SQL, mountAuthRoutes, userFromCookieHeader } from './src/server/identity';
 import { mountRecordRoutes } from './src/server/records';
 import { BOARD_IMAGE_SCHEMA_SQL, mountBoardImageRoutes, externaliseBoardImages } from './src/server/boardImages';
+import { BILLING_SCHEMA_SQL, mountBillingRoutes, accessForTeacher } from './src/server/billing';
 
 interface FileEntry {
   id: string;
@@ -787,7 +788,9 @@ async function startServer() {
   // trade worth making.
   // The identity tables ride the SAME idempotent boot DDL as the rest, so
   // replacing Supabase adds no migration step anyone has to remember.
-  const SCHEMA_SQL = IDENTITY_SCHEMA_SQL + BOARD_IMAGE_SCHEMA_SQL + `
+  // Billing comes after identity because it ALTERs users, and these run in
+  // order as one statement batch.
+  const SCHEMA_SQL = IDENTITY_SCHEMA_SQL + BOARD_IMAGE_SCHEMA_SQL + BILLING_SCHEMA_SQL + `
     -- The durable copy of a live class. One JSON document per room, which is
     -- the shape the server already used; what Postgres adds is surviving a
     -- redeploy. Rooms used to live on the container filesystem, so every deploy
@@ -1800,6 +1803,35 @@ async function startServer() {
         if (decision === 'reject') {
           socket.emit('join_error', { code: 'not_owner', retryable: false, message: 'This class belongs to another teacher. Please sign in as the owner.' });
           return;
+        }
+      }
+
+      // ── Subscription gate ──
+      // A signed-in teacher whose free trial has ended, and who has not paid,
+      // cannot take the teacher seat. Two things this deliberately does NOT do:
+      //
+      //   * It never runs for students. A child must never be locked out of a
+      //     lesson because the adult's card expired.
+      //   * It never interrupts a lesson already in progress — it is checked
+      //     when taking the seat, not on a timer.
+      if (role === 'teacher' && appPool && sessionSecret) {
+        const who = userFromCookieHeader(socket.handshake.headers.cookie, sessionSecret);
+        if (who) {
+          try {
+            const access = await accessForTeacher(appPool, who.id);
+            if (access.state === 'expired') {
+              socket.emit('join_error', {
+                code: 'subscription_expired',
+                retryable: false,
+                message: 'Your free trial has ended. Subscribe to keep teaching.',
+              });
+              return;
+            }
+          } catch (err) {
+            // Fail OPEN, for the same reason ownership does: a database hiccup
+            // must not cancel a lesson with a child already waiting.
+            console.error(`Subscription check failed for ${who.email} (failing open):`, (err as Error).message);
+          }
         }
       }
 
@@ -4386,6 +4418,7 @@ Build a widget that teaches: ${safePrompt}`;
     });
     mountRecordRoutes(app, appPool, { secret: sessionSecret });
     mountBoardImageRoutes(app, appPool);
+    mountBillingRoutes(app, appPool, { secret: sessionSecret });
     console.log('\ud83d\udd11 Teacher accounts: this server\u2019s own database');
     console.log('\ud83d\udd12 Teacher ownership enforcement: ON (registered classes are owner-only)');
   } else {

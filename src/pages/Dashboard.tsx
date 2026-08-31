@@ -5,6 +5,8 @@ import { listClasses, createClass, deleteClass, touchClass, type ClassRow } from
 import { filterStudents } from "../lib/studentSearch";
 import { cleanDisplayName } from "../lib/displayName";
 import { avatarFor, profileFrom } from "../lib/studentProfile";
+import { getBillingStatus, describe, type BillingStatus } from "../lib/billing";
+import { lastTaught } from "../lib/lastTaught";
 
 // Teacher hub: a private list of classes (one per student) with permanent
 // links, plus create / open / delete. Only reachable when auth is enabled and
@@ -25,12 +27,21 @@ export default function Dashboard() {
   // back to a loose contains — then Enter opens the top hit. With more than a
   // handful of students, typing beats scanning a list every time.
   const [query, setQuery] = useState("");
+  // Trial / subscription banner. Deliberately non-blocking: if this call
+  // fails the dashboard still works, because being unable to READ your
+  // billing state is not a reason to be locked out of your own roster.
+  const [billing, setBilling] = useState<BillingStatus | null>(null);
 
   // Guard: no auth / not signed in → home.
   useEffect(() => {
     if (auth.loading) return;
     if (!auth.enabled || !auth.user) navigate("/", { replace: true });
   }, [auth.enabled, auth.user, auth.loading, navigate]);
+
+  useEffect(() => {
+    if (!auth.user) return;
+    getBillingStatus().then(setBilling).catch(() => setBilling(null));
+  }, [auth.user]);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -152,6 +163,25 @@ export default function Dashboard() {
         <div className="ml-dark-center">
           <h1 className="ml-dark-headline">Your classes</h1>
 
+          {/* Trial / subscription. Shown for everything except a healthy paid
+              account, where saying nothing is the kinder design. */}
+          {billing && billing.state !== "active" && (
+            <div className={`ml-bill-banner ml-bill-banner-${billing.state}`}>
+              <span className="ml-bill-banner-text">
+                <strong>{describe(billing)}</strong>
+                {billing.state === "expired"
+                  ? " — your classes are safe, but you need to subscribe to keep teaching."
+                  : ` — ₹${billing.priceRupees}/month after that.`}
+              </span>
+              <button
+                className="ml-dark-btn ml-dark-btn-primary ml-bill-banner-cta"
+                onClick={() => navigate("/billing")}
+              >
+                {billing.state === "expired" ? "Subscribe" : "Subscribe now"}
+              </button>
+            </div>
+          )}
+
           {/* Create a class for a student */}
           <div className="ml-dark-form" style={{ marginBottom: 20 }}>
             <input
@@ -242,6 +272,14 @@ export default function Dashboard() {
                           <span className="ml-dash-card-name">{row.student_name}</span>
                           {row.label && <span className="ml-dash-card-label">{row.label}</span>}
                           <span className="ml-dash-card-code">/live/{row.room_code}</span>
+                          {(() => {
+                            const lt = lastTaught(row.last_opened_at);
+                            return (
+                              <span className={`ml-dash-card-when${lt.stale ? " is-stale" : ""}`}>
+                                {lt.text}
+                              </span>
+                            );
+                          })()}
                         </button>
                         <div className="ml-dash-card-actions">
                           <button onClick={() => handleOpen(row)} title={`Go straight into ${row.student_name}'s room`}>
