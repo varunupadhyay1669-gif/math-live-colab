@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { SEED_LESSONS } from '../lib/seedLessons';
 
 interface FileEntry {
   id: string;
@@ -13,7 +14,23 @@ interface LibraryItem {
   html: string;
   topic: string;
   savedAt: number;
+  /** Ships with the app. Cannot be deleted; a teacher saves their own copy. */
+  builtin?: boolean;
+  blurb?: string;
 }
+
+/**
+ * The lessons that come with the product, shaped like saved ones.
+ *
+ * A library that opens empty is why a trial ends after one lesson: the tutor
+ * has to build the product's value before they can judge it. These sit at the
+ * top, are never deletable, and are otherwise ordinary items — loading one is
+ * the same click as loading your own.
+ */
+const BUILTIN: LibraryItem[] = SEED_LESSONS.map(l => ({
+  id: l.id, name: l.name, html: l.html, topic: l.topic,
+  savedAt: 0, builtin: true, blurb: l.blurb,
+}));
 
 const TOPICS = ['Algebra', 'Geometry', 'Calculus', 'Fractions', 'Probability', 'Trigonometry', 'Statistics', 'Other'];
 const STORAGE_KEY = 'mathslive_simulation_library';
@@ -67,14 +84,18 @@ export default function SimulationLibrary({ isOpen, onClose, onLoad, currentHtml
 
   if (!isOpen) return null;
 
-  const filtered = items.filter(item => {
+  // A teacher's own saved work first, then the shipped set — theirs is the
+  // reason they opened this, ours is the reason there is anything here at all.
+  const all: LibraryItem[] = [...items, ...BUILTIN.filter(b => !items.some(i => i.id === b.id))];
+
+  const filtered = all.filter(item => {
     if (selectedTopic && item.topic !== selectedTopic) return false;
     if (searchQuery && !item.name.toLowerCase().includes(searchQuery.toLowerCase())) return false;
     return true;
   });
 
   const topicCounts = TOPICS.reduce((acc, topic) => {
-    acc[topic] = items.filter(i => i.topic === topic).length;
+    acc[topic] = all.filter(i => i.topic === topic).length;
     return acc;
   }, {} as Record<string, number>);
 
@@ -92,7 +113,9 @@ export default function SimulationLibrary({ isOpen, onClose, onLoad, currentHtml
           style={{ borderBottom: '1px solid var(--border-subtle)' }}>
           <div>
             <h2 className="font-display text-lg font-bold" style={{ color: 'var(--text-primary)' }}>📚 Simulation Library</h2>
-            <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>{items.length} saved simulations</p>
+            <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
+              {all.length} to run{items.length > 0 ? ` · ${items.length} yours` : ''}
+            </p>
           </div>
           <button onClick={onClose}
             style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '20px' }}>✕</button>
@@ -163,12 +186,17 @@ export default function SimulationLibrary({ isOpen, onClose, onLoad, currentHtml
               style={{ background: 'var(--bg-surface)', border: '1px solid var(--border-subtle)' }}>
               <div className="flex-1 min-w-0">
                 <div className="text-sm font-semibold truncate" style={{ color: 'var(--text-primary)' }}>{item.name}</div>
-                <div className="flex items-center gap-2 mt-0.5">
+                {item.blurb && (
+                  <div className="text-[11px] mt-0.5" style={{ color: 'var(--text-secondary)', lineHeight: 1.45 }}>
+                    {item.blurb}
+                  </div>
+                )}
+                <div className="flex items-center gap-2 mt-1">
                   <span className="badge text-[9px]" style={{ background: 'var(--accent-indigo-light)', color: 'var(--accent-indigo)' }}>
                     {item.topic}
                   </span>
                   <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
-                    {new Date(item.savedAt).toLocaleDateString()}
+                    {item.builtin ? 'included' : new Date(item.savedAt).toLocaleDateString()}
                   </span>
                 </div>
               </div>
@@ -176,11 +204,16 @@ export default function SimulationLibrary({ isOpen, onClose, onLoad, currentHtml
                 className="btn-primary text-[11px]" style={{ padding: '5px 12px' }}>
                 Load
               </button>
-              <button onClick={() => handleDelete(item.id)}
-                className="opacity-0 group-hover:opacity-100 transition-opacity"
-                style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '14px' }}>
-                🗑
-              </button>
+              {/* Built-ins have no delete: a teacher who cleared the shipped set
+                  by accident would be back to the empty shelf this exists to
+                  fix, with no way to get it back. */}
+              {!item.builtin && (
+                <button onClick={() => handleDelete(item.id)}
+                  className="opacity-0 group-hover:opacity-100 transition-opacity"
+                  style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '14px' }}>
+                  🗑
+                </button>
+              )}
             </div>
           ))}
         </div>

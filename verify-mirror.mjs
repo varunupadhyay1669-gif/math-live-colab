@@ -21,6 +21,7 @@ import { checkLesson } from './src/lib/lessonCheck.ts';
 import { parseDataUrl, externaliseBoardImages } from './src/server/boardImages.ts';
 import { accessFrom, TRIAL_DAYS, PRICE_RUPEES, GRACE_DAYS, PLANS, priceFor, perMonth } from './src/server/billing.ts';
 import { _warningFor } from './src/server/scheduler.ts';
+import { SEED_LESSONS } from './src/lib/seedLessons.ts';
 import QRCode from 'qrcode';
 import jsQR from 'jsqr';
 import { PNG } from 'pngjs';
@@ -442,6 +443,57 @@ section('OFFLINE — the demo has a clock, real lessons do not');
   assert(!expired(DEMO_MS, DEMO_MS - 1), 'a demo inside its clock keeps teaching');
   assert(!expired(null, Number.MAX_SAFE_INTEGER),
     'a lesson with no clock never expires, however long it runs');
+}
+
+section('OFFLINE — the lessons that ship actually run');
+
+// These are the first thing a new teacher opens, and they open them in front
+// of a child. A lesson that throws on load is worse than an empty library: the
+// empty shelf is embarrassing, a broken one is a lesson that stops.
+//
+// So each is executed for real, the same way the lesson frame does, and checked
+// for the three ways one can be useless: it throws, it renders nothing, or it
+// renders but there is nothing to touch.
+for (const lesson of SEED_LESSONS) {
+  const errors = [];
+  let dom = null;
+  try {
+    dom = new JSDOM(lesson.html, { runScripts: 'dangerously', pretendToBeVisual: true });
+  } catch (err) {
+    errors.push(err.message);
+  }
+
+  assert(errors.length === 0, lesson.id + ' loads without throwing', errors.join(' | '));
+  if (!dom) continue;
+
+  const d = dom.window.document;
+  const text = (d.body.textContent || '').replace(/\s+/g, ' ').trim();
+  assert(text.length > 20, lesson.id + ' renders something', 'only ' + text.length + ' chars');
+  assert(!!d.querySelector('h1'), lesson.id + ' says what it is');
+
+  // Touchable, not merely animated: if the student cannot change it, a video
+  // would have done the job.
+  const controls = d.querySelectorAll('button').length + d.querySelectorAll('svg').length;
+  assert(controls > 0, lesson.id + ' has something to touch', controls + ' controls');
+
+  // Tablet-sized. The floor lives in the shared shell so no lesson can forget.
+  assert(/min-height:46px/.test(lesson.html),
+    lesson.id + ' keeps buttons big enough for a finger');
+
+  assert(!/lorem|TODO|FIXME|placeholder/i.test(lesson.html),
+    lesson.id + ' carries no placeholder text');
+
+  dom.window.close();
+}
+
+// A set, not a demo — and every entry says what the student actually does.
+{
+  const topics = new Set(SEED_LESSONS.map(l => l.topic));
+  assert(topics.size >= 3, 'the shipped set spans several topics (' + [...topics].join(', ') + ')');
+  assert(SEED_LESSONS.every(l => l.blurb && l.blurb.length > 20),
+    'every shipped lesson says what the student actually does');
+  assert(new Set(SEED_LESSONS.map(l => l.id)).size === SEED_LESSONS.length,
+    'shipped lesson ids are unique');
 }
 
 section('OFFLINE — what the plans cost');
