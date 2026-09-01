@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import ConvenientOrderDemo from '../components/ConvenientOrderDemo';
 import BothSides from '../components/BothSides';
+import LessonTaster from '../components/LessonTaster';
 import { getPublicPricing, type PublicPricing } from '../lib/billing';
 
 // The page that has to convince a tutor in about fifteen seconds.
@@ -80,6 +81,17 @@ export default function Landing() {
             which they can work on too.
           </p>
           <BothSides />
+        </section>
+
+        {/* The lessons themselves, running. A visitor should not have to sign
+            up to find out what the product is. */}
+        <section className="ml-land-sec">
+          <h2 className="ml-land-h2">Six of these come with it</h2>
+          <p className="ml-land-sub">
+            Not screenshots — the lessons themselves, running here. Pick one and use it
+            the way your student would.
+          </p>
+          <LessonTaster />
         </section>
 
         {/* The order a tutor meets these in: make it, present it, they use it. */}
