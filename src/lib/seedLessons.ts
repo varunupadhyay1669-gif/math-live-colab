@@ -34,12 +34,12 @@ const shell = (title: string, hint: string, body: string, script: string) => `<!
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <style>
   *{box-sizing:border-box}
-  body{margin:0;padding:20px;font-family:system-ui,-apple-system,'Segoe UI',sans-serif;
+  body{margin:0;padding:16px;font-family:system-ui,-apple-system,'Segoe UI',sans-serif;
        background:#F7F8FB;color:#12203A;display:flex;flex-direction:column;gap:14px;
-       align-items:center;min-height:100vh}
+       align-items:center}
   h1{margin:0;font-size:21px;font-weight:700;letter-spacing:-0.01em;text-align:center}
   .hint{margin:0;font-size:14px;color:#5C6883;text-align:center;max-width:46ch}
-  .stage{background:#fff;border:1px solid #DCE1EC;border-radius:14px;padding:18px;
+  .stage{background:#fff;border:1px solid #DCE1EC;border-radius:14px;padding:16px;
          width:100%;max-width:620px;box-shadow:0 10px 28px -22px rgba(18,32,58,.5)}
   .read{font-size:22px;font-weight:700;text-align:center;margin:12px 0 0;
         font-variant-numeric:tabular-nums}

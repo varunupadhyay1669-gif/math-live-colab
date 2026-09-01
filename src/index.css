@@ -4725,10 +4725,13 @@ html, body, #root { background: var(--bg-primary); }
 }
 .ml-taste-blurb { margin: 0; font-size: 13.5px; line-height: 1.5; color: #5C6883; }
 .ml-taste-frame {
-  width: 100%; height: 520px; border: 1px solid rgba(15,30,51,.10);
+  /* Tall enough that the reading line at the bottom of a lesson — the answer,
+     the payoff — is never the bit that gets clipped. The fraction wall is the
+     tallest of the set and sets the floor. */
+  width: 100%; height: 620px; border: 1px solid rgba(15,30,51,.10);
   border-radius: 11px; background: #F7F8FB; display: block;
 }
 @media (max-width: 640px) {
-  .ml-taste-frame { height: 560px; }
+  .ml-taste-frame { height: 640px; }
   .ml-taste-tab { flex: 1; min-width: 140px; }
 }
