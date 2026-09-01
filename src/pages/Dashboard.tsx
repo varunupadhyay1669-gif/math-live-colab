@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../lib/auth";
-import { listClasses, createClass, deleteClass, touchClass, type ClassRow } from "../lib/classes";
+import { listClasses, createClass, deleteClass, touchClass, listWaiting, type ClassRow, type WaitingRoom } from "../lib/classes";
 import { filterStudents } from "../lib/studentSearch";
 import { cleanDisplayName } from "../lib/displayName";
 import { avatarFor, profileFrom } from "../lib/studentProfile";
@@ -31,6 +31,8 @@ export default function Dashboard() {
   // fails the dashboard still works, because being unable to READ your
   // billing state is not a reason to be locked out of your own roster.
   const [billing, setBilling] = useState<BillingStatus | null>(null);
+  // Students sitting in one of this teacher's rooms with nobody teaching them.
+  const [waiting, setWaiting] = useState<WaitingRoom[]>([]);
 
   // Guard: no auth / not signed in → home.
   useEffect(() => {
@@ -41,6 +43,22 @@ export default function Dashboard() {
   useEffect(() => {
     if (!auth.user) return;
     getBillingStatus().then(setBilling).catch(() => setBilling(null));
+  }, [auth.user]);
+
+  // A student who taps their link early sits in an empty room, and the tutor
+  // finds out only by opening it. Ten seconds is the difference between "she
+  // waited a moment" and "she gave up".
+  useEffect(() => {
+    if (!auth.user) return;
+    let stop = false;
+    const check = () => {
+      listWaiting()
+        .then(r => { if (!stop) setWaiting(r.waiting); })
+        .catch(() => { /* the roster still works without this */ });
+    };
+    check();
+    const t = setInterval(check, 10_000);
+    return () => { stop = true; clearInterval(t); };
   }, [auth.user]);
 
   const refresh = useCallback(async () => {
@@ -162,6 +180,28 @@ export default function Dashboard() {
 
         <div className="ml-dark-center">
           <h1 className="ml-dark-headline">Your classes</h1>
+
+          {waiting.length > 0 && (
+            <div className="ml-waiting" role="status">
+              {waiting.map(w => (
+                <button
+                  key={w.roomCode}
+                  className="ml-waiting-row"
+                  onClick={() => navigate(`/room/${w.roomCode}?name=${encodeURIComponent(teacherName)}`)}
+                >
+                  <span className="ml-waiting-dot" aria-hidden="true" />
+                  <span className="ml-waiting-text">
+                    <strong>{w.studentName} is waiting for you</strong>
+                    <span>
+                      in /live/{w.roomCode}
+                      {w.waitingNames.length > 1 ? ` · ${w.waitingNames.length} people in the room` : ''}
+                    </span>
+                  </span>
+                  <span className="ml-waiting-go">Join now</span>
+                </button>
+              ))}
+            </div>
+          )}
 
           {/* Trial / subscription. Shown for everything except a healthy paid
               account, where saying nothing is the kinder design. */}

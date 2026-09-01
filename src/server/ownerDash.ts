@@ -26,6 +26,11 @@ export interface LiveRoom {
   roomId: string;
   teacher: string | null;
   students: string[];
+  /** Stable per-browser ids. A name is typed; this identifies the machine. */
+  teacherDevice: string | null;
+  studentDevices: string[];
+  /** Students present with nobody in the teacher seat. */
+  waiting: boolean;
   startedAt: number;
   lastActivityAt: number;
   paused: boolean;
@@ -35,6 +40,14 @@ export interface OwnerDashOptions {
   secret: string;
   /** Snapshot of the in-memory rooms. Lives in server.ts, so it is passed in. */
   liveRooms: () => LiveRoom[];
+}
+
+/** What a teacher is told is happening in their own rooms. */
+export interface WaitingRoom {
+  roomCode: string;
+  studentName: string;
+  waitingNames: string[];
+  waitingSince: number;
 }
 
 export function mountOwnerDashRoutes(app: any, pool: Pool, opts: OwnerDashOptions) {
@@ -171,6 +184,44 @@ export function mountOwnerDashRoutes(app: any, pool: Pool, opts: OwnerDashOption
       );
       res.json({ renewals: r.rows, trialDays: TRIAL_DAYS, graceDays: GRACE_DAYS });
     } catch (err) { fail(res, err, 'read the renewals calendar'); }
+  });
+
+  // ── Is anyone waiting for ME? ────────────────────────────────────────────
+  //
+  // A student who taps their link early sits in an empty room, and the tutor
+  // has no way to know unless they happen to open it. That is a lesson that
+  // starts late or not at all, and it is invisible to everyone who could fix
+  // it. This is the one teacher-facing read on this file, and it is
+  // deliberately scoped to the caller's own classes — a teacher can never see
+  // who is waiting in someone else's room.
+  app.get('/api/waiting', async (req: Request, res: Response) => {
+    const user = requireUser(req, res);
+    if (!user) return;
+    try {
+      const live = liveRooms().filter(r => r.waiting);
+      if (live.length === 0) return res.json({ waiting: [] });
+
+      // Only rooms that are this teacher's registered classes. An ad-hoc room
+      // belongs to nobody, so nobody is told about it.
+      const mine = await pool.query(
+        `SELECT room_code, student_name FROM classes
+          WHERE teacher_id = $1 AND room_code = ANY($2::text[])`,
+        [user.id, live.map(r => r.roomId)],
+      );
+      const byCode = new Map<string, string>(
+        mine.rows.map((r: any) => [r.room_code, r.student_name]),
+      );
+
+      const waiting: WaitingRoom[] = live
+        .filter(r => byCode.has(r.roomId))
+        .map(r => ({
+          roomCode: r.roomId,
+          studentName: byCode.get(r.roomId)!,
+          waitingNames: r.students,
+          waitingSince: r.lastActivityAt,
+        }));
+      res.json({ waiting });
+    } catch (err) { fail(res, err, 'check who is waiting'); }
   });
 
   // ── Who is teaching right now ────────────────────────────────────────────

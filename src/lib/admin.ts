@@ -73,6 +73,11 @@ export interface LiveRoom {
   roomId: string;
   teacher: string | null;
   students: string[];
+  /** Stable per-browser ids — a name is typed, this identifies the machine. */
+  teacherDevice: string | null;
+  studentDevices: string[];
+  /** Students present with nobody in the teacher seat. */
+  waiting: boolean;
   startedAt: number;
   lastActivityAt: number;
   paused: boolean;

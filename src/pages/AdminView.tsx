@@ -365,8 +365,18 @@ export default function AdminView() {
                   /live/{r.roomId} · open {humanTeachingTime(Math.round((Date.now() - r.startedAt) / 1000))}
                   {r.paused && ' · paused'}
                 </span>
+                {/* The name is typed by whoever is sitting there; the device id
+                    is not. It answers the question a name cannot — is this the
+                    same machine as last time, and are these two the same one? */}
+                <span className="ml-claim-meta">
+                  device {r.teacherDevice ? r.teacherDevice.slice(0, 6) : '—'}
+                  {r.studentDevices.length > 0 &&
+                    ' · student ' + r.studentDevices.map(d => d.slice(0, 6)).join(', ')}
+                </span>
               </div>
-              <span className="ml-claim-done">{r.students.length} student{r.students.length === 1 ? '' : 's'}</span>
+              {r.waiting
+                ? <span className="ml-bill-pill b-pending">waiting for a teacher</span>
+                : <span className="ml-claim-done">{r.students.length} student{r.students.length === 1 ? '' : 's'}</span>}
             </div>
           ))}
           <p className="ml-admin-note">

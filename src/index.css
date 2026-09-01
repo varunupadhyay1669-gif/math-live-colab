@@ -4780,3 +4780,46 @@ html, body, #root { background: var(--bg-primary); }
   .ml-start-row { flex-direction: column; }
   .ml-start-go { width: 100%; }
 }
+
+/* ── "Someone is waiting for you" ─────────────────────────────────────────
+   The one thing on the dashboard that is time-critical. A student who tapped
+   their link early is sitting in an empty room, and every second of not
+   knowing is a lesson starting late. So it sits above the roster, it is the
+   only amber thing on the page, and the whole row is the button. */
+.ml-waiting {
+  width: min(1240px, 94vw); align-self: center;
+  display: flex; flex-direction: column; gap: 8px;
+}
+.ml-waiting-row {
+  display: flex; align-items: center; gap: 14px; width: 100%;
+  padding: 14px 18px; border-radius: 12px; cursor: pointer; font: inherit;
+  text-align: left; background: var(--bg-card);
+  border: 1px solid #c8860d; box-shadow: 0 0 0 3px rgba(200, 134, 13, .14);
+}
+.ml-waiting-row:hover { border-color: #a86f08; }
+.ml-waiting-dot {
+  width: 10px; height: 10px; border-radius: 50%; flex: none;
+  background: #e0a11a; box-shadow: 0 0 0 4px rgba(224, 161, 26, .22);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .ml-waiting-dot { animation: ml-wait-pulse 1.6s ease-in-out infinite; }
+  @keyframes ml-wait-pulse {
+    0%, 100% { box-shadow: 0 0 0 4px rgba(224, 161, 26, .22); }
+    50%      { box-shadow: 0 0 0 8px rgba(224, 161, 26, .06); }
+  }
+}
+.ml-waiting-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.ml-waiting-text strong { font-size: 15px; color: var(--text-primary); }
+.ml-waiting-text span {
+  font-size: 12.5px; color: var(--text-muted);
+  font-family: 'JetBrains Mono', monospace;
+}
+.ml-waiting-go {
+  flex: none; padding: 9px 16px; border-radius: 9px;
+  background: var(--accent-indigo); color: #fff;
+  font-size: 13.5px; font-weight: 700;
+}
+@media (max-width: 560px) {
+  .ml-waiting-row { flex-wrap: wrap; }
+  .ml-waiting-go { width: 100%; text-align: center; }
+}

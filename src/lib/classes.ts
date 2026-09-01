@@ -92,3 +92,20 @@ export async function touchClass(roomCode: string): Promise<void> {
     await api.post(`/api/classes/by-code/${encodeURIComponent(roomCode)}/opened`);
   } catch { /* non-critical */ }
 }
+
+
+/** A student sitting in one of your rooms with nobody there to teach them. */
+export interface WaitingRoom {
+  roomCode: string;
+  studentName: string;
+  waitingNames: string[];
+  waitingSince: number;
+}
+
+/**
+ * Who is waiting for you right now.
+ *
+ * Scoped on the server to the signed-in teacher's own classes, so this can
+ * never report someone else's room.
+ */
+export const listWaiting = () => api.get<{ waiting: WaitingRoom[] }>('/api/waiting');

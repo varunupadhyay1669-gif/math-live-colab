@@ -27,7 +27,9 @@ interface RoomData {
   files: FileEntry[];
   activeFileId: string | null;
   lastRunHtml: string | null;
-  users: Map<string, { name: string; role: 'teacher' | 'student'; joinedAt: number; whiteboardSync: boolean; tz?: string }>;
+  users: Map<string, { name: string; role: 'teacher' | 'student'; joinedAt: number; whiteboardSync: boolean; tz?: string;
+    /** Stable per-browser id, so the owner can tell devices apart from names. */
+    clientId?: string }>;
   isPaused: boolean;
   teacherSocketId: string | null;
   /**
@@ -1737,7 +1739,7 @@ async function startServer() {
     });
 
     // ─── JOIN ROOM ───
-    socket.on('join_room', async ({ roomId, userName, role, password, authToken, tz }: { roomId: string; userName: string; role: 'teacher' | 'student'; password?: string; authToken?: string; tz?: string }) => {
+    socket.on('join_room', async ({ roomId, userName, role, password, authToken, tz, clientId }: { roomId: string; userName: string; role: 'teacher' | 'student'; password?: string; authToken?: string; tz?: string; clientId?: string }) => {
       // Validate inputs
       if (!isValidRoomId(roomId)) {
         socket.emit('join_error', { code: 'bad_room', retryable: false, message: 'Invalid room code' });
@@ -1964,7 +1966,8 @@ async function startServer() {
       }
 
       socket.join(roomId);
-      room.users.set(socket.id, { name: safeName, role, joinedAt: Date.now(), whiteboardSync: true, tz: safeTimezone(tz) });
+      room.users.set(socket.id, { name: safeName, role, joinedAt: Date.now(), whiteboardSync: true, tz: safeTimezone(tz),
+        clientId: typeof clientId === 'string' ? clientId.slice(0, 40).replace(/[^0-9a-f]/g, '') : undefined });
 
       // Any join (teacher OR student) means the room is active again — clear the
       // last-student-left expiry countdown so the sweep won't target a room
@@ -4504,12 +4507,23 @@ Build a widget that teaches: ${safePrompt}`;
           if (room.users.size === 0) continue;
           let teacher: string | null = null;
           const students: string[] = [];
+          let teacherDevice: string | null = null;
+          const studentDevices: string[] = [];
           for (const [socketId, u] of room.users) {
-            if (u.role === 'teacher' && socketId === room.teacherSocketId) teacher = u.name;
-            else if (u.role === 'student') students.push(u.name);
+            if (u.role === 'teacher' && socketId === room.teacherSocketId) {
+              teacher = u.name;
+              teacherDevice = u.clientId ?? null;
+            } else if (u.role === 'student') {
+              students.push(u.name);
+              if (u.clientId) studentDevices.push(u.clientId);
+            }
           }
           out.push({
             roomId, teacher, students,
+            teacherDevice, studentDevices,
+            // Students in the room with nobody in the teacher seat. This is the
+            // state that costs a lesson, so the owner should see it named.
+            waiting: students.length > 0 && !room.teacherSocketId,
             startedAt: room.createdAt,
             lastActivityAt: room.lastActivityAt,
             paused: room.isPaused,

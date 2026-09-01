@@ -28,6 +28,7 @@ import { closestQuestionBlock, optionIndexOf, readCorrectness, summariseInteract
 import type { PackEvent, PackSurface, PackExplainerOutline, PackInteractive } from "../lib/packSchema";
 import SessionPrompt from '../components/SessionPrompt';
 import { Narrator, narrationSupported, getNarrationChoice, setNarrationChoice } from "../lib/narration";
+import { clientId } from '../lib/clientId';
 import { localTimezone } from "../lib/tz";
 import { socketAuth, isPasscodeError, refusePasscode } from "../lib/passcode";
 import { getClassByRoomCode } from "../lib/classes";
@@ -886,7 +887,7 @@ export default function Room() {
       // already in the room we'll be allowed (same name) and that other
       // tab will receive a `teacher_replaced` notification.
       setTeacherReplaced(false);
-      newSocket.emit("join_room", { roomId, userName: teacherName, role: 'teacher', tz: localTimezone() });
+      newSocket.emit("join_room", { roomId, userName: teacherName, role: 'teacher', tz: localTimezone(), clientId: clientId() });
 
       // AUTONOMOUS: On a reconnect (NOT the initial connect), re-seed the
       // server with our cached HTML state. Render's free tier filesystem

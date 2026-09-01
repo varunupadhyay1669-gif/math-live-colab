@@ -5,6 +5,7 @@ import { mirrorScriptFor, stripLessonScripts } from "../lib/mirrorScript";
 import { cleanDisplayName } from "../lib/displayName";
 import { stepLockScript } from "../lib/stepLockScript";
 import { setupAttentionDetection } from "../lib/attentionDetector";
+import { clientId } from '../lib/clientId';
 import { localTimezone } from "../lib/tz";
 import { socketAuth, isPasscodeError, refusePasscode, apiFetch } from "../lib/passcode";
 import { ScreenPeer, screenShareSupported, displayCaptureOptions } from "../lib/screenShare";
@@ -205,7 +206,7 @@ export default function StudentView() {
     if (!waitingForRoom || !socket || !connected) return;
     const id = setInterval(() => {
       setJoinAttempts(n => n + 1);
-      socket.emit('join_room', { roomId, userName: studentName, role: 'student', tz: localTimezone() });
+      socket.emit('join_room', { roomId, userName: studentName, role: 'student', tz: localTimezone(), clientId: clientId() });
     }, 3000);
     return () => clearInterval(id);
   }, [waitingForRoom, socket, connected, roomId, studentName]);
@@ -679,7 +680,7 @@ export default function StudentView() {
       // highest serverSeq THIS SIM INSTANCE has applied — that's what lets a
       // reconnect replay exactly the missed gap and nothing twice. It resets
       // only when the iframe genuinely rebuilds (new sim instance).
-      newSocket.emit("join_room", { roomId, userName: studentName, role: 'student', tz: localTimezone() });
+      newSocket.emit("join_room", { roomId, userName: studentName, role: 'student', tz: localTimezone(), clientId: clientId() });
       // Start attention detection
       cleanupAttention = setupAttentionDetection(newSocket, roomId, studentName);
     });
@@ -713,7 +714,7 @@ export default function StudentView() {
       setConnected(true);
       lastRevisionRef.current = 0;
       // lastInboundSeqRef intentionally kept — see the connect handler.
-      newSocket.emit("join_room", { roomId, userName: studentName, role: 'student', tz: localTimezone() });
+      newSocket.emit("join_room", { roomId, userName: studentName, role: 'student', tz: localTimezone(), clientId: clientId() });
       showNotification("✅ Reconnected!");
     });
 
