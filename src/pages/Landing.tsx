@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import ConvenientOrderDemo from '../components/ConvenientOrderDemo';
 import BothSides from '../components/BothSides';
 import LessonTaster from '../components/LessonTaster';
+import StartFree from '../components/StartFree';
 import { getPublicPricing, type PublicPricing } from '../lib/billing';
 
 // The page that has to convince a tutor in about fifteen seconds.
@@ -53,12 +54,7 @@ export default function Landing() {
               animation, an interactive you built this morning, and it plays live in the
               lesson. Your student does not watch it. They reach in and move it themselves.
             </p>
-            <div className="ml-land-act">
-              <button className="ml-land-cta" onClick={() => navigate('/')}>
-                Present your next lesson free
-              </button>
-              <span className="ml-land-aside">{trialDays} days, no card</span>
-            </div>
+            <StartFree label="Start teaching free" />
             <p className="ml-land-price">
               Then <strong>₹{price} a month</strong> — about twenty minutes of one
               lesson's fee.
@@ -193,9 +189,7 @@ export default function Landing() {
             {trialDays} days free, no card. If you stop paying, nothing is deleted —
             your students, your boards and your links stay exactly where they are.
           </p>
-          <button className="ml-land-cta is-light" onClick={() => navigate('/')}>
-            Start free
-          </button>
+          <StartFree label="Start free" tone="light" />
           <span className="ml-land-by">
             Built and run by a maths tutor in India, who teaches on it every day.
             139 students set up since May. Payments by UPI, to a person.

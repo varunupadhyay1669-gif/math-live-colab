@@ -4735,3 +4735,48 @@ html, body, #root { background: var(--bg-primary); }
   .ml-taste-frame { height: 640px; }
   .ml-taste-tab { flex: 1; min-width: 140px; }
 }
+
+/* ── Start the trial from the page itself ─────────────────────────────────
+   Every step between deciding and starting is a place to stop deciding, so
+   the page asks for the one thing it needs and nothing else. */
+.ml-start { display: flex; flex-direction: column; gap: 8px; width: 100%; max-width: 460px; }
+.ml-start-row { display: flex; gap: 8px; }
+.ml-start-input {
+  flex: 1; min-width: 0; font: inherit; font-size: 15.5px;
+  padding: 14px 16px; border-radius: 10px; outline: none;
+  background: #fff; color: #0F1E33; border: 1px solid rgba(15,30,51,.20);
+}
+.ml-start-input::placeholder { color: #9AA3B6; }
+.ml-start-input:focus { border-color: #4F46E5; box-shadow: 0 0 0 3px rgba(79,70,229,.16); }
+.ml-start-go {
+  flex: none; border: 0; font: inherit; font-size: 15.5px; font-weight: 700;
+  padding: 14px 24px; border-radius: 10px; cursor: pointer;
+  background: #4F46E5; color: #fff;
+  box-shadow: 0 12px 28px -14px rgba(79,70,229,.75);
+}
+.ml-start-go:hover:not(:disabled) { background: #4338CA; }
+.ml-start-go:disabled { opacity: .6; cursor: progress; }
+.ml-start-note { font-size: 13px; line-height: 1.5; color: #6B7488; }
+.ml-start.is-sent {
+  padding: 16px 18px; border-radius: 12px;
+  background: #fff; border: 1px solid #4F46E5; gap: 4px;
+}
+.ml-start.is-sent strong { font-size: 15px; color: #0F1E33; }
+.ml-start.is-sent span { font-size: 13.5px; line-height: 1.55; color: #56607A; }
+
+/* On the dark closing panel the same form has to read against navy. */
+.ml-start.tone-light { align-items: stretch; }
+.ml-start.tone-light .ml-start-note { color: #A9B4C8; }
+.ml-start.tone-light .ml-start-go { background: #fff; color: #0F1E33; box-shadow: none; }
+.ml-start.tone-light .ml-start-go:hover:not(:disabled) { background: #E9EDF5; }
+.ml-start.tone-light .ml-start-input { border-color: rgba(255,255,255,.30); }
+.ml-start.tone-light.is-sent {
+  background: rgba(255,255,255,.08); border-color: rgba(255,255,255,.35);
+}
+.ml-start.tone-light.is-sent strong { color: #fff; }
+.ml-start.tone-light.is-sent span { color: #A9B4C8; }
+
+@media (max-width: 560px) {
+  .ml-start-row { flex-direction: column; }
+  .ml-start-go { width: 100%; }
+}
