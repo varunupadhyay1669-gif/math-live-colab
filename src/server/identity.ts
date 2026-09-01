@@ -86,6 +86,12 @@ export const IDENTITY_SCHEMA_SQL = `
 
   -- Who may read across every tutor. Deliberately a table rather than a flag on
   -- users: granting admin should be a visible, deliberate INSERT.
+  CREATE TABLE IF NOT EXISTS blocked_emails (
+    email      text PRIMARY KEY,
+    blocked_at timestamptz NOT NULL DEFAULT now(),
+    reason     text
+  );
+
   CREATE TABLE IF NOT EXISTS platform_admins (
     email      text PRIMARY KEY,
     created_at timestamptz NOT NULL DEFAULT now()
@@ -231,6 +237,16 @@ export function mountAuthRoutes(app: any, pool: Pool, opts: { secret: string; se
       return res.status(400).json({ error: 'Enter a valid email address.' });
     }
     try {
+      // Blocked for good. Refused here rather than at the callback so no link
+      // is ever created or emailed — and answered with the same shape a normal
+      // request gets, because telling someone their address is specifically
+      // barred invites them to try another one.
+      const blocked = await pool.query('SELECT 1 FROM blocked_emails WHERE email = $1', [email]);
+      if ((blocked.rowCount ?? 0) > 0) {
+        console.log(`⛔ sign-in refused for blocked address ${email}`);
+        return res.json({ ok: true });
+      }
+
       const raw = b64url(randomBytes(32));
       await pool.query(
         `INSERT INTO auth_tokens (token_hash, email, expires_at)
@@ -266,6 +282,15 @@ export function mountAuthRoutes(app: any, pool: Pool, opts: { secret: string; se
       );
       if (claim.rowCount === 0) return fail('expired');
       const email = claim.rows[0].email as string;
+
+      // Checked a second time: a link issued before the block must not still
+      // work. The token is already spent by the UPDATE above, so a refusal
+      // here also burns it rather than leaving it reusable.
+      const barred = await pool.query('SELECT 1 FROM blocked_emails WHERE email = $1', [email]);
+      if ((barred.rowCount ?? 0) > 0) {
+        console.log(`⛔ callback refused for blocked address ${email}`);
+        return fail('blocked');
+      }
 
       const id = `u_${b64url(randomBytes(9))}`;
       const user = await pool.query(
