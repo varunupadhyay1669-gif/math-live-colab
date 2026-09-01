@@ -16,6 +16,7 @@ say() { printf '\n\033[1;36m%s\033[0m\n' "$*"; }
 say "Installing scripts"
 install -m 750 "$SRC/watchdog.sh" /usr/local/bin/mathslive-watchdog
 install -m 750 "$SRC/backup.sh"   /usr/local/bin/mathslive-backup
+install -m 750 "$SRC/restart-when-free.sh" /usr/local/bin/mathslive-restart-when-free
 mkdir -p /var/lib/mathslive /var/backups/mathslive
 chmod 700 /var/backups/mathslive
 

@@ -4402,6 +4402,12 @@ Build a widget that teaches: ${safePrompt}`;
       ok: true,
       uptime: process.uptime(),
       rooms: rooms.size,
+      // How long since ANY room saw activity. A tab left open overnight keeps
+      // rooms>0 forever, so "is a class in progress" cannot be answered by
+      // presence alone — a deploy that waits for rooms=0 would wait for ever.
+      idleMs: rooms.size === 0 ? null : Date.now() - Math.max(
+        ...[...rooms.values()].map(r => r.lastActivityAt || 0),
+      ),
       // Which build is actually live. Render injects RENDER_GIT_COMMIT; this
       // lets you curl /healthz and confirm your latest push really deployed
       // (instead of guessing whether a fix is live). Falls back to 'dev' locally.
