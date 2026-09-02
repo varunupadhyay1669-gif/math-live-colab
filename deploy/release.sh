@@ -66,6 +66,25 @@ snapshot() {
   echo "$dest"
 }
 
+# Old hashed assets accumulate, because a deploy untars OVER dist/ and tar does
+# not delete what is no longer in the archive. That is deliberate and load
+# bearing: a student who fetched index.html a minute before the deploy will ask
+# for the old hashed chunks a moment after it, and if they are gone they get a
+# white page mid-lesson. Vite's content hashing means the old and new files can
+# sit side by side safely.
+#
+# What it must not do is grow for ever. Seven days is far longer than any page
+# stays open — a socket reconnect reloads the app long before that — and it
+# keeps every asset from every deploy of the last week.
+prune_assets() {
+  local before after
+  before=$(find "$APP/dist/assets" -type f 2>/dev/null | wc -l)
+  find "$APP/dist/assets" -type f -mtime +7 -delete 2>/dev/null
+  after=$(find "$APP/dist/assets" -type f 2>/dev/null | wc -l)
+  [ "$before" != "$after" ] && echo "  pruned $((before - after)) asset(s) older than 7 days ($after kept)"
+  return 0
+}
+
 prune() {
   local n
   n=$(find "$RELEASES" -mindepth 1 -maxdepth 1 -type d | wc -l)
@@ -126,6 +145,7 @@ case "${1:-}" in
       die "TypeScript failed. The old version is still running. Roll forward with a fixed build, or: release.sh rollback"
     fi
     say "4/4  Restart"
+    prune_assets
     restart
     prune
     ;;
