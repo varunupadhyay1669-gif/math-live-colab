@@ -23,6 +23,7 @@ import { accessFrom, TRIAL_DAYS, PRICE_RUPEES, GRACE_DAYS, PLANS, priceFor, perM
 import { _warningFor } from './src/server/scheduler.ts';
 import { SEED_LESSONS } from './src/lib/seedLessons.ts';
 import { makeLimiter } from './src/server/rateLimit.ts';
+import { listMigrationFiles } from './src/server/migrate.ts';
 import { readFile } from 'node:fs/promises';
 import QRCode from 'qrcode';
 import jsQR from 'jsqr';
@@ -391,6 +392,41 @@ section('OFFLINE — the learner runs nothing, at nobody\'s origin');
   const mirrorFrame = room.slice(room.indexOf('onLoad={handleMirrorLoad}'), room.indexOf('onLoad={handleMirrorLoad}') + 200);
   assert(/LESSON_IFRAME_SANDBOX_VIEW_ONLY/.test(mirrorFrame),
     "the teacher's Student Mirror pane is isolated as well");
+}
+
+section('OFFLINE — schema changes that are not just "create it if missing"');
+{
+  // Task 1.1. The runner is small enough that its guarantees are the whole of
+  // it, so they are asserted rather than assumed.
+  const files = listMigrationFiles();
+  assert(files.length > 0, 'there is at least one migration to run');
+  assert(files.every(f => /^\d{4}_[a-z0-9_]+\.sql$/.test(f)),
+    'every migration is numbered and lower-case', files.join(', '));
+  assert(JSON.stringify(files) === JSON.stringify([...files].sort()),
+    'they come back in version order, not readdir order',
+    '0010 running before 0002 is a schema nobody can reason about');
+
+  const runner = readFileSync('src/server/migrate.ts', 'utf8');
+  assert(/await client\.query\('BEGIN'\)/.test(runner) && /await client\.query\('ROLLBACK'\)/.test(runner),
+    'each migration runs inside a transaction and is rolled back if it throws');
+  assert(/pg_advisory_lock/.test(runner),
+    'two boots cannot run the same migration at once');
+  assert(/break;/.test(runner.slice(runner.indexOf('out.failed = '))),
+    'a failure stops the run instead of trying the next file',
+    'applying 0004 after 0003 failed leaves a schema no file describes');
+  assert(!/process\.exit/.test(runner),
+    'a failed migration never takes the server down with it',
+    'a lesson in progress must outlive a migration Phase 2 has not needed yet');
+
+  // No down-migrations by design, so a migration that cannot be re-read safely
+  // is a migration that cannot survive a restore from the nightly dump.
+  for (const f of files) {
+    const sql = readFileSync(`src/server/migrations/${f}`, 'utf8');
+    const statements = sql.split(';').map(s => s.replace(/--[^\n]*/g, '').trim()).filter(Boolean);
+    assert(statements.every(s => /IF NOT EXISTS|ON CONFLICT|OR REPLACE/i.test(s)),
+      `${f} is safe to apply twice`,
+      'there are no down-migrations here; the way back is the nightly dump');
+  }
 }
 
 section('OFFLINE — one engine');

@@ -16,6 +16,7 @@ import { BILLING_SCHEMA_SQL, mountBillingRoutes, accessForTeacher } from './src/
 import { mountOwnerDashRoutes, type LiveRoom } from './src/server/ownerDash';
 import { MAIL_LOG_SCHEMA_SQL, startDailyJobs } from './src/server/scheduler';
 import { rateLimit, makeLimiter, handshakeIp } from './src/server/rateLimit';
+import { runMigrations } from './src/server/migrate';
 
 interface FileEntry {
   id: string;
@@ -964,8 +965,19 @@ async function startServer() {
     // already handles it (a failed save is logged, a failed lazy-restore reads
     // as "room not here yet"), so the class degrades to non-durable instead of
     // going down.
+    // The idempotent boot DDL first, then the versioned migrations on top of
+    // it. Order matters and is not negotiable: a migration may ALTER a table
+    // the batch above creates, so the batch has to have run. See migrate.ts for
+    // why both exist rather than one replacing the other.
     const ready = pool.query(SCHEMA_SQL)
-      .then(() => { console.log('🗃️  Postgres schema ready'); })
+      .then(async () => {
+        console.log('🗃️  Postgres schema ready');
+        // Never allowed to reject: this whole promise is awaited by the room
+        // store on every save, and an unhandled rejection here would end the
+        // process — the exact failure the store was rewritten to avoid.
+        try { await runMigrations(pool); }
+        catch (err) { console.error('migrations could not run:', (err as Error).message); }
+      })
       .catch((err: Error) => {
         console.error('Postgres schema failed — rooms will NOT persist:', err.message);
       });

@@ -118,7 +118,7 @@ The CONTEXT block in your brief left five bracketed fields unfilled; questions 1
 
 ## L. Raised by Step 6 (roadmap)
 
-44. **Remove the camera-based attention detector from the learner side?** It ships MediaPipe today and is a privacy hazard with minors. *Working assumption:* yes, remove; keep background blur as an opt-in on the teacher's camera only.
+44. ~~Remove the camera-based attention detector from the learner side?~~ **WITHDRAWN 2 Sep 2026 — the question rested on a wrong reading of the code, found when implementing it.** `src/lib/attentionDetector.ts` uses no camera: it is 42 lines reading tab visibility and window focus. MediaPipe belongs to background blur, which already defaults to off and only blurs your own camera in the call. Nothing to decide and nothing to remove. The rule that matters is kept in PLAN.md 9.4: never collect a camera, attention or emotion signal about a learner.
 
 45. **Which five subjects get the first non-maths seed lessons?** *Working assumption:* Science, Language (English/Hindi vocabulary), Coding, Business/training, and a second Maths set — two lessons each, built to the lesson contract.
 
