@@ -767,11 +767,115 @@ export const mirrorScript = `
     lastAttrs = json;
     try {
       var want = JSON.parse(json), seen = {};
-      for (var i = 0; i < want.length; i++) { document.body.setAttribute(want[i][0], want[i][1]); seen[want[i][0]] = 1; }
+      for (var i = 0; i < want.length; i++) {
+        var an = String(want[i][0] || '');
+        // <body onclick=...> arrives down this channel too, and it is the same
+        // hole as an inline handler anywhere else in the frame. The body's own
+        // attributes were the one path into this document that the frame
+        // cleaning did not cover.
+        if (an.toLowerCase().indexOf('on') === 0) continue;
+        document.body.setAttribute(an, want[i][1]); seen[an] = 1;
+      }
       var have = document.body.attributes;
       for (var j = have.length - 1; j >= 0; j--) { if (!seen[have[j].name]) document.body.removeAttribute(have[j].name); }
     } catch (e) {}
   }
+  // ─────────────────── SANITISE WHAT WE PAINT ───────────────────
+  //
+  // A mirrored frame is the teacher's live DOM, serialised. That DOM came from
+  // a lesson file a teacher uploaded, and until this existed the follower took
+  // it entirely on trust. The parent strips <script> tags out of the SHELL with
+  // a regular expression, but the frames that arrive afterwards were written
+  // straight into this document — and an inline handler needs no <script> tag
+  // at all. <img src=x onerror=...> is the whole attack, and because this
+  // document currently shares an origin with the app, whatever ran here could
+  // read the app's storage and call its API with the viewer's own cookie.
+  //
+  // The viewer is usually a child on an iPad. So every frame is parsed inert
+  // first — a <template> does not run what it holds — then walked and cleaned
+  // before a single node is adopted into the page.
+  //
+  // What is removed is chosen to be invisible to an honest lesson:
+  //
+  //   script, object, embed   execute. Never legitimate in a mirrored frame:
+  //                           the lesson runs once, on the teacher's machine.
+  //   iframe, frame(set)      a whole second document, which would load
+  //                           separately on every device and diverge. The
+  //                           lesson contract already forbids it and
+  //                           lessonCheck already warns about it.
+  //   base                    rewrites every relative URL on the page.
+  //   meta http-equiv         can send the frame somewhere else entirely.
+  //   on* attributes          the actual hole. Removed everywhere, always.
+  //   javascript:/vbscript:/data:text/html URLs, and srcdoc.
+  //
+  // Deliberately KEPT, because a worksheet where the student types an answer
+  // and is marked instantly is a first-class lesson type here: <form>, <input>,
+  // <button>, <label>, <select> and their values. Only their URL attributes are
+  // inspected. <style> and <link rel=stylesheet> stay too — a mirrored lesson
+  // that lost its styling would be a mirrored lesson nobody could read.
+  var DROP_TAGS = { script: 1, object: 1, embed: 1, iframe: 1, base: 1, frame: 1, frameset: 1 };
+  var URL_ATTRS = { href: 1, src: 1, action: 1, formaction: 1, data: 1, poster: 1, 'xlink:href': 1 };
+  function looksExecutable(value) {
+    // Whitespace and control characters go first: "java\tscript:alert(1)" and
+    // " javascript:alert(1)" are the same URL to a browser, so they have to be
+    // the same URL to this.
+    // Written as an explicit scan rather than a regular expression on purpose:
+    // this whole script lives inside a template literal in a .ts file, so a
+    // backslash escape here is read once by TypeScript before the browser ever
+    // sees it, and a character class of control codes is exactly the thing that
+    // arrives mangled. A loop cannot be mis-escaped.
+    var s = String(value == null ? '' : value);
+    var v = '';
+    for (var n = 0; n < s.length; n++) {
+      var c = s.charCodeAt(n);
+      if (c > 32 && c !== 160) v += s.charAt(n);   // drop control chars, space, NBSP
+    }
+    v = v.toLowerCase();
+    return v.indexOf('javascript:') === 0 || v.indexOf('vbscript:') === 0 || v.indexOf('data:text/html') === 0;
+  }
+  /** Clean a parsed tree in place. Returns false only if it could not be done. */
+  function sanitizeInto(root) {
+    try {
+      if (!root) return true;
+      var doomed = [];
+      // Collected and removed AFTER the walk: removing a node mid-walk moves
+      // the walker's own cursor and silently skips its siblings — which is how
+      // a sanitiser ends up leaving every second script in place.
+      var walker = document.createTreeWalker(root, 1 /* SHOW_ELEMENT */, null);
+      var el = walker.nextNode();
+      while (el) {
+        var tag = (el.tagName || '').toLowerCase();
+        if (DROP_TAGS[tag] || (tag === 'meta' && el.hasAttribute && el.hasAttribute('http-equiv'))) {
+          doomed.push(el);
+        } else if (el.attributes) {
+          for (var i = el.attributes.length - 1; i >= 0; i--) {
+            var raw = el.attributes[i].name;
+            var name = (raw || '').toLowerCase();
+            if (name.indexOf('on') === 0 || name === 'srcdoc') { el.removeAttribute(raw); continue; }
+            if (URL_ATTRS[name] && looksExecutable(el.attributes[i].value)) el.removeAttribute(raw);
+          }
+        }
+        el = walker.nextNode();
+      }
+      for (var k = 0; k < doomed.length; k++) {
+        try { doomed[k].parentNode.removeChild(doomed[k]); } catch (e) {}
+      }
+      return true;
+    } catch (e) {
+      // A frame that cannot be cleaned is a frame that is not painted. One
+      // dropped frame costs a moment of staleness, which the fingerprint
+      // heartbeat already repairs a few seconds later. Painting an uncleaned
+      // one costs the viewer their session.
+      return false;
+    }
+  }
+  /** Parse a string of HTML without running any of it, and clean it. */
+  function inertFragment(html) {
+    var tpl = document.createElement('template');
+    tpl.innerHTML = html;
+    return sanitizeInto(tpl.content) ? tpl.content : null;
+  }
+
   // Mirror runtime-injected <head> CSS into a dedicated container so dynamically
   // styled lessons look identical. Kept in its own element so we never touch the
   // follower agent's own script/styles.
@@ -786,7 +890,13 @@ export const mirrorScript = `
         host.style.display = 'none';
         (document.head || document.documentElement).appendChild(host);
       }
-      host.innerHTML = html;
+      // Was host.innerHTML = html. The head envelope is the same untrusted
+      // stream as the body, and a <script> here would have run exactly as
+      // readily.
+      var frag = inertFragment(html);
+      if (!frag) return;
+      while (host.firstChild) host.removeChild(host.firstChild);
+      host.appendChild(document.importNode(frag, true));
     } catch (e) {}
   }
 
@@ -908,13 +1018,23 @@ export const mirrorScript = `
   }
   // Returns true if the body was patched in place, false if we had to fall back.
   function applyBodyHtml(html) {
+    var frag = null;
     try {
-      var tpl = document.createElement('template');
-      tpl.innerHTML = html;
-      morphChildren(document.body, tpl.content);
+      frag = inertFragment(html);
+      if (!frag) return false;            // could not be cleaned: do not paint it
+      morphChildren(document.body, frag);
       return true;
     } catch (e) {
-      try { document.body.innerHTML = html; } catch (e2) {}
+      // The wholesale-swap fallback. It used to be
+      // "document.body.innerHTML = html", which put back verbatim everything
+      // the cleaning had just taken out — the exception path quietly undoing
+      // the safe path.
+      try {
+        if (!frag) frag = inertFragment(html);
+        if (!frag) return false;
+        while (document.body.firstChild) document.body.removeChild(document.body.firstChild);
+        document.body.appendChild(document.importNode(frag, true));
+      } catch (e2) {}
       return false;
     }
   }
@@ -1260,6 +1380,15 @@ export const mirrorScript = `
       } else staleTicks = 0;
     }
   });
+  // The shell this script is running inside is the lesson's own markup with its
+  // <script> tags removed by a regular expression in the parent. That regular
+  // expression cannot see an inline handler, so the very first thing the
+  // follower does is clean the document it was born into — before the first
+  // mirrored frame arrives, and before a child can tap anything in it.
+  try {
+    if (document.body) sanitizeInto(document.body);
+    else document.addEventListener('DOMContentLoaded', function () { sanitizeInto(document.body); });
+  } catch (e) {}
   post({ type: 'MIRROR_FOLLOWER_READY' });
 })();
 </script>

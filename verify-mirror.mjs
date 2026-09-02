@@ -288,6 +288,83 @@ assert(
   'a follower with no CSS is a wall of unstyled text',
 );
 
+section('OFFLINE — a hostile lesson cannot reach the learner');
+
+// The follower paints a stream of HTML that came from a file a teacher
+// uploaded, into a document that (for now) shares an origin with the app, on a
+// device that is usually a child's iPad. Stripping <script> with a regular
+// expression was the whole defence, and an inline handler needs no script tag.
+{
+  const followerJs = mirrorScriptFor('follower')
+    .replace(/^[\s\S]*?<script[^>]*>/i, '')
+    .replace(/<\/script>[\s\S]*$/i, '');
+  // The shell the follower boots into carries a handler of its own, so the
+  // boot-time clean is exercised as well as the per-frame one.
+  const dom = new JSDOM('<!doctype html><html><body><b id="shell" onclick="steal()">hi</b></body></html>',
+    { runScripts: 'outside-only', pretendToBeVisual: true });
+  const { window } = dom;
+  window.parent = { postMessage: () => {} };
+  window.eval(followerJs);
+  const send = (msg) => window.dispatchEvent(
+    new window.MessageEvent('message', { data: msg, source: window.parent }));
+  const doc = window.document;
+  const paint = (body, extra = {}) => send({ type: 'MIRROR_APPLY', body, ...extra });
+
+  assert(!doc.getElementById('shell')?.hasAttribute('onclick'),
+    'the shell the follower boots into is cleaned of inline handlers',
+    'a handler already in the page fires before any frame arrives');
+
+  paint('<p id="a">safe</p><script>window.OWNED = 1</script>');
+  assert(doc.querySelectorAll('script').length === 0, 'a script in a frame never enters the document');
+  assert(doc.getElementById('a'), 'and the rest of the frame is still painted');
+
+  paint('<img id="b" src="x" onerror="window.OWNED = 1">');
+  assert(doc.getElementById('b') && !doc.getElementById('b').hasAttribute('onerror'),
+    'an onerror handler is removed while the element stays',
+    'this is the attack: it needs no script tag at all');
+
+  paint('<div id="c" onclick="x" ONMOUSEOVER="y" data-keep="1">t</div>');
+  const c = doc.getElementById('c');
+  assert(c && !c.hasAttribute('onclick') && !c.hasAttribute('ONMOUSEOVER'),
+    'handlers are removed whatever their case');
+  assert(c && c.getAttribute('data-keep') === '1', 'ordinary attributes are left alone');
+
+  paint('<a id="d" href="javascript:alert(1)">go</a><a id="e" href="/lesson">stay</a>');
+  assert(!doc.getElementById('d')?.hasAttribute('href'), 'a javascript: URL is removed');
+  assert(doc.getElementById('e')?.getAttribute('href') === '/lesson', 'an ordinary URL is kept');
+
+  paint('<a id="f" href="java\tscript:alert(1)">obfuscated</a>');
+  assert(!doc.getElementById('f')?.hasAttribute('href'),
+    'a URL split by a control character is still recognised',
+    'browsers ignore those characters, so this check has to as well');
+
+  paint('<iframe id="g" srcdoc="<script>x</script>"></iframe><object id="h"></object>');
+  assert(!doc.getElementById('g') && !doc.getElementById('h'),
+    'embedded documents are removed — each one would load separately per device');
+
+  // The line this must not cross. A worksheet where the student types an answer
+  // and is marked instantly is a first-class lesson type here (founder, 2 Sep
+  // 2026); a sanitiser that ate forms would break the product to secure it.
+  paint('<form id="w"><label>2+2<input id="ans" value="4"></label><button id="go">Check</button></form>');
+  assert(doc.getElementById('w') && doc.getElementById('ans')?.getAttribute('value') === '4' && doc.getElementById('go'),
+    'a worksheet form, its input and its value all survive');
+
+  // The styling envelope is the same untrusted stream and used the same
+  // innerHTML.
+  send({ type: 'MIRROR_APPLY', body: '<p>x</p>', head: '<style>b{color:red}</style><script>window.OWNED=1</script>' });
+  const headHost = doc.getElementById('mathslive-mirror-head');
+  assert(headHost && headHost.querySelector('style'), 'lesson CSS still reaches the follower');
+  assert(headHost && headHost.querySelectorAll('script').length === 0, 'a script hidden in the head envelope does not');
+
+  send({ type: 'MIRROR_APPLY', body: '<p>y</p>', attrs: JSON.stringify([['class', 'dark'], ['onclick', 'steal()']]) });
+  assert(doc.body.getAttribute('class') === 'dark', "the body's own class is still applied");
+  assert(!doc.body.hasAttribute('onclick'),
+    'a handler on <body> is refused too',
+    'the body attribute channel bypassed the frame cleaning entirely');
+
+  assert(!('OWNED' in window), 'nothing in any of that ran');
+}
+
 section('OFFLINE — one engine');
 
 // Phase 3c removed the replay engine from the live path. Nothing should quietly
