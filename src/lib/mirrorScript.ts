@@ -876,6 +876,57 @@ export const mirrorScript = `
     return sanitizeInto(tpl.content) ? tpl.content : null;
   }
 
+  // "Show me what this student is actually looking at."
+  //
+  // The teacher's peek button has never worked. The chain is: teacher clicks →
+  // server → student's page posts REQUEST_HTML into this frame → and nothing
+  // answered, because the only handler for it lives in the SOURCE branch above,
+  // which a follower never reaches. So the panel said "Asking … for a snapshot"
+  // and sat there for ever. It went unnoticed because under the mirror the
+  // student's screen is the teacher's screen by construction — until it is not,
+  // which is the one time anybody presses this button.
+  //
+  // What the follower sends back is its own rendered document, which IS the
+  // answer to the question being asked. Typed values are written onto the clone
+  // because they live in properties, not attributes — a peek that showed a
+  // worksheet with every box empty would be worse than none. The teacher's side
+  // renders it in a frame with sandbox="" (StudentScreenPanel), so it is inert.
+  function provideFollowerHtml(requestId) {
+    try {
+      var clone = document.documentElement.cloneNode(true);
+      try {
+        var drop = clone.querySelectorAll('#mathslive-mirror-script, #mathslive-mirror-head');
+        for (var i = 0; i < drop.length; i++) {
+          if (drop[i].parentNode) drop[i].parentNode.removeChild(drop[i]);
+        }
+      } catch (e) {}
+      try {
+        var live = document.querySelectorAll('input, textarea, select');
+        var copy = clone.querySelectorAll('input, textarea, select');
+        for (var k = 0; k < live.length && k < copy.length; k++) {
+          var o = live[k], c = copy[k];
+          if (o.tagName === 'INPUT') {
+            if (o.type === 'checkbox' || o.type === 'radio') {
+              if (o.checked) c.setAttribute('checked', 'checked'); else c.removeAttribute('checked');
+            } else { c.setAttribute('value', o.value); }
+          } else if (o.tagName === 'TEXTAREA') { c.textContent = o.value; }
+          else if (o.tagName === 'SELECT') {
+            for (var j = 0; j < o.options.length && j < c.options.length; j++) {
+              if (o.options[j].selected) c.options[j].setAttribute('selected', 'selected');
+              else c.options[j].removeAttribute('selected');
+            }
+          }
+        }
+      } catch (e) {}
+      post({
+        type: 'SYNC_PROVIDE_HTML', requestId: requestId,
+        html: '<!DOCTYPE html>' + String.fromCharCode(10) + clone.outerHTML,
+        scrollX: window.pageXOffset || 0, scrollY: window.pageYOffset || 0,
+        hasCanvas: !!document.querySelector('canvas'),
+      });
+    } catch (e) {}
+  }
+
   // Mirror runtime-injected <head> CSS into a dedicated container so dynamically
   // styled lessons look identical. Kept in its own element so we never touch the
   // follower agent's own script/styles.
@@ -1351,6 +1402,7 @@ export const mirrorScript = `
   window.addEventListener('message', function (e) {
     var d = e.data; if (!d || !d.type) return;
     if (d.type === 'MIRROR_APPLY') applySnapshot(d);
+    else if (d.type === 'REQUEST_HTML') provideFollowerHtml(d.requestId);
     else if (d.type === 'MIRROR_CANVAS') paintCanvases(d.canvases || []);
     else if (d.type === 'MIRROR_SCROLL') {
       applyingScroll = Date.now();

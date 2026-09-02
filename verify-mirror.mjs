@@ -429,6 +429,38 @@ section('OFFLINE — schema changes that are not just "create it if missing"');
   }
 }
 
+section('OFFLINE — the teacher can see a stuck student');
+{
+  // The peek button has been dead since the mirror replaced the replay engine:
+  // the only REQUEST_HTML handler lived in the source branch, which a follower
+  // never reaches, so the panel asked and nothing ever answered.
+  const followerJs = mirrorScriptFor('follower')
+    .replace(/^[\s\S]*?<script[^>]*>/i, '').replace(/<\/script>[\s\S]*$/i, '');
+  const dom = new JSDOM('<!doctype html><html><body><h1>Worksheet</h1><input id="a"></body></html>',
+    { runScripts: 'outside-only', pretendToBeVisual: true });
+  const { window } = dom;
+  const sent = [];
+  window.parent = { postMessage: (m) => sent.push(m) };
+  window.eval(followerJs);
+
+  // A student has typed an answer. That value lives in a property, not an
+  // attribute, so it is exactly what a naive clone would lose.
+  window.document.getElementById('a').value = '42';
+  window.dispatchEvent(new window.MessageEvent('message',
+    { data: { type: 'REQUEST_HTML', requestId: 'peek-1' }, source: window.parent }));
+
+  const reply = sent.filter(m => m && m.type === 'SYNC_PROVIDE_HTML').pop();
+  assert(!!reply, 'a follower answers a peek request at all',
+    'this is the bug: nothing replied, so the teacher waited for ever');
+  assert(reply && reply.requestId === 'peek-1', 'the answer carries the request id it was asked with');
+  assert(reply && /<h1>Worksheet<\/h1>/.test(reply.html), "it contains the student's screen");
+  assert(reply && /value="42"/.test(reply.html),
+    'and what the student had typed into it',
+    'a peek showing every box empty would be worse than none');
+  assert(reply && !/mathslive-mirror-script/.test(reply.html),
+    'the injected observer is stripped out of the copy');
+}
+
 section('OFFLINE — one engine');
 
 // Phase 3c removed the replay engine from the live path. Nothing should quietly
