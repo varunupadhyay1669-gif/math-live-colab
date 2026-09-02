@@ -365,6 +365,34 @@ section('OFFLINE — a hostile lesson cannot reach the learner');
   assert(!('OWNED' in window), 'nothing in any of that ran');
 }
 
+section('OFFLINE — the learner runs nothing, at nobody\'s origin');
+{
+  // Task 1.3. The follower executes no lesson code, so same-origin buys it
+  // almost nothing — and costs it everything if the cleaning above is ever
+  // wrong. An opaque origin means a bypass reaches a blank document instead of
+  // the app's storage, cookies and API.
+  const attrs = readFileSync('src/lib/iframeAttrs.ts', 'utf8');
+  assert(/LESSON_IFRAME_SANDBOX_VIEW_ONLY\s*=\s*SANDBOX_COMMON\s*;/.test(attrs)
+      && !/const SANDBOX_COMMON[\s\S]*?allow-same-origin/.test(attrs.slice(attrs.indexOf('const SANDBOX_COMMON'), attrs.indexOf('/** The teacher'))),
+    'the view-only sandbox does not grant allow-same-origin');
+  assert(/LESSON_IFRAME_SANDBOX\s*=\s*SANDBOX_COMMON\s*\+\s*'\s*allow-same-origin'/.test(attrs),
+    "the teacher's own copy still gets it — that frame runs the lesson");
+
+  const sv = readFileSync('src/pages/StudentView.tsx', 'utf8');
+  assert(!/sandbox=\{LESSON_IFRAME_SANDBOX\}/.test(sv),
+    'no frame on a learner device is given the app origin',
+    'both the lesson shell and the explanation overlay are follower shells');
+  assert((sv.match(/LESSON_IFRAME_SANDBOX_VIEW_ONLY/g) || []).length >= 3,
+    'both learner frames use the isolated sandbox');
+
+  // The Dual View pane on the teacher's screen is a follower too — same shell,
+  // same stream, pointer events blocked. It was the easy one to miss.
+  const room = readFileSync('src/pages/Room.tsx', 'utf8');
+  const mirrorFrame = room.slice(room.indexOf('onLoad={handleMirrorLoad}'), room.indexOf('onLoad={handleMirrorLoad}') + 200);
+  assert(/LESSON_IFRAME_SANDBOX_VIEW_ONLY/.test(mirrorFrame),
+    "the teacher's Student Mirror pane is isolated as well");
+}
+
 section('OFFLINE — one engine');
 
 // Phase 3c removed the replay engine from the live path. Nothing should quietly

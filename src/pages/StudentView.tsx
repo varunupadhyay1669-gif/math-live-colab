@@ -12,7 +12,7 @@ import { ScreenPeer, screenShareSupported, displayCaptureOptions } from "../lib/
 import ScreenSharePrompt from "../components/ScreenSharePrompt";
 import TeacherScreenView from "../components/TeacherScreenView";
 import { sounds } from "../lib/sounds";
-import { LESSON_IFRAME_SANDBOX, LESSON_IFRAME_ALLOW } from "../lib/iframeAttrs";
+import { LESSON_IFRAME_SANDBOX_VIEW_ONLY, LESSON_IFRAME_ALLOW } from "../lib/iframeAttrs";
 
 // ── Components ──
 import ChatPanel from "../components/ChatPanel";
@@ -1969,7 +1969,7 @@ export default function StudentView() {
                 className="w-full h-full border-none"
                 style={{ background: '#ffffff' }}
                 onLoad={() => handleSurfaceLoad(lessonFrameRef.current, !lessonHidden)}
-                sandbox={LESSON_IFRAME_SANDBOX}
+                sandbox={LESSON_IFRAME_SANDBOX_VIEW_ONLY}
                 allow={LESSON_IFRAME_ALLOW}
                 allowFullScreen
               />
@@ -2043,7 +2043,7 @@ export default function StudentView() {
                 className="w-full h-full border-none"
                 style={{ background: '#ffffff' }}
                 onLoad={() => handleSurfaceLoad(tempFrameRef.current, true)}
-                sandbox={LESSON_IFRAME_SANDBOX}
+                sandbox={LESSON_IFRAME_SANDBOX_VIEW_ONLY}
                 allow={LESSON_IFRAME_ALLOW}
                 allowFullScreen
               />
