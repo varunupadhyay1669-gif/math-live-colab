@@ -1,19 +1,20 @@
-# Math Live 🧮
+# MathsLive 🧮
 
 A live teaching platform for **interactive HTML simulations**. The teacher
 imports a pre-made HTML sim (or generates one with AI), presents it live, and
 every student's screen runs the same simulation in deterministic sync — clicks,
 inputs, drags, annotations, whiteboard, the lot.
 
-**Live deployment:** https://math-live-colab.onrender.com
+**Live deployment:** https://mathslive.matheinstein.com (AWS Lightsail, Mumbai). The Render and Railway addresses in older docs are dead.
 
 ## What makes it different
 
-- **Replay-first sync** — every client runs its own live sim instance; the
-  teacher's (or a granted student's) interactions replay into all of them.
-  Canvas/WebGL/3D sims and animations stay alive — nothing is screenshotted
-  or DOM-swapped. Late joiners boot the current baseline and **replay the
-  class's interaction journal** to converge.
+- **Live Mirror sync** — the lesson runs ONCE, in the teacher's iframe. Every
+  student's iframe is a script-stripped shell that paints the teacher's real
+  DOM and canvas pixels, so a student structurally cannot be on a different
+  screen. A student given control has their taps forwarded to the teacher's
+  copy and mirrored back. (The older "replay-first" engine described in
+  SYNC.md was retired in August 2026; see AGENTS.md §3.5.)
 - **Control handoff** — hand "the chalk" to any student (✋ in the
   participants list): their screen drives the whole class until you take it
   back. The global view-only/interactive toggle is independent.

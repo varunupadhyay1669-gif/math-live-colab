@@ -1,5 +1,22 @@
 # SYNC.md — Math Live sync architecture contract
 
+> **STALE, September 2026. Read AGENTS.md §3.5 first.**
+>
+> Most of this file describes the input-replay engine — the interaction
+> journal, seeded RNG, `REMOTE_*` replay, pristine-boot-plus-replay late-join.
+> That engine was retired in August 2026 and now ships only to
+> `src/pages/ReplayView.tsx` for playing back a downloaded recording. The live
+> path is the Live Mirror.
+>
+> What in here is STILL true: the authority model (§1), that the server holds
+> canonical revisioned state, that `session_state` / `sync_full_state` are the
+> hydration messages built by `buildSessionState()`, and that new synced state
+> must be added in all four places. What is NOT: anything about journals,
+> replay, or seeding.
+>
+> Kept rather than deleted because the traps it records were paid for once, and
+> because ReplayView still runs that code.
+
 Read `AGENTS.md` first, then this file. Do not modify the sync system without
 understanding everything below.
 

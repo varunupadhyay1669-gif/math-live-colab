@@ -8,7 +8,7 @@ making changes. If something here conflicts with intuition, this file wins.
 
 ## 1. Project identity
 
-- **Product name:** Math Live
+- **Product name:** MathsLive (one word; "Math Live" is the old name and survives only in stale docs)
 - **What it is:** A live teaching platform for running **custom HTML
   simulations** built elsewhere (notably *Math Vis Vault*). Teachers import
   pre-made HTML, present it live, annotate, and stay in deterministic sync
@@ -63,11 +63,54 @@ listed above, stop and ask before adding a new top-level folder.
 
 ```bash
 npm install
-npm run dev      # starts Vite + Socket.IO server on PORT (default 3000)
+npm run dev      # starts Vite + Socket.IO server on PORT (default 4000)
 ```
 
 There is **no separate front-end server**. `server.ts` boots Vite in middleware
 mode and Socket.IO in the same process.
+
+---
+
+## 3.5 How sync ACTUALLY works, as of September 2026
+
+Read this before SYNC.md, most of which still describes an engine that no
+longer runs. If the two disagree, this section is right.
+
+**The Live Mirror.** The teacher's lesson iframe is the ONE instance of the
+lesson that executes. It injects `mirrorScriptFor('source')`
+(`src/lib/mirrorScript.ts`) which streams its real DOM — serialised body HTML,
+the head's runtime CSS, and up to four canvases as WebP frames — over
+`mirror_dom` / `mirror_canvas`. Every learner's iframe is a
+`stripLessonScripts(html)` shell plus `mirrorScriptFor('follower')`, and it
+runs no lesson code at all. It paints what arrives by MORPHING the DOM in place
+(id-keyed), never `innerHTML =`, because re-creating an element restarts its
+CSS animation, blanks a canvas and drops focus and caret.
+
+A learner who has been given control has their pointer events forwarded to the
+teacher's copy as fractions of the target element's box, applied there, and
+mirrored back. So there is never a second running instance to diverge.
+
+**The retired engine.** `src/lib/syncScript.ts` is the old input-replay
+engine: seeded RNG, an interaction journal, `REMOTE_*` replays. It is NOT
+injected into any live lesson any more — only `src/pages/ReplayView.tsx` uses
+it, to play back a downloaded recording. `verify-mirror.mjs` fails the build
+if `seededSyncScript(` reappears in Room.tsx or StudentView.tsx. Do not
+reintroduce it, and do not "fix" a sync problem by adding a path that rebuilds
+the teacher's iframe.
+
+**Two sandboxes, and the reason (`src/lib/iframeAttrs.ts`).** The lesson is a
+`blob:` URL made by the parent, so `allow-same-origin` would put lesson code
+at the app's own origin. The teacher's frame keeps it — it runs the lesson, and
+the class-pack recorder reads that document. Every frame that only DISPLAYS —
+both learner frames and the teacher's Dual View mirror pane — uses
+`LESSON_IFRAME_SANDBOX_VIEW_ONLY`, which omits it, so those documents have an
+opaque origin. Never hand a learner frame the app's origin.
+
+**Every mirrored frame is sanitised before it is painted** (`sanitizeInto` in
+mirrorScript.ts): scripts, iframes, objects, embeds, `base`, `meta
+http-equiv`, every `on*` attribute and `javascript:` URL. Forms, inputs and
+their values are deliberately KEPT — a worksheet the learner types into and is
+marked instantly is a first-class lesson type here.
 
 ---
 
@@ -222,3 +265,14 @@ These are the patterns that previous agents have re-introduced. Don't.
 - **Are you about to create a new top-level folder?** → Stop and ask.
 
 When in doubt, prefer the smallest change that addresses the root cause.
+
+## 10. Where the plan lives
+
+`PLAN.md` at the repo root is the current product and engineering blueprint
+(Steps 1–9, phased tasks, what is deliberately NOT being built). `QUESTIONS.md`
+holds every open question with the working assumption in force until it is
+answered. Both are kept up to date as work lands, including when they turn out
+to have been wrong — corrections are made in place and left visible.
+
+Before starting anything substantial, check which Phase of `PLAN.md` Step 8 it
+belongs to, and whether Step 6.4 has already argued against it.
