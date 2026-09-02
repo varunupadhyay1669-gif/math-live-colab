@@ -44,6 +44,13 @@ json_escape() {
 notify() {
   local subject="$1" body="$2"
   echo "$subject: $body"
+  if [ -n "${TELEGRAM_BOT_TOKEN:-}" ] && [ -n "${TELEGRAM_CHAT_ID:-}" ]; then
+    curl -s --max-time 20 -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+      -H "Content-Type: application/json" \
+      -d "{\"chat_id\":\"${TELEGRAM_CHAT_ID}\",\"disable_web_page_preview\":true,\"text\":\"💾 $(json_escape "$subject
+
+$body")\"}" >/dev/null 2>&1 || true
+  fi
   [ -n "${RESEND_API_KEY:-}" ] && [ -n "${OWNER_EMAIL:-}" ] || return 0
   local to_json
   to_json=$(printf '%s' "${OWNER_EMAIL}" \

@@ -24,7 +24,7 @@ import path from 'path';
 import QRCode from 'qrcode';
 import type { Pool } from 'pg';
 import { userFromRequest, type SessionUser } from './identity';
-import { sendMail, ownerAddresses, siteUrl, niceDate } from './mailer';
+import { sendMail, sendTelegram, ownerAddresses, siteUrl, niceDate } from './mailer';
 
 /** How long a new teacher may use everything before paying. */
 export const TRIAL_DAYS = 7;
@@ -265,12 +265,18 @@ async function sendOwnerEmail(subject: string, body: string): Promise<boolean> {
   return (await sendMail(ownerAddresses(), subject, body)).ok;
 }
 
-/** Both channels, plus the log — which is the one that never fails. */
+/** Every channel, plus the log — which is the one that never fails. */
 async function notifyOwner(subject: string, body: string): Promise<void> {
   console.log(`💰 ${subject}\n${body}`);
-  const [wa, mail] = await Promise.all([sendWhatsApp(`${subject}\n\n${body}`), sendOwnerEmail(subject, body)]);
-  if (!wa && !mail) {
-    console.warn('⚠️  Payment alert reached NO channel — set OWNER_EMAIL (and optionally WHATSAPP_TOKEN / WHATSAPP_PHONE_ID / OWNER_WHATSAPP).');
+  const [wa, mail, tg] = await Promise.all([
+    sendWhatsApp(`${subject}\n\n${body}`),
+    sendOwnerEmail(subject, body),
+    // Added with PLAN.md task 0.7. A payment claim is the one alert where an
+    // hour's delay costs a lesson: the teacher is waiting to be let back in.
+    sendTelegram(`💰 ${subject}\n\n${body}`).then(r => r.ok),
+  ]);
+  if (!wa && !mail && !tg) {
+    console.warn('⚠️  Payment alert reached NO channel — set OWNER_EMAIL (and optionally TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID, or WHATSAPP_TOKEN / WHATSAPP_PHONE_ID / OWNER_WHATSAPP).');
   }
 }
 

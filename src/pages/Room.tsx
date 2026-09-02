@@ -189,6 +189,15 @@ export default function Room() {
   const [joinErrorMsg, setJoinErrorMsg] = useState<string | null>(null);
   // Saving the current board to this student's history (Stage 4).
   const [savingHistory, setSavingHistory] = useState(false);
+  // ── Did the lesson actually reach the server? ──
+  //
+  // The autosave has run every two minutes for months and said nothing either
+  // way, so a tutor whose save was failing — an expired session, a body the
+  // server refused, a dropped connection — found out by opening the student's
+  // history a week later and seeing nothing there. A save is not a save until
+  // something says so, out loud, with the time on it.
+  const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'failed'>('idle');
+  const [lastSavedAt, setLastSavedAt] = useState<number | null>(null);
   const sessionParam = searchParams.get('session');
   const sessionAppliedRef = useRef(false);
   // AUTONOMOUS: Miro-style claim status.
@@ -2301,8 +2310,11 @@ export default function Room() {
       }
       const topic = files.find(f => f.id === activeFileId)?.name || (whiteboardMode ? 'Whiteboard session' : 'Session');
       await saveSession({ classId, topic, html: previewHtmlRef.current || null, whiteboard: whiteboardState });
+      setLastSavedAt(Date.now());
+      setSaveState('saved');
       showNotif("💾 Saved to this student's history");
     } catch {
+      setSaveState('failed');
       showNotif('⚠️ Could not save to history');
     } finally {
       setSavingHistory(false);
@@ -2444,16 +2456,26 @@ export default function Room() {
   // work to a menu click is the one unrecoverable thing this feature could do.
   const saveCurrentLesson = useCallback(async (): Promise<void> => {
     if (!classId || !boardHasContent(whiteboardState)) return;
-    const { saveLessonForDay, listSessions } = await import('../lib/sessions');
-    const topic = files.find(f => f.id === activeFileId)?.name
-      || (whiteboardMode ? 'Whiteboard session' : 'Session');
-    const id = await saveLessonForDay({
-      classId, topic, html: previewHtmlRef.current || null,
-      whiteboard: whiteboardState, sessionId: currentSessionId,
-      taughtSeconds: teachingClockRef.current.total(Date.now()),
-    });
-    if (id) setCurrentSessionId(id);
-    try { setMySessions(await listSessions(classId)); } catch { /* keep the stale list */ }
+    setSaveState('saving');
+    try {
+      const { saveLessonForDay, listSessions } = await import('../lib/sessions');
+      const topic = files.find(f => f.id === activeFileId)?.name
+        || (whiteboardMode ? 'Whiteboard session' : 'Session');
+      const id = await saveLessonForDay({
+        classId, topic, html: previewHtmlRef.current || null,
+        whiteboard: whiteboardState, sessionId: currentSessionId,
+        taughtSeconds: teachingClockRef.current.total(Date.now()),
+      });
+      if (id) setCurrentSessionId(id);
+      // The lesson is on the server by here. Refreshing the picker is a
+      // convenience, so its failure must not report the save as failed.
+      setLastSavedAt(Date.now());
+      setSaveState('saved');
+      try { setMySessions(await listSessions(classId)); } catch { /* keep the stale list */ }
+    } catch (err) {
+      setSaveState('failed');
+      throw err;   // the caller decides whether to retry
+    }
   }, [classId, whiteboardState, files, activeFileId, whiteboardMode, currentSessionId]);
 
   // Save the lesson on a slow tick while teaching, and when the page is hidden.
@@ -2467,11 +2489,25 @@ export default function Room() {
   useEffect(() => { saveLessonRef.current = saveCurrentLesson; }, [saveCurrentLesson]);
   useEffect(() => {
     if (!classId) return;
+    // A failed save used to wait two whole minutes for the next tick, and a
+    // tutor who closed the tab in between lost the lesson. The usual causes —
+    // a dropped wifi, a redeploy restarting the server underneath a class —
+    // clear in seconds, so retry on a widening gap and let the ordinary tick
+    // take over after that.
+    let retry: ReturnType<typeof setTimeout> | null = null;
+    const RETRY_DELAYS_MS = [5_000, 20_000, 60_000];
+    const attempt = (n: number) => {
+      void saveLessonRef.current?.().catch(() => {
+        if (n >= RETRY_DELAYS_MS.length) return;
+        retry = setTimeout(() => attempt(n + 1), RETRY_DELAYS_MS[n]);
+      });
+    };
     const tick = () => {
       // Only while someone is actually being taught: an idle room re-writing
       // the same row every two minutes is pure noise.
       if (!isTeaching(usersRef.current)) return;
-      void saveLessonRef.current?.().catch(() => { /* offline; the next tick retries */ });
+      if (retry) { clearTimeout(retry); retry = null; }
+      attempt(0);
     };
     const id = setInterval(tick, 120_000);
     // pagehide is what actually fires on a closing tab; unload gives no time
@@ -2481,6 +2517,7 @@ export default function Room() {
     document.addEventListener('visibilitychange', () => { if (document.hidden) onHide(); });
     return () => {
       clearInterval(id);
+      if (retry) clearTimeout(retry);
       window.removeEventListener('pagehide', onHide);
     };
   }, [classId]);
@@ -4816,6 +4853,34 @@ export default function Room() {
                 )}
               </div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* ═══ SAVE STATE ═══
+          Quiet, permanent, and bottom-left because nothing else lives there:
+          the point is that it can be glanced at mid-lesson, not that it is
+          noticed. It only appears once there is a class to save into and at
+          least one save has been attempted. */}
+      {classId && saveState !== 'idle' && (
+        <div className="fixed bottom-3 left-3 z-30 pointer-events-none select-none">
+          <div
+            className="px-3 py-1.5 rounded-lg text-xs font-medium flex items-center gap-1.5"
+            style={{
+              background: saveState === 'failed' ? 'rgba(190, 30, 45, 0.95)' : 'var(--bg-card)',
+              color: saveState === 'failed' ? '#fff' : 'var(--text-muted)',
+              border: `1px solid ${saveState === 'failed' ? 'transparent' : 'var(--border-subtle)'}`,
+              boxShadow: 'var(--shadow-sm)',
+            }}
+            title={saveState === 'failed'
+              ? 'The lesson is still only on this screen. It is being retried; keep the tab open.'
+              : "This lesson is saved to the student's history on the server."}
+          >
+            {saveState === 'saving' && <>Saving…</>}
+            {saveState === 'saved' && lastSavedAt && (
+              <>Saved {new Date(lastSavedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</>
+            )}
+            {saveState === 'failed' && <>Not saved — retrying</>}
           </div>
         </div>
       )}

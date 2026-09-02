@@ -48,6 +48,47 @@ export async function sendMail(to: string[], subject: string, text: string): Pro
   }
 }
 
+// ── Telegram, for the things that cannot wait for an inbox ────────────────
+//
+// Email is the record; this is the interruption. It exists because the two
+// alerts that matter most — "a teacher says they paid" and "the site is down"
+// — are worth nothing an hour late, and because WhatsApp's Cloud API only
+// permits a free-form message within 24 hours of the recipient writing to the
+// business number, so it goes quiet exactly when it has not been used lately.
+// A bot has no such window, costs nothing, and needs no business account.
+//
+// Unset variables mean "not configured", not "broken": every caller sends the
+// email as well and none of them depend on the answer.
+export function telegramConfigured(): boolean {
+  return !!(process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID);
+}
+
+export async function sendTelegram(text: string): Promise<MailResult> {
+  const token = process.env.TELEGRAM_BOT_TOKEN;
+  const chat = process.env.TELEGRAM_CHAT_ID;
+  if (!token || !chat) return { ok: false, reason: 'TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID are not set' };
+  try {
+    const res = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      // No parse_mode: a teacher's note or an error message containing an
+      // underscore or an asterisk would be a malformed-entity error from
+      // Telegram, and an alert that fails to send because of punctuation is
+      // worse than an unformatted one. 4096 is Telegram's hard limit.
+      body: JSON.stringify({ chat_id: chat, text: text.slice(0, 4000), disable_web_page_preview: true }),
+    });
+    if (!res.ok) {
+      const body = (await res.text()).slice(0, 200);
+      console.error('Telegram refused a message:', res.status, body);
+      return { ok: false, reason: `${res.status} ${body}` };
+    }
+    return { ok: true };
+  } catch (err) {
+    console.error('Could not send a Telegram message:', (err as Error).message);
+    return { ok: false, reason: (err as Error).message };
+  }
+}
+
 /** The public address of this install, for links inside emails. */
 export function siteUrl(): string {
   return (process.env.PUBLIC_URL || 'https://mathslive.matheinstein.com').replace(/\/+$/, '');

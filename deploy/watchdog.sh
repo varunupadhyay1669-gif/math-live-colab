@@ -36,6 +36,16 @@ notify() {
   local subject="$1" body="$2"
   logger -t mathslive-watchdog "$subject"
   echo "$subject"
+  # Telegram first: an outage alert is worth nothing an hour late, and this is
+  # the channel that buzzes a phone. Email still goes, because it is the record
+  # and because a bot token can be revoked without anybody noticing.
+  if [ -n "${TELEGRAM_BOT_TOKEN:-}" ] && [ -n "${TELEGRAM_CHAT_ID:-}" ]; then
+    curl -s --max-time 20 -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+      -H "Content-Type: application/json" \
+      -d "{\"chat_id\":\"${TELEGRAM_CHAT_ID}\",\"disable_web_page_preview\":true,\"text\":\"🚨 $(json_escape "$subject
+
+$body")\"}" >/dev/null 2>&1 || true
+  fi
   [ -n "${RESEND_API_KEY:-}" ] && [ -n "${OWNER_EMAIL:-}" ] || return 0
   local to_json
   to_json=$(printf '%s' "${OWNER_EMAIL}" \

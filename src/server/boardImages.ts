@@ -18,6 +18,7 @@
 import type { Request, Response } from 'express';
 import { createHash } from 'crypto';
 import type { Pool } from 'pg';
+import { userFromRequest } from './identity';
 
 export const BOARD_IMAGE_SCHEMA_SQL = `
   CREATE TABLE IF NOT EXISTS board_images (
@@ -86,10 +87,29 @@ export async function externaliseBoardImages(pool: Pool, whiteboard: any): Promi
   return moved;
 }
 
-export function mountBoardImageRoutes(app: any, pool: Pool) {
+export function mountBoardImageRoutes(app: any, pool: Pool, opts: { secret: string }) {
   // Upload one image, get back its URL. The client calls this before putting
   // the object on the board, so a data URL never reaches the room at all.
+  //
+  // SIGNED IN, since PLAN.md task 0.3. This route used to accept 6 MB from
+  // anyone who could reach the server and write it to Postgres for ever, with
+  // no account, no room membership and no way to attribute it — the cheapest
+  // way there was to fill the disk of the box that also holds every lesson.
+  //
+  // The refusal is deliberately soft on the client: `Whiteboard.uploadImage`
+  // keeps its data-URL fallback, so a picture pasted in an anonymous demo room
+  // still appears on the board. It lands inside the room document instead of
+  // the image store, which is the size problem that closed in August — but
+  // that path is bounded (a demo room lives 30 minutes) and the conversion
+  // runs anyway the next time the room is opened (`externaliseBoardImages`).
+  // Losing a tutor's photo to a security fix would be the worse trade.
   app.post('/api/board-image', async (req: Request, res: Response) => {
+    if (!userFromRequest(req, opts.secret)) {
+      return res.status(401).json({
+        error: 'Sign in to add pictures to the board.',
+        code: 'sign_in_required',
+      });
+    }
     const parsed = parseDataUrl((req.body as any)?.src);
     if (!parsed) return res.status(400).json({ error: 'Not a supported image.' });
     try {

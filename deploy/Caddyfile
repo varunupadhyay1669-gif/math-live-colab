@@ -14,8 +14,73 @@
 	email varunupadhyay1669@gmail.com
 }
 
-# ── Test name. Point this at the box first and verify against it. ──
-aws.matheinstein.com {
+# ─────────────────────────────────────────────────────────────────────────────
+# SECURITY HEADERS  (PLAN.md task 0.4)
+#
+# A snippet, imported by every site block below, so a name added later cannot
+# quietly be the one without them.
+#
+# The four below are ENFORCED, because each is safe for this app today:
+#
+#   Strict-Transport-Security  browsers refuse plain HTTP to this name for a
+#                              year. includeSubDomains covers names *under*
+#                              this one, not the parent — matheinstein.com and
+#                              its Vercel site are untouched. No `preload`:
+#                              that is a one-way door onto a browser list.
+#   X-Content-Type-Options     stops a browser guessing that an uploaded file
+#                              is really a script.
+#   X-Frame-Options            nobody else may put this app in an iframe. The
+#                              app's own lesson frames are same-document and
+#                              unaffected.
+#   Referrer-Policy            a room code never leaves in a Referer header to
+#                              a third-party site a lesson happens to link to.
+#
+# Permissions-Policy allows exactly what the product uses and nothing else:
+# camera and microphone for the in-lesson call, display-capture for screen
+# share, all restricted to this origin. Everything omitted is denied by default.
+(security_headers) {
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "SAMEORIGIN"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Permissions-Policy "camera=(self), microphone=(self), display-capture=(self), geolocation=(), payment=(), usb=(), midi=(), interest-cohort=()"
+
+		# ── Content Security Policy: REPORT-ONLY, deliberately ──
+		#
+		# Report-Only means the browser checks this policy and complains in the
+		# console, and blocks nothing. That is the only honest setting today,
+		# for one reason: a lesson is arbitrary teacher-written HTML running in
+		# a blob: frame that inherits this origin, so this policy governs the
+		# lessons too. Some of them legitimately load a 3D library or a texture
+		# from a CDN (README: "advise CDN-hosted assets"), and enforcing a
+		# policy that forbids it would blank a lesson in front of a child with
+		# no message anyone would understand.
+		#
+		# It is here anyway because it is how we find out what the real policy
+		# would have to be. Open a lesson, watch the console, and every line it
+		# prints is something the enforced policy will need to allow — or
+		# something a lesson should not have been doing.
+		#
+		# ENFORCE THIS (rename the header to Content-Security-Policy) only
+		# after PLAN.md tasks 1.3 and 1.4: once lessons run on their own origin
+		# they get their own, far looser policy, and this one can be tightened
+		# to what the app itself needs, which is very little.
+		#
+		# 'unsafe-inline' and 'unsafe-eval' are in script-src because the app's
+		# injected mirror script and the lessons themselves are inline, and
+		# some lesson libraries compile shaders with Function(). Removing them
+		# is a Phase 1 outcome, not a Phase 0 one.
+		Content-Security-Policy-Report-Only "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' blob: https:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data: blob: https:; media-src 'self' data: blob: https:; connect-src 'self' ws: wss: https:; worker-src 'self' blob:; child-src 'self' blob:; frame-src 'self' blob: https://www.youtube.com https://www.youtube-nocookie.com; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'self'"
+
+		# Caddy announces itself by default; there is no reason to.
+		-Server
+	}
+}
+
+# ── The live name. ──
+mathslive.matheinstein.com {
+	import security_headers
 	reverse_proxy 127.0.0.1:4000
 	encode zstd gzip
 	log {
@@ -24,14 +89,18 @@ aws.matheinstein.com {
 	}
 }
 
-# ── The real name. Uncomment ONLY at cutover, after the tests pass. ──
+# ── The name used during the AWS trial run; kept so old links still work. ──
+aws.matheinstein.com {
+	import security_headers
+	redir https://mathslive.matheinstein.com{uri} permanent
+}
+
+# ── The old Railway name. Some teachers were given only this one (PLAN.md
+#    task 0.12). Uncomment once its DNS A record points at this box, so their
+#    link lands on the current product instead of a dead page. ──
 # class.matheinstein.com {
-# 	reverse_proxy 127.0.0.1:4000
-# 	encode zstd gzip
-# 	log {
-# 		output file /var/log/caddy/mathslive.log
-# 		format console
-# 	}
+# 	import security_headers
+# 	redir https://mathslive.matheinstein.com{uri} permanent
 # }
 
 # Notes for whoever edits this next:
@@ -42,3 +111,7 @@ aws.matheinstein.com {
 # Do NOT put Cloudflare's orange-cloud proxy in front of this host. It has
 # broken long-lived WebSocket connections for this app before; grey-cloud
 # (DNS only) is the setting that works.
+#
+# Applying a change: `sudo caddy validate --config /etc/caddy/Caddyfile` first,
+# then `sudo systemctl reload caddy`. A reload does not drop connections, so it
+# is safe during a lesson; `restart` is not.

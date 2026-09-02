@@ -15,6 +15,7 @@ import { BOARD_IMAGE_SCHEMA_SQL, mountBoardImageRoutes, externaliseBoardImages }
 import { BILLING_SCHEMA_SQL, mountBillingRoutes, accessForTeacher } from './src/server/billing';
 import { mountOwnerDashRoutes, type LiveRoom } from './src/server/ownerDash';
 import { MAIL_LOG_SCHEMA_SQL, startDailyJobs } from './src/server/scheduler';
+import { rateLimit, makeLimiter, handshakeIp } from './src/server/rateLimit';
 
 interface FileEntry {
   id: string;
@@ -279,6 +280,14 @@ interface SessionStatePayload {
 
 async function startServer() {
   const app = express();
+  // Caddy terminates TLS and forwards to 127.0.0.1:4000, so every request
+  // arrives from localhost and `req.ip` would be 127.0.0.1 for the whole
+  // internet — one rate-limit bucket for everybody. Trusting exactly ONE hop
+  // makes `req.ip` the address Caddy saw, and no more: a client that sets its
+  // own X-Forwarded-For gets that header ignored, because Express only reads
+  // the entry the trusted proxy appended. `true` here would be a bug — it
+  // would let anyone choose their own rate-limit bucket.
+  app.set('trust proxy', 1);
   // Default to 4000 locally so MathsLive never collides with the MathEinstein
   // Next.js app (which owns :3000). Hosting platforms always inject their own
   // PORT, so this default only affects local `npm run dev` / `npm start`.
@@ -1689,6 +1698,30 @@ async function startServer() {
     for (let i = 0; i < SITE_PASSCODE.length; i++) diff |= given.charCodeAt(i) ^ SITE_PASSCODE.charCodeAt(i);
     return diff === 0;
   }
+
+  // ─── CONNECTION FLOOD GUARD ───
+  //
+  // Deliberately loose, and the number matters. A browser whose network is
+  // flapping mid-lesson retries roughly once a second before Socket.IO's
+  // backoff widens; a tutor and two students on one home connection share one
+  // address, so a bad ten minutes can honestly produce a few hundred attempts
+  // an hour from a household that is doing nothing wrong. Refusing them would
+  // end the lesson this guard exists to protect.
+  //
+  // 300 a minute from one address is therefore not "busy" — it is a script.
+  // The per-event limits inside a connection (200/400 per second) remain the
+  // real defence against a connected client behaving badly.
+  const connectionLimiter = makeLimiter({
+    name: 'socket-connect',
+    windowMs: 60_000,
+    max: Number(process.env.SOCKET_CONNECT_PER_MIN) || 300,
+  });
+  io.use((socket, next) => {
+    const decision = connectionLimiter.check(handshakeIp(socket.handshake as any));
+    if (decision.allowed) return next();
+    // Not the passcode message: the client must not turn this into a prompt.
+    next(new Error('too_many_connections'));
+  });
 
   io.use((socket, next) => {
     if (!passcodeRequired) return next();
@@ -4434,6 +4467,15 @@ Build a widget that teaches: ${safePrompt}`;
     for (let i = 0; i < 8; i++) id += alphabet[Math.floor(Math.random() * alphabet.length)];
     return id;
   }
+  // Registered before the handler below, so it runs first: quick deploy writes
+  // a room row per call and needs no account, which makes it the cheapest way
+  // to fill this box's disk. Ten an hour is far past what a person publishing
+  // pages by hand will ever do.
+  app.post('/api/publish', rateLimit({
+    name: 'publish', windowMs: 3_600_000,
+    max: Number(process.env.PUBLISH_PER_HOUR) || 10,
+    body: (s) => ({ error: `Too many pages published. Try again in ${Math.ceil(s / 60)} minutes.`, code: 'rate_limited' }),
+  }));
   app.post('/api/publish', express.json({ limit: '6mb' }), async (req, res) => {
     if (!passcodeOk(req.get('x-site-passcode') || (req.body as { passcode?: string } | undefined)?.passcode)) {
       return res.status(401).json({ error: 'passcode_required' });
@@ -4476,7 +4518,44 @@ Build a widget that teaches: ${safePrompt}`;
   if (appPool) {
     app.post('/api/board-image', express.json({ limit: '12mb' }));
   }
+
+  // ─── SAVING A LESSON MUST NOT FAIL SILENTLY ───
+  //
+  // A saved lesson carries the whole whiteboard as JSON. The global parser
+  // below defaults to 100 kB, which a board with a few hundred strokes passes
+  // without trying — and the answer was a bare 413 the client swallowed, so a
+  // tutor saw "Saved" (it never checked) and lost the board. Registered here,
+  // ahead of the global parser, for the same reason board images are.
+  //
+  // 8 MB is chosen against what a board actually contains now that pictures
+  // live in `board_images` and only their URLs are in the document: strokes,
+  // shapes, text and instrument geometry. It is a ceiling under a bug, not a
+  // working size, which is why the route is also the most tightly rate-limited
+  // one here — 8 MB × an unbounded rate is a memory attack on a 1 GB box.
+  const SESSION_BODY_LIMIT = process.env.SESSION_BODY_LIMIT || '8mb';
+  const sessionWriteLimit = rateLimit({
+    name: 'session-write', windowMs: 60_000,
+    max: Number(process.env.SESSION_WRITES_PER_MIN) || 20,
+  });
+  app.post('/api/sessions', sessionWriteLimit, express.json({ limit: SESSION_BODY_LIMIT }));
+  app.patch('/api/sessions/:id', sessionWriteLimit, express.json({ limit: SESSION_BODY_LIMIT }));
+
   app.use(express.json());
+
+  // ─── EVERY OTHER WRITE ───
+  //
+  // Reads are deliberately untouched: the dashboard polls `/api/waiting` every
+  // ten seconds and the watchdog polls `/api/healthz` every minute, and neither
+  // costs anything worth defending. Writes are what create rows, send email and
+  // spend money.
+  const apiWriteLimit = rateLimit({
+    name: 'api-write', windowMs: 60_000,
+    max: Number(process.env.API_WRITES_PER_MIN) || 60,
+  });
+  app.use('/api', (req, res, next) => {
+    if (req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS') return next();
+    return apiWriteLimit(req, res, next);
+  });
 
   // ─── Teacher identity and records (replaces Supabase) ───
   //
@@ -4495,12 +4574,52 @@ Build a widget that teaches: ${safePrompt}`;
       console.warn('\u26a0\ufe0f  SESSION_SECRET is not set \u2014 teachers will be signed out on every restart.');
       sessionSecret = randomBytes(32).toString('hex');
     }
+    // ─── SIGN-IN, THE ONE ROUTE THAT SPENDS SOMEBODY ELSE'S MONEY ───
+    //
+    // Every call to magic-link sends an email. Unlimited, that is a way to
+    // empty a Resend quota, to put this domain's sending reputation in front of
+    // a spam filter, and to post a stranger's inbox full of sign-in links they
+    // never asked for. Two windows, because they stop different things: the
+    // per-address one stops a single inbox being buried, and the per-caller one
+    // stops one machine walking an address list.
+    //
+    // The refusal is a 429 either way, and identical whether or not the address
+    // has an account — so it still cannot be used to find out who is a teacher
+    // here. (PLAN.md task 0.2 suggested answering "check your email" for that
+    // reason; a 429 leaks nothing extra and does not lie to a tutor who
+    // double-clicked, so it is the answer given.)
+    const magicLinkPerAddress = rateLimit({
+      name: 'magic-link/address', windowMs: 3_600_000,
+      max: Number(process.env.MAGIC_LINK_PER_EMAIL_PER_HOUR) || 5,
+      key: (req) => String((req.body as { email?: string } | undefined)?.email || '').trim().toLowerCase() || null,
+      body: (s) => ({
+        error: `We have already sent several sign-in links to that address. Check your inbox and spam folder, or try again in ${Math.ceil(s / 60)} minutes.`,
+        code: 'rate_limited',
+      }),
+    });
+    const magicLinkPerCaller = rateLimit({
+      name: 'magic-link/caller', windowMs: 3_600_000,
+      max: Number(process.env.MAGIC_LINK_PER_IP_PER_HOUR) || 20,
+      body: (s) => ({
+        error: `Too many sign-in requests from this connection. Try again in ${Math.ceil(s / 60)} minutes.`,
+        code: 'rate_limited',
+      }),
+    });
+    app.post('/api/auth/magic-link', magicLinkPerCaller, magicLinkPerAddress);
+    // The callback is a GET, so the write limiter above never sees it. A link
+    // is single-use and its token is 32 random bytes, so this is not guessable
+    // — the ceiling is here to stop the guessing being free.
+    app.get('/api/auth/callback', rateLimit({
+      name: 'auth-callback', windowMs: 3_600_000,
+      max: Number(process.env.AUTH_CALLBACK_PER_HOUR) || 30,
+    }));
+
     mountAuthRoutes(app, appPool, {
       secret: sessionSecret,
       secure: process.env.NODE_ENV === 'production',
     });
     mountRecordRoutes(app, appPool, { secret: sessionSecret });
-    mountBoardImageRoutes(app, appPool);
+    mountBoardImageRoutes(app, appPool, { secret: sessionSecret });
     mountBillingRoutes(app, appPool, { secret: sessionSecret });
     mountOwnerDashRoutes(app, appPool, {
       secret: sessionSecret,

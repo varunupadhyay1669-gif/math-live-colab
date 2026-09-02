@@ -22,6 +22,8 @@ import { parseDataUrl, externaliseBoardImages } from './src/server/boardImages.t
 import { accessFrom, TRIAL_DAYS, PRICE_RUPEES, GRACE_DAYS, PLANS, priceFor, perMonth } from './src/server/billing.ts';
 import { _warningFor } from './src/server/scheduler.ts';
 import { SEED_LESSONS } from './src/lib/seedLessons.ts';
+import { makeLimiter } from './src/server/rateLimit.ts';
+import { readFile } from 'node:fs/promises';
 import QRCode from 'qrcode';
 import jsQR from 'jsqr';
 import { PNG } from 'pngjs';
@@ -565,6 +567,68 @@ section('OFFLINE — the payment QR says what it should');
         `the ${months}-month QR asks for the plan price, not months × list`, q.am);
     }
   }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+section('OFFLINE — how often one address may ask');
+{
+  // The three properties that matter. A rate limiter is easy to write and easy
+  // to write wrongly, and the failure modes are asymmetric: too loose and the
+  // quota it guards is spent by a stranger; too tight, or buggy, and a tutor
+  // cannot sign in before a lesson.
+  const now0 = 1_700_000_000_000;
+
+  const l = makeLimiter({ name: 'test', windowMs: 60_000, max: 3 });
+  const first = [1, 2, 3].map(i => l.check('a', now0 + i));
+  assert(first.every(d => d.allowed), 'the first requests up to the ceiling are allowed');
+  assert(l.check('a', now0 + 4).allowed === false, 'one past the ceiling is refused');
+  assert(l.check('b', now0 + 5).allowed === true, 'a different key has its own window');
+  assert(l.check('a', now0 + 61_000).allowed === true, 'the window reopens after it expires');
+
+  // Rule 1 from rateLimit.ts: fail open. A key of the wrong shape, a nonsense
+  // configuration — none of it may end in a refusal.
+  assert(makeLimiter({ name: 't', windowMs: 60_000, max: 0 }).check('a', now0).allowed,
+    'a limiter configured with no ceiling allows everything rather than nothing');
+  assert(l.check('', now0).allowed, 'an empty key is allowed, never refused');
+
+  // Rule 2: bounded. The heap ceiling on this box has killed the service
+  // twice; a limiter that grows one entry per address seen is a slow version
+  // of the same bug.
+  const small = makeLimiter({ name: 'bounded', windowMs: 60_000, max: 1, maxKeys: 50 });
+  for (let i = 0; i < 500; i++) small.check(`ip-${i}`, now0);
+  assert(small.size() <= 50, 'the window never holds more keys than it is allowed to',
+    `held ${small.size()}`);
+
+  // Expired entries are dropped rather than accumulating for the life of the
+  // process — the ordinary case, which must not depend on hitting the cap.
+  const sweeper = makeLimiter({ name: 'sweep', windowMs: 1_000, max: 5 });
+  for (let i = 0; i < 20; i++) sweeper.check(`k-${i}`, now0);
+  assert(sweeper.sweep(now0 + 2_000) === 20 && sweeper.size() === 0,
+    'a sweep drops every window that has expired');
+
+  // The refusal must not depend on the address being known here any more than
+  // it does in identity.ts: same limiter, same answer, whoever is asking.
+  const a = makeLimiter({ name: 'enum', windowMs: 60_000, max: 1 });
+  a.check('known@example.com', now0); a.check('unknown@example.com', now0);
+  const known = a.check('known@example.com', now0);
+  const unknown = a.check('unknown@example.com', now0);
+  assert(known.allowed === unknown.allowed && known.retryAfterMs === unknown.retryAfterMs,
+    'a refusal looks identical for a known and an unknown address');
+}
+
+section('OFFLINE — who may put a picture on the board');
+{
+  // The route used to accept 6 MB from anyone who could reach the server and
+  // write it to Postgres for ever. This asserts the gate is still in the file
+  // that mounts it — cheap, and it catches the refactor that quietly drops it.
+  const src = await readFile(new URL('./src/server/boardImages.ts', import.meta.url), 'utf8');
+  assert(/userFromRequest\(req,\s*opts\.secret\)/.test(src),
+    'the board-image upload checks the session cookie');
+  assert(/sign_in_required/.test(src),
+    'it refuses with a code the client can act on rather than a bare 401');
+  const mount = src.slice(src.indexOf('export function mountBoardImageRoutes'));
+  assert(mount.indexOf('userFromRequest') < mount.indexOf('parseDataUrl'),
+    'the session is checked BEFORE a 6 MB body is parsed');
 }
 
 // LIVE — the protocol, against a running server.
