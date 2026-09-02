@@ -616,6 +616,31 @@ section('OFFLINE — how often one address may ask');
     'a refusal looks identical for a known and an unknown address');
 }
 
+section('OFFLINE — a new teacher gets the trial they were promised');
+{
+  // The bug this pins, found in production on 2 Sep 2026 with a real stranger
+  // sitting behind it: `trial_started_at` was populated only by the boot-time
+  // statement in BILLING_SCHEMA_SQL, so anyone who signed up between two
+  // restarts had none. A row with no trial date and no payment is EXPIRED by
+  // design — so their first lesson was answered with "Your free trial has
+  // ended". Before it had started.
+  const now = new Date('2026-09-02T12:00:00Z');
+  assert(accessFrom({ trial_started_at: null, paid_until: null }, now).state === 'expired',
+    'a row with no trial date and no payment is still refused — the fail-closed rule stands');
+  assert(accessFrom({ trial_started_at: now.toISOString(), paid_until: null }, now).state === 'trial',
+    'a row stamped at sign-up is on trial, not expired');
+  assert(accessFrom({ trial_started_at: now.toISOString(), paid_until: null }, now).daysLeft === TRIAL_DAYS,
+    'and gets the full trial, not part of one');
+
+  // Which makes the INSERT the thing that has to be right.
+  const identitySrc = await readFile(new URL('./src/server/identity.ts', import.meta.url), 'utf8');
+  const insert = identitySrc.slice(identitySrc.indexOf('INSERT INTO users'), identitySrc.indexOf('RETURNING id, email'));
+  assert(/trial_started_at/.test(insert),
+    'creating an account stamps the trial start, rather than waiting for the next restart');
+  assert(!/DO UPDATE SET[^`]*trial_started_at/.test(insert),
+    'signing in again does NOT restart a trial that is already running');
+}
+
 section('OFFLINE — who may put a picture on the board');
 {
   // The route used to accept 6 MB from anyone who could reach the server and

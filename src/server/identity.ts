@@ -293,8 +293,22 @@ export function mountAuthRoutes(app: any, pool: Pool, opts: { secret: string; se
       }
 
       const id = `u_${b64url(randomBytes(9))}`;
+      // `trial_started_at` is set HERE, at the moment the account is created.
+      //
+      // It used to be set only by the boot-time schema statement in billing.ts
+      // ("UPDATE users SET trial_started_at = created_at WHERE ... IS NULL"),
+      // which meant a teacher who signed up between two restarts had no trial
+      // date at all. `accessFrom()` treats a row with neither a trial date nor
+      // a payment as EXPIRED — deliberately, because "no record of you" is not
+      // a reason to hand out the product — so the socket refused them the
+      // teacher seat with "Your free trial has ended", on their first lesson,
+      // before it had begun. The one message a new teacher must never see.
+      //
+      // ON CONFLICT deliberately does NOT touch it: signing in again must not
+      // restart a trial that is already running, or ending.
       const user = await pool.query(
-        `INSERT INTO users (id, email, last_login_at) VALUES ($1, $2, now())
+        `INSERT INTO users (id, email, last_login_at, trial_started_at)
+              VALUES ($1, $2, now(), now())
          ON CONFLICT (email) DO UPDATE SET last_login_at = now()
       RETURNING id, email`,
         [id, email],

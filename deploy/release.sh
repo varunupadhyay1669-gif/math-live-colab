@@ -75,7 +75,21 @@ prune() {
     | while read -r old; do echo "  pruning $(basename "$old")"; rm -rf "$old"; done
 }
 
+healthy() {
+  curl -sf --max-time 5 http://127.0.0.1:4000/api/healthz 2>/dev/null | grep -q '"ok":true'
+}
+
 restart() {
+  # A service that is not answering has no lesson to protect, and waiting for
+  # one would keep the site down for up to two hours. This matters most on the
+  # rollback path, where the whole reason we are here is that the app did not
+  # come up: restart-when-free reads its room count from the health endpoint,
+  # so a dead app looks to it exactly like a busy one.
+  if ! healthy; then
+    say "The service is not answering — restarting now rather than waiting for an idle room"
+    systemctl restart mathslive
+    return
+  fi
   if [ -x /usr/local/bin/mathslive-restart-when-free ]; then
     say "Restarting at the first moment no lesson is running"
     # Deliberately backgrounded through systemd-run: this waits for an idle

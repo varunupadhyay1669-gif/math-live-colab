@@ -89,8 +89,9 @@ mathslive.matheinstein.com {
 	}
 }
 
-# ── The name used during the AWS trial run; kept so old links still work. ──
-aws.matheinstein.com {
+# ── Older names, kept so no link printed or pasted into a chat ever
+#    dead-ends on a student's iPad. ──
+aws.matheinstein.com, 52-66-124-44.sslip.io {
 	import security_headers
 	redir https://mathslive.matheinstein.com{uri} permanent
 }
