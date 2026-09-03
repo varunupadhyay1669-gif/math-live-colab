@@ -30,7 +30,8 @@
     "stress11": "node stress11.mjs",
     "stress12": "node stress12.mjs",
     "stress13": "node stress13.mjs",
-    "stress14": "node stress14.mjs"
+    "stress14": "node stress14.mjs",
+    "verify:smoke": "playwright test"
   },
   "dependencies": {
     "@google/genai": "^1.29.0",
@@ -52,6 +53,7 @@
     "uuid": "^13.0.0"
   },
   "devDependencies": {
+    "@playwright/test": "^1.62.1",
     "@tailwindcss/vite": "^4.1.14",
     "@types/express": "^4.17.21",
     "@types/node": "^22.14.0",

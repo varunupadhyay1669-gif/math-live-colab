@@ -10,3 +10,8 @@ coverage/
 
 # Server env file for the Lightsail deploy — secrets, never commit.
 deploy/mathslive.env
+
+# Playwright output. Traces and screenshots are kept only for a failure,
+# and only long enough to look at.
+test-results/
+playwright-report/

@@ -44,3 +44,26 @@ jobs:
             sleep 1
           done
           PORT=4000 node --import tsx verify-mirror.mjs
+
+      # The half no other test can reach: two real browsers, a real lesson, and
+      # the question that actually matters — does the teacher's screen appear on
+      # the learner's, and change when the teacher changes it. The dev server
+      # from the step above is still running.
+      #
+      # Chromium only. Learners are on iPad Safari and that is the browser that
+      # matters most, but Playwright's WebKit is not Safari and the failures
+      # worth catching are exactly where the two differ — running it would buy
+      # the feeling of coverage rather than the coverage.
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Smoke (two browsers, one lesson)
+        run: npm run verify:smoke
+
+      - name: Keep the trace when it fails
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-trace
+          path: test-results/
+          retention-days: 7
