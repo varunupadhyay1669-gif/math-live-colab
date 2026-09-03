@@ -1504,7 +1504,51 @@ handler whose body is a comment.
 
 Tests: 132 → 196 offline, 38 pack, 3 smoke.
 
-**Not started:** Phase 2 onward.
+**Not started at the time of that entry:** Phase 2 onward. Superseded below.
+
+**Phase 2 — 2.1, 2.2, 2.3, 2.10 shipped 3 Sep 2026** (roles and workspaces,
+free-forever grants, the people console with an audit trail, and the admin read
+indexes). 2.4–2.9 not started.
+
+**Asked for outside the plan, built 3 Sep 2026: a class keeps its last lesson.**
+The founder's rule — "as soon as the next class happens and it's saved, the
+previous class data gets deleted… only if I'm joining that class now, I should
+have the data of the last class." Implemented as `LESSON_HISTORY_KEEP` (2) and
+`pruneLessonHistory()` in `src/server/records.ts`, fired by the INSERT of a new
+lesson so it runs when a class begins and never during one.
+
+Measured before it was written, and worth recording because it contradicts the
+premise: **it prunes zero rows today.** `teaching_sessions` is 1.5 MB — 16
+lessons across 14 classes, never more than 2 in any one class. It is insurance,
+not a fix. What was actually consuming the box was `rooms`: 19 MB of live data
+inside a 387 MB table, reclaimed by `VACUUM FULL` in 0.19s, with autovacuum
+tuned per-table afterwards.
+
+**Two incidents on 3 Sep 2026, both found by trying to measure that feature:**
+
+1. **Postgres had been dead for three hours** (OOM-killed 06:09 UTC) while
+   `/api/healthz` answered `{"ok":true,"durableRooms":true}` throughout —
+   `durableRooms` reports which store was *configured*, not whether it answers.
+   Sign-in, saving a lesson and durable rooms were all failing; rooms `anika`
+   and `vaanya-hmi6` could not persist. healthz now probes the database and
+   reports `db`; the watchdog starts the *database* on `db:"down"` rather than
+   restarting the app, which would not have helped and would have cut a lesson.
+   Postgres gained `Restart=on-failure` and `OOMScoreAdjust=-500` — the kernel's
+   preference was backwards on this box.
+
+2. **The deploy path could fail halfway.** `release.sh` unpacked the tarball and
+   *then* ran `tsc --noEmit` on the server; the compiler asked for 455 MB beside
+   Postgres and was killed, leaving new files on disk under the old process.
+   The check moved to the build machine (`npm run pack` writes `.typecheck-ok`)
+   and is verified out of the tarball *before* anything is unpacked. Also fixed:
+   `release.sh` is inside the tarball it unpacks, and bash reads a script by byte
+   offset — it now re-execs from a private copy. Latent since it was written.
+
+Both are the same lesson from two directions: **a green health check proves the
+web server is answering and nothing else.** When a dependency is added, decide
+what healthz does when it dies, before it dies.
+
+Tests: 196 → 230 offline, 38 pack, 3 smoke.
 
 ---
 
