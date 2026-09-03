@@ -94,6 +94,33 @@ else
   fi
 fi
 
+# ── Is the DATABASE there? ─────────────────────────────────────────────────
+#
+# The gap that cost three hours on 3 Sep 2026. Postgres was OOM-killed, its
+# unit had no Restart=, and the app kept answering "ok" — so this script, which
+# ran sixty times an hour throughout, reported a healthy site while sign-in and
+# every save were broken.
+#
+# Deliberately does NOT restart the app: restarting Node does not start
+# Postgres, and it would cut whatever lesson was still limping along. It starts
+# the DATABASE, which is the thing that is actually down, and only then tells
+# somebody.
+if printf '%s' "$BODY" | grep -q '"db":"down"'; then
+  if should_alert dbdown; then
+    logger -t mathslive-watchdog "database unreachable — attempting to start it"
+    systemctl start postgresql@16-main 2>/dev/null || systemctl start postgresql 2>/dev/null || true
+    sleep 5
+    AFTER=$(curl -s --max-time 10 "$URL" 2>/dev/null || true)
+    if printf '%s' "$AFTER" | grep -q '"db":"up"'; then
+      notify "MathsLive: the database was down and has been restarted" \
+        "Postgres was not answering. It was started automatically and the app can reach it again.$(printf '\n\n')Sign-in, saving lessons and durable rooms were ALL failing until now — check whether a lesson happened during that window.$(printf '\n\n')$(journalctl -u postgresql@16-main -n 20 --no-pager 2>/dev/null | tail -c 1200)"
+    else
+      notify "MathsLive: the DATABASE IS DOWN and would not start" \
+        "The app is still serving, so the site looks fine — but sign-in, saving a lesson and durable rooms are all failing. This needs a person.$(printf '\n\n')$(journalctl -u postgresql@16-main -n 30 --no-pager 2>/dev/null | tail -c 2000)"
+    fi
+  fi
+fi
+
 # ── Is it about to fall over? ──────────────────────────────────────────────
 # The 1 GB box runs the app, Postgres and the OS together, and the failure that
 # actually happened was memory. Warning before the kernel starts choosing what

@@ -4427,9 +4427,50 @@ Build a widget that teaches: ${safePrompt}`;
   // and answer it themselves — Google AI Studio returns its own 404 there — so
   // the client would conclude the server was unreachable and skip the passcode
   // prompt entirely. /api/healthz is under a prefix hosts leave alone.
-  app.get(['/healthz', '/api/healthz'], (_req, res) => {
+  // ─── IS THE DATABASE THERE? ───
+  //
+  // Added 3 Sep 2026, after the failure this could not see. Postgres was
+  // OOM-killed at 06:09 and stayed down for nearly three hours: its unit had
+  // no Restart=, and the kernel chose it over the app. Sign-in, saving a
+  // lesson and durable rooms were all broken the whole time — two real rooms
+  // failed to persist — and this endpoint answered {"ok":true,
+  // "durableRooms":true} throughout, because `durableRooms` reports which
+  // store was CONFIGURED, not whether it answers. So the watchdog saw a
+  // healthy site once a minute and did nothing.
+  //
+  // Cached for fifteen seconds because the watchdog, the keep-warm ping and
+  // the tests all hit this; an uncached probe would add a query per call for a
+  // number that cannot change that fast.
+  let dbProbe: { ok: boolean; at: number; error: string | null } = { ok: true, at: 0, error: null };
+  async function databaseReachable(): Promise<{ ok: boolean; error: string | null }> {
+    // No database configured is not the same as a database that is down.
+    if (!appPool) return { ok: true, error: null };
+    const now = Date.now();
+    if (now - dbProbe.at < 15_000) return { ok: dbProbe.ok, error: dbProbe.error };
+    try {
+      // Bounded, because a hung connection would otherwise hang the health
+      // check itself — turning "the database is slow" into "the site is down".
+      await Promise.race([
+        appPool.query('SELECT 1'),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('timed out after 3s')), 3000)),
+      ]);
+      dbProbe = { ok: true, at: now, error: null };
+    } catch (err) {
+      dbProbe = { ok: false, at: now, error: (err as Error).message.slice(0, 140) };
+    }
+    return { ok: dbProbe.ok, error: dbProbe.error };
+  }
+
+  app.get(['/healthz', '/api/healthz'], async (_req, res) => {
+    const db = await databaseReachable();
     res.status(200).json({
+      // Deliberately still true when the database is down. `ok` is what the
+      // watchdog restarts the app on, and restarting the app does not start
+      // Postgres — it would only cut whatever lesson was still working. The
+      // watchdog reads `db` separately and starts the database instead.
       ok: true,
+      db: db.ok ? 'up' : 'down',
+      ...(db.error ? { dbError: db.error } : {}),
       uptime: process.uptime(),
       rooms: rooms.size,
       // How long since ANY room saw activity. A tab left open overnight keeps

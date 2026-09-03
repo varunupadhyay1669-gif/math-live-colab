@@ -26,6 +26,7 @@ import { makeLimiter } from './src/server/rateLimit.ts';
 import { listMigrationFiles } from './src/server/migrate.ts';
 import { PRODUCT, subjectFor } from './src/lib/product.ts';
 import { can, permissionsOf } from './src/server/authz.ts';
+import { LESSON_HISTORY_KEEP } from './src/server/records.ts';
 import { readFile } from 'node:fs/promises';
 import QRCode from 'qrcode';
 import jsQR from 'jsqr';
@@ -542,6 +543,45 @@ section('OFFLINE — the name and the subject are configuration, not literals');
     prod.slice(prod.indexOf('export const PRODUCT'))),
     'no wire or storage contract is routed through the brand config',
     'renaming a script id or a storage key breaks lessons and libraries that already exist');
+}
+
+section('OFFLINE — a class keeps the last lesson, not every lesson');
+{
+  // The founder's rule, in his words: "as soon as the next class happens and
+  // it's saved, the previous class data gets deleted… only if I'm joining that
+  // class now, I should have the data of the last class."
+  //
+  // Two is the smallest number that keeps that promise, and the reason is the
+  // whole point of the feature: with one, today's lesson would delete
+  // yesterday's the moment it began — and yesterday's is exactly what the
+  // teacher opens the room to look at.
+  assert(LESSON_HISTORY_KEEP === 2,
+    'a class keeps the current lesson and the one before it',
+    `keeping ${LESSON_HISTORY_KEEP}`);
+
+  const src = readFileSync('src/server/records.ts', 'utf8');
+  const prune = src.slice(src.indexOf('export async function pruneLessonHistory'), src.indexOf('export function mountRecordRoutes'));
+
+  assert(/teacher_id = \$2/.test(prune),
+    'the delete is scoped by teacher as well as class',
+    'every statement in this file is scoped by the session cookie; a DELETE most of all');
+  assert(/ORDER BY started_at DESC, id DESC/.test(prune),
+    'the ordering breaks ties',
+    'two rows sharing a timestamp could otherwise both be "newest" and the wrong one survive');
+  assert(/LIMIT \$3/.test(prune) && /NOT IN/.test(prune),
+    'it keeps the newest N and deletes only what is outside them');
+  assert(/catch/.test(prune) && /return 0/.test(prune),
+    'a failed prune never fails the request',
+    'losing the prune is a bigger table; failing the save loses the lesson just taught');
+
+  // Pruning is triggered by an INSERT, not an update — so it happens when a
+  // new class begins and never in the middle of one.
+  const insertBlock = src.slice(src.indexOf("app.post('/api/sessions'"), src.indexOf("app.get('/api/sessions/:id'"));
+  assert(/pruneLessonHistory\(pool, b\.classId, user\.id\)/.test(insertBlock),
+    'a new lesson is what triggers the prune');
+  assert(!/pruneLessonHistory/.test(src.slice(src.indexOf("app.patch('/api/sessions/:id'"))),
+    'saving again during the same lesson does not',
+    'saveLessonForDay updates today\'s row; pruning there would delete on every autosave');
 }
 
 section('OFFLINE — free forever means forever');

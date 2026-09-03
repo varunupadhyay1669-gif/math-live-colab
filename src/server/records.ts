@@ -27,6 +27,64 @@ function slug(s: string): string {
     .slice(0, 15);
 }
 
+/**
+ * How many lessons of history a class keeps.
+ *
+ * The founder's rule, in his words: "as soon as the next class happens and it's
+ * saved, the previous class data gets deleted… only if I'm joining that class
+ * now, I should have the data of the last class."
+ *
+ * Two is the smallest number that keeps that promise. During today's lesson the
+ * class holds today's row and the last one, so opening the room always shows
+ * where you stopped; when tomorrow's lesson is saved, the one before last goes.
+ * One would delete the previous lesson the moment today's began — which is
+ * exactly the thing the teacher opens the room to look at.
+ *
+ * Configurable because it is a policy, not a fact, and because the honest cost
+ * is real: a class's history stops at two lessons. That is a deliberate trade
+ * of "what did we do in March" for a database that cannot grow without bound
+ * on a 1 GB box. Raise it to 6 and a term of Saturdays survives; set it to 0
+ * to keep everything, which is what the product did until today.
+ */
+export const LESSON_HISTORY_KEEP = Math.max(0, Number(process.env.LESSON_HISTORY_KEEP ?? 2));
+
+/**
+ * Delete a class's older lessons, keeping the newest LESSON_HISTORY_KEEP.
+ *
+ * Called after a NEW lesson row is created, which is once per class per day —
+ * so pruning happens exactly when a new class begins, and never in the middle
+ * of one. Scoped by teacher_id as well as class_id, like every other statement
+ * in this file: the caller is never trusted to say whose data this is.
+ *
+ * Returns how many were removed. Never throws: losing the prune is a slightly
+ * larger table, while failing the request would lose the lesson that was just
+ * taught, and those are not the same size of mistake.
+ */
+export async function pruneLessonHistory(pool: Pool, classId: string, teacherId: string): Promise<number> {
+  if (LESSON_HISTORY_KEEP === 0) return 0;
+  try {
+    const r = await pool.query(
+      `DELETE FROM teaching_sessions
+        WHERE class_id = $1 AND teacher_id = $2
+          AND id NOT IN (
+            SELECT id FROM teaching_sessions
+             WHERE class_id = $1 AND teacher_id = $2
+             -- id breaks a tie, so two rows sharing a timestamp can never both
+             -- be "the newest" and leave the wrong one behind.
+             ORDER BY started_at DESC, id DESC
+             LIMIT $3
+          )`,
+      [classId, teacherId, LESSON_HISTORY_KEEP],
+    );
+    const n = r.rowCount ?? 0;
+    if (n > 0) console.log(`🧹 class ${classId}: ${n} older lesson(s) removed, newest ${LESSON_HISTORY_KEEP} kept`);
+    return n;
+  } catch (err) {
+    console.error(`Could not prune lesson history for ${classId}:`, (err as Error).message);
+    return 0;
+  }
+}
+
 export function mountRecordRoutes(app: any, pool: Pool, opts: { secret: string }) {
   const { secret } = opts;
 
@@ -187,7 +245,8 @@ export function mountRecordRoutes(app: any, pool: Pool, opts: { secret: string }
           b.html ?? null,
         ],
       );
-      res.json({ session: r.rows[0] });
+      const pruned = await pruneLessonHistory(pool, b.classId, user.id);
+      res.json({ session: r.rows[0], pruned });
     } catch (err) { fail(res, err, 'save the session'); }
   });
 
