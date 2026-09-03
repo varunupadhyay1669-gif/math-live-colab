@@ -17,6 +17,7 @@
     "verify:mirror": "node --import tsx verify-mirror.mjs",
     "test": "npm run lint && npm run verify:mirror && npm run verify:pack",
     "verify:pack": "node --import tsx tools/pack_tests.mjs",
+    "pack": "node tools/pack_release.mjs",
     "stress": "node stress.mjs",
     "stress2": "node stress2.mjs",
     "stress3": "node stress3.mjs",

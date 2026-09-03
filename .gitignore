@@ -15,3 +15,4 @@ deploy/mathslive.env
 # and only long enough to look at.
 test-results/
 playwright-report/
+.typecheck-ok

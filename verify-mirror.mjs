@@ -584,6 +584,46 @@ section('OFFLINE — a class keeps the last lesson, not every lesson');
     'saveLessonForDay updates today\'s row; pruning there would delete on every autosave');
 }
 
+section('OFFLINE — a deploy checks before it touches anything');
+{
+  // 3 Sep 2026. release.sh unpacked the tarball and THEN ran `tsc --noEmit` on
+  // the server. The compiler asked for 455MB beside Postgres on a 1GB box and
+  // was killed, so the deploy failed with new files on disk and the old process
+  // still serving — the next restart from any cause would have shipped code
+  // nobody had decided to ship.
+  const rel = readFileSync('deploy/release.sh', 'utf8');
+  const dep = rel.slice(rel.indexOf('  deploy)'), rel.indexOf('  list)'));
+
+  assert(dep.indexOf('.typecheck-ok') < dep.indexOf('tar xzf'),
+    'the tarball is verified before it is unpacked',
+    'a rejected deploy must leave the running version completely untouched');
+  assert(!/npx tsc --noEmit/.test(dep),
+    'the compiler is never run beside the database',
+    'tsc is a bigger process than the app it checks, and losing Postgres costs more than the check is worth');
+  assert(/tar xzOf .*\.typecheck-ok/.test(dep),
+    'the marker is read out of the tarball, not off the disk',
+    'a marker already on the box belongs to the release being REPLACED');
+  assert(/ALLOW_UNCHECKED/.test(dep),
+    'there is a deliberate way past it',
+    'a check with no override gets deleted the first night it is in the way');
+
+  // The script is inside the tarball it unpacks, and bash reads a script by
+  // byte offset as it goes.
+  assert(dep.indexOf('RELEASE_REEXEC') < dep.indexOf('tar xzf') && /exec "\$SELF"/.test(dep),
+    'the deploy re-execs from a private copy before unpacking over itself');
+
+  assert(/PARTS=\(.*\.typecheck-ok\)/.test(rel),
+    'a rollback restores the proof belonging to the release it restores');
+
+  const pack = readFileSync('tools/pack_release.mjs', 'utf8');
+  // lastIndexOf, because the first `writeFileSync` in the file is the import.
+  assert(pack.indexOf("run('1/4") < pack.lastIndexOf('writeFileSync('),
+    'the marker is written only after the suite has passed');
+  assert(/if \(existsSync\(MARKER\)\) unlinkSync\(MARKER\)/.test(pack),
+    'a stale marker is deleted before a build and after a failure',
+    'otherwise a broken build inherits the proof earned by the last good one');
+}
+
 section('OFFLINE — free forever means forever');
 {
   // Task 2.2. From the brief: "I and anyone I hand-pick get full access free

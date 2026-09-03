@@ -28,7 +28,7 @@ KEEP=${KEEP_RELEASES:-5}
 # installed by npm on the box, and it changes only when package.json does —
 # which is why package.json and its lock file ARE included, so a rollback can
 # tell you it needs an `npm ci`.
-PARTS=(server.ts src dist package.json package-lock.json index.html vite.config.ts tsconfig.json)
+PARTS=(server.ts src dist package.json package-lock.json index.html vite.config.ts tsconfig.json .typecheck-ok)
 
 say() { printf '\n\033[1;36m%s\033[0m\n' "$*"; }
 die() { printf '\033[1;31m%s\033[0m\n' "$*" >&2; exit 1; }
@@ -132,18 +132,58 @@ case "${1:-}" in
   deploy)
     TARBALL="${2:-}"
     [ -f "$TARBALL" ] || die "usage: release.sh deploy /path/to/app.tgz"
-    say "1/4  Keeping a copy of what is running"
+
+    # This script lives inside the tarball it is about to unpack, and tar
+    # rewrites files in place. Bash reads a script incrementally, by byte
+    # offset, so a deploy that changes release.sh can corrupt the deploy that is
+    # running it — silently, and halfway through. Re-exec from a private copy
+    # first; nothing below can then be rewritten underneath us.
+    if [ -z "${RELEASE_REEXEC:-}" ]; then
+      SELF=$(mktemp /tmp/mathslive-release-XXXXXX.sh) || die "could not make a working copy"
+      cat "$0" > "$SELF" && chmod +x "$SELF" || die "could not make a working copy"
+      RELEASE_REEXEC="$SELF" exec "$SELF" "$@"
+    fi
+    trap 'rm -f "${RELEASE_REEXEC:-}"' EXIT
+
+    say "1/4  Checking the tarball was type-checked before it got here"
+    # NOT by running tsc. On 3 Sep 2026 that is exactly what this did: the
+    # compiler asked for 455MB beside Postgres on a 1GB box and was killed —
+    # after the files were already unpacked, so the deploy failed holding the
+    # door open. tsc is a bigger process than the app it checks, and losing the
+    # database to it costs more than the check is worth.
+    #
+    # So the check happens where there is memory for it (npm run pack) and
+    # travels with the tarball. Verified here BEFORE anything is unpacked, so a
+    # tarball that fails leaves the running version completely untouched.
+    OK=$(tar xzOf "$TARBALL" .typecheck-ok 2>/dev/null | head -1)
+    if [ -n "$OK" ] && { [ -z "${RELEASE_ID:-}" ] || [ "$OK" = "${RELEASE_ID}" ]; }; then
+      echo "  checked on the build machine: $OK"
+    elif [ -n "$OK" ]; then
+      die "this tarball was checked as '$OK' but you are deploying it as '${RELEASE_ID}'. One of them is wrong; ship what you built."
+    elif [ -n "${ALLOW_UNCHECKED:-}" ]; then
+      say "      UNCHECKED — deploying on your word that it builds"
+    else
+      # Deliberately a refusal and not a fallback to checking it here. There is
+      # no amount of free memory that makes running the compiler beside the
+      # database a good trade on this box, and a fallback would be taken by
+      # accident far more often than it was ever chosen.
+      die "this tarball carries no proof it was type-checked.
+
+  Build it properly (about 30 seconds, on the machine with memory):
+      npm run pack
+
+  Or, if you are certain and in a hurry:
+      sudo ALLOW_UNCHECKED=1 RELEASE_ID=${RELEASE_ID:-manual} $0 deploy $TARBALL
+
+  Nothing has been changed. The old version is still running."
+    fi
+
+    say "2/4  Keeping a copy of what is running"
     snapshot >/dev/null
-    say "2/4  Unpacking $(basename "$TARBALL")"
+    say "3/4  Unpacking $(basename "$TARBALL")"
     tar xzf "$TARBALL" -C "$APP" || die "unpack failed — nothing was changed beyond the files already written"
     chown -R mathslive:mathslive "$APP" 2>/dev/null || true
     [ -n "${RELEASE_ID:-}" ] && echo "$RELEASE_ID" > "$APP/.release-id"
-    say "3/4  Checking it at least parses"
-    # A build that cannot type-check is a build that will crash-loop. This is
-    # the last moment it is cheaper to find out.
-    if ! sudo -u mathslive bash -c "cd $APP && timeout 300 npx tsc --noEmit"; then
-      die "TypeScript failed. The old version is still running. Roll forward with a fixed build, or: release.sh rollback"
-    fi
     say "4/4  Restart"
     prune_assets
     restart
