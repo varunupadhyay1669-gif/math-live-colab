@@ -25,6 +25,7 @@ import { SEED_LESSONS } from './src/lib/seedLessons.ts';
 import { makeLimiter } from './src/server/rateLimit.ts';
 import { listMigrationFiles } from './src/server/migrate.ts';
 import { PRODUCT, subjectFor } from './src/lib/product.ts';
+import { can, permissionsOf } from './src/server/authz.ts';
 import { readFile } from 'node:fs/promises';
 import QRCode from 'qrcode';
 import jsQR from 'jsqr';
@@ -424,9 +425,25 @@ section('OFFLINE — schema changes that are not just "create it if missing"');
   for (const f of files) {
     const sql = readFileSync(`src/server/migrations/${f}`, 'utf8');
     const statements = sql.split(';').map(s => s.replace(/--[^\n]*/g, '').trim()).filter(Boolean);
-    assert(statements.every(s => /IF NOT EXISTS|ON CONFLICT|OR REPLACE/i.test(s)),
+    // A backfill cannot carry IF NOT EXISTS, so UPDATE is allowed — on the
+    // condition the author makes it CONVERGENT, i.e. its WHERE clause stops
+    // matching once it has run. That is a rule this check states rather than
+    // proves; what it does prove is that no CREATE or INSERT is unguarded.
+    const __bad = statements.filter(s => !(/IF NOT EXISTS|ON CONFLICT|OR REPLACE/i.test(s) || /^UPDATE/i.test(s)));
+    // Reported with the offending statement, not just a verdict. The first
+    // version of this check said only "not safe to apply twice" and cost half
+    // an hour: the regex contained a literal backspace character where a \b
+    // was meant — written through a shell heredoc into a template literal,
+    // where the escape was resolved one level too many — so it matched nothing
+    // and grep rendered it invisible. Same trap as the control-character class
+    // in mirrorScript.ts. Avoid backslashes in regexes written that way.
+    const offenders = statements.filter(s =>
+      !(/IF NOT EXISTS|ON CONFLICT|OR REPLACE/i.test(s) || /^UPDATE/i.test(s)));
+    assert(offenders.length === 0,
       `${f} is safe to apply twice`,
-      'there are no down-migrations here; the way back is the nightly dump');
+      offenders.length
+        ? `unguarded: ${JSON.stringify(offenders[0].slice(0, 120))}`
+        : "there are no down-migrations here; the way back is the nightly dump");
   }
 }
 
@@ -525,6 +542,50 @@ section('OFFLINE — the name and the subject are configuration, not literals');
     prod.slice(prod.indexOf('export const PRODUCT'))),
     'no wire or storage contract is routed through the brand config',
     'renaming a script id or a storage key breaks lessons and libraries that already exist');
+}
+
+section('OFFLINE — who may do what');
+{
+  // Task 2.1. The answer used to live in four places, and a new endpoint had to
+  // remember which of them applied. The one that was forgotten is the one
+  // nobody notices: /api/admin/grant hands out months of the product and
+  // recorded nothing about who granted it.
+  const boss = { id: 'u1', email: 'a@b.c', role: 'super_admin', permissions: [], status: 'active', defaultWorkspaceId: null };
+  const helper = { id: 'u2', email: 'h@b.c', role: 'staff', permissions: ['support.read'], status: 'active', defaultWorkspaceId: null };
+  const tutor = { id: 'u3', email: 't@b.c', role: 'teacher', permissions: ['billing.grant'], status: 'active', defaultWorkspaceId: null };
+
+  assert(can(boss, 'billing.grant') && can(boss, 'users.manage'),
+    'a super admin holds everything');
+  assert(can(helper, 'support.read'), 'staff hold what they were given');
+  assert(!can(helper, 'billing.grant'),
+    'and nothing else',
+    'a "staff" role that means everything-except-promoting is a second super admin');
+  assert(!can(tutor, 'billing.grant'),
+    'a permission on a teacher row grants nothing',
+    'role is the gate; the array is only read for staff');
+  assert(!can(null, 'support.read'), 'nobody is not somebody');
+
+  // Suspension has to bite here, not only at the door. An admin suspended
+  // mid-session keeps a valid signed cookie for up to thirty days.
+  assert(!can({ ...boss, status: 'suspended' }, 'support.read'),
+    'a suspended super admin can do nothing');
+  assert(permissionsOf({ ...boss, status: 'suspended' }).length === 0,
+    'and is told they hold nothing');
+  assert(permissionsOf(boss).length >= 8 && permissionsOf(tutor).length === 0,
+    'the list the client renders from matches the gate');
+
+  const authzSrc = readFileSync('src/server/authz.ts', 'utf8');
+  assert(/platform_admins/.test(authzSrc),
+    'the existing admin table is still read',
+    'so migration 0002 can land in production without changing who can do anything');
+  assert(/denying/.test(authzSrc),
+    'an authz lookup that fails denies',
+    'ownership and subscription fail OPEN to protect a lesson; this protects other people`s data');
+
+  const billingSrc = readFileSync('src/server/billing.ts', 'utf8');
+  const grant = billingSrc.slice(billingSrc.indexOf("app.post('/api/admin/grant'"));
+  assert(/audit\(pool, \{/.test(grant.slice(0, 2000)),
+    'granting paid time is written to the audit log');
 }
 
 section('OFFLINE — one engine');

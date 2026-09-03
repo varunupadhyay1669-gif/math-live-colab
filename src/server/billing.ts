@@ -24,6 +24,7 @@ import path from 'path';
 import QRCode from 'qrcode';
 import type { Pool } from 'pg';
 import { userFromRequest, type SessionUser } from './identity';
+import { audit, auditContext } from './authz';
 import { sendMail, sendTelegram, ownerAddresses, siteUrl, niceDate } from './mailer';
 
 /** How long a new teacher may use everything before paying. */
@@ -521,9 +522,21 @@ export function mountBillingRoutes(app: any, pool: Pool, opts: { secret: string 
     const months = Math.min(24, Math.max(1, Number(b.months) || 1));
     try {
       if (!await isAdmin(user)) return res.status(403).json({ error: 'Not an admin.' });
-      const t = await pool.query('SELECT id FROM users WHERE email = $1', [String(b.email || '').trim()]);
+      const t = await pool.query('SELECT id, paid_until FROM users WHERE email = $1', [String(b.email || '').trim()]);
       if (t.rowCount === 0) return res.status(404).json({ error: 'No teacher with that email.' });
       const paidUntil = await confirmPayment(pool, t.rows[0].id, months);
+      // This endpoint gives a teacher months of the product for nothing, and
+      // until now it left no trace of who did it, to whom, or why — the only
+      // record of any admin action anywhere was payment_claims.confirmed_by.
+      void audit(pool, {
+        actorUserId: user.id,
+        action: 'billing.grant',
+        targetType: 'user', targetId: t.rows[0].id,
+        before: { paid_until: t.rows[0].paid_until },
+        after: { paid_until: paidUntil, months },
+        reason: String((req.body as { reason?: string } | undefined)?.reason || '').slice(0, 500) || null,
+        ...auditContext(req),
+      });
       res.json({ ok: true, paidUntil });
     } catch (err) { fail(res, err, 'grant access'); }
   });
