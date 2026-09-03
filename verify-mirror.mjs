@@ -461,6 +461,40 @@ section('OFFLINE — the teacher can see a stuck student');
     'the injected observer is stripped out of the copy');
 }
 
+section('OFFLINE — pointing at something reaches the learner');
+{
+  // README advertises element pings — Alt+click to drop a "look here" ripple.
+  // The ripple was drawn by a function that lived only in the source branch, so
+  // the teacher saw their own and the learner saw nothing, while StudentView
+  // faithfully posted REMOTE_PING into a frame with no handler for it.
+  const followerJs = mirrorScriptFor('follower')
+    .replace(/^[\s\S]*?<script[^>]*>/i, '').replace(/<\/script>[\s\S]*$/i, '');
+  const dom = new JSDOM('<!doctype html><html><body><p>lesson</p></body></html>',
+    { runScripts: 'outside-only', pretendToBeVisual: true });
+  const { window } = dom;
+  window.parent = { postMessage: () => {} };
+  window.eval(followerJs);
+  const send = (d) => window.dispatchEvent(new window.MessageEvent('message', { data: d, source: window.parent }));
+  const pings = () => window.document.querySelectorAll('[data-mathslive-ping]').length;
+
+  assert(pings() === 0, 'no ripple before one is asked for');
+  send({ type: 'REMOTE_PING', clientX: 0.5, clientY: 0.5 });
+  assert(pings() === 1, 'a relayed ping draws a ripple on the learner');
+
+  // The two callers disagree about units and both are right: a ping from
+  // another screen is a fraction of the viewport, a locally drawn one is
+  // pixels. Getting this wrong puts every ripple in the top-left corner.
+  const el = window.document.querySelector('[data-mathslive-ping]');
+  const left = parseFloat(el.style.left);
+  assert(left > 40, 'a fractional coordinate is scaled to the viewport, not read as pixels',
+    `left=${el.style.left} — 0.5 of the width should not land at the edge`);
+
+  send({ type: 'REMOTE_PING', clientX: 300, clientY: 200 });
+  const all = [...window.document.querySelectorAll('[data-mathslive-ping]')];
+  assert(parseFloat(all[all.length - 1].style.left) === 278,
+    'a pixel coordinate is still used as pixels', all[all.length - 1].style.left);
+}
+
 section('OFFLINE — one engine');
 
 // Phase 3c removed the replay engine from the live path. Nothing should quietly

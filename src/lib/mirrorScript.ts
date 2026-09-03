@@ -876,6 +876,42 @@ export const mirrorScript = `
     return sanitizeInto(tpl.content) ? tpl.content : null;
   }
 
+  // "Look here." The teacher's Alt+click, on the learner's screen.
+  //
+  // README calls element pings a feature: anyone can Alt+click a sim to drop a
+  // synced ripple on the exact element. It has not reached a learner since the
+  // mirror replaced the replay engine — the ripple is drawn by a function that
+  // lives only in the SOURCE branch, so the teacher saw their own ripple and
+  // the student saw nothing. StudentView has been faithfully posting
+  // REMOTE_PING into a frame with no handler for it.
+  //
+  // Pointing at a thing is not a small gesture in one-to-one teaching; it is
+  // most of what a finger does over a shared page.
+  function pingAt(x, y) {
+    try {
+      // The two callers disagree about units, and both are right for their own
+      // reason: a ping relayed from another screen arrives as a FRACTION of the
+      // viewport (the only thing meaningful across different screen sizes),
+      // while a locally drawn one is in pixels. Anything inside 0..1 is read as
+      // a fraction. A pixel coordinate under 1 is the very top-left corner,
+      // which lands in the same place either way.
+      var px = (typeof x === 'number' && x >= 0 && x <= 1) ? x * (window.innerWidth || 0) : x;
+      var py = (typeof y === 'number' && y >= 0 && y <= 1) ? y * (window.innerHeight || 0) : y;
+      if (typeof px !== 'number' || typeof py !== 'number') return;
+      var ping = document.createElement('div');
+      ping.setAttribute('data-mathslive-ping', '1');
+      ping.style.cssText = 'position:fixed;left:' + (px - 22) + 'px;top:' + (py - 22) + 'px;width:44px;height:44px;border-radius:50%;border:3px solid #F43F5E;background:rgba(244,63,94,0.18);pointer-events:none;z-index:2147483647;animation:mathslive-ping-pop 1.2s ease-out forwards;';
+      if (!document.getElementById('mathslive-ping-style')) {
+        var st = document.createElement('style');
+        st.id = 'mathslive-ping-style';
+        st.textContent = '@keyframes mathslive-ping-pop{0%{transform:scale(0.4);opacity:1}70%{transform:scale(1.6);opacity:0.7}100%{transform:scale(2.4);opacity:0}}';
+        (document.head || document.documentElement).appendChild(st);
+      }
+      (document.body || document.documentElement).appendChild(ping);
+      setTimeout(function () { ping.parentNode && ping.parentNode.removeChild(ping); }, 1300);
+    } catch (e) {}
+  }
+
   // "Show me what this student is actually looking at."
   //
   // The teacher's peek button has never worked. The chain is: teacher clicks →
@@ -1403,6 +1439,7 @@ export const mirrorScript = `
     var d = e.data; if (!d || !d.type) return;
     if (d.type === 'MIRROR_APPLY') applySnapshot(d);
     else if (d.type === 'REQUEST_HTML') provideFollowerHtml(d.requestId);
+    else if (d.type === 'REMOTE_PING') pingAt(d.clientX, d.clientY);
     else if (d.type === 'MIRROR_CANVAS') paintCanvases(d.canvases || []);
     else if (d.type === 'MIRROR_SCROLL') {
       applyingScroll = Date.now();

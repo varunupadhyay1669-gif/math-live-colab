@@ -445,7 +445,6 @@ export default function StudentView() {
   const lastStudentMissAtRef = useRef(0);
   // Debounce for streaming the student's own DOM snapshot up to the teacher
   // (absolute-state sync so the teacher tracks the student's true state).
-  const studentSnapTimerRef = useRef<ReturnType<typeof setTimeout>>();
   const lastRevisionRef = useRef(0);
   // Refs the once-set-up socket handlers read for live values.
   const interactionAllowedRef = useRef(false);
@@ -692,18 +691,23 @@ export default function StudentView() {
     // queued transport — so a fresh iframe re-lives the whole lesson, a
     // kicked-and-reloaded tab catches up exactly, and a tab whose socket
     // merely blipped replays nothing it already applied.
-    newSocket.on("interaction_replay", ({ events }: { events: any[] }) => {
-      if (!Array.isArray(events) || events.length === 0) return;
-      let applied = 0;
-      for (const ev of events.slice(0, 400)) {
-        if (!ev || typeof ev.type !== 'string' || !ev.type.startsWith('SYNC_')) continue;
-        if (typeof ev.serverSeq !== 'number' || ev.serverSeq <= lastInboundSeqRef.current) continue;
-        lastInboundSeqRef.current = ev.serverSeq;
-        postToIframe({ ...ev, type: ev.type.replace('SYNC_', 'REMOTE_') });
-        applied++;
-      }
-      if (applied > 0) showNotification(`⚡ Catching you up — replayed ${applied} class steps`);
-    });
+    // REMOVED: the "interaction_replay" catch-up.
+    //
+    // It belonged to the replay engine: a late joiner booted the pristine
+    // lesson and re-lived the class's journal of clicks to converge. The
+    // follower shell runs no lesson code, so it has nothing to replay INTO —
+    // its message handler knows seven types and REMOTE_CLICK is not one of
+    // them. Every event went into the void.
+    //
+    // And then it told the student so: "⚡ Catching you up — replayed 12 class
+    // steps", on a screen where nothing had been replayed and nothing needed
+    // to be, because the mirror had already painted the current state. A false
+    // reassurance is worse than silence — it is the message a student would
+    // quote back when their screen was actually wrong.
+    //
+    // Catching up is now what it says in AGENTS.md §3.5: the server serves the
+    // cached mirror frame to a late joiner, and the fingerprint heartbeat
+    // repairs anything dropped after that.
 
     newSocket.on("disconnect", () => {
       setConnected(false);
@@ -1471,9 +1475,10 @@ export default function StudentView() {
         const rid = e.data.requestId;
         if (typeof rid === 'string' && rid.indexOf('peek-') === 0 && e.data.html) {
           // Teacher is peeking at this student's real screen — answer it.
+          // This is now the ONLY reason a follower is ever asked for its
+          // document; the 'sstate-' channel that used to share this branch was
+          // removed with the code that requested it.
           socket.emit('student_snapshot', { roomId, html: e.data.html, requestId: rid });
-        } else if (typeof rid === 'string' && rid.indexOf('sstate-') === 0 && e.data.html) {
-          socket.emit('student_state', { roomId, html: e.data.html });
         }
         return;
       }
@@ -1534,22 +1539,24 @@ export default function StudentView() {
         },
       });
 
-      // After a discrete interaction (not cursor/scroll/drag-move), debounce a
-      // DOM snapshot of the student's own iframe up to the teacher. This is the
-      // self-healing absolute-state channel: even if a replayed click was
-      // dropped or mis-targeted, the teacher's view snaps to the student's TRUE
-      // current state (e.g. the right quiz question).
-      // Typing (SYNC_INPUT/SYNC_CHANGE) is synced field-by-field via
-      // REMOTE_INPUT, which doesn't disturb the teacher's DOM — so it must NOT
-      // trigger a full-DOM snapshot (that was wiping the teacher's focused
-      // field). Snapshot only on discrete navigation (clicks, pointer, keys),
-      // debounced so a burst collapses to one.
-      if (type !== 'SYNC_SCROLL' && type !== 'SYNC_MOUSEMOVE' && type !== 'SYNC_INPUT' && type !== 'SYNC_CHANGE' && type !== 'SYNC_WHEEL') {
-        if (studentSnapTimerRef.current) clearTimeout(studentSnapTimerRef.current);
-        studentSnapTimerRef.current = setTimeout(() => {
-          postToIframe({ type: 'REQUEST_HTML', requestId: 'sstate-' + Date.now() });
-        }, 400);
-      }
+      // REMOVED: the debounced "absolute state" snapshot.
+      //
+      // It belonged to the replay engine, where a student ran their own copy of
+      // the lesson and could drift, so 400ms after every discrete interaction
+      // this student serialised its whole document and sent it to the teacher
+      // to snap their view onto the student's true state.
+      //
+      // Under the mirror there is one running copy and the student cannot
+      // drift, so Room.tsx has ignored the result for months — the handler is
+      // an explicit no-op with a paragraph explaining that swapping a student's
+      // DOM back onto the teacher was destructive. The whole chain existed and
+      // did nothing.
+      //
+      // It was harmless only because the follower never answered REQUEST_HTML.
+      // Fixing peek (task 1.6) made it answer — so leaving this here would have
+      // meant the driving student, the one clicking most, shipping a full
+      // document over the socket after every click, on an iPad, on mobile data,
+      // to reach a function whose body is a comment.
     };
     window.addEventListener("message", handler);
     return () => window.removeEventListener("message", handler);

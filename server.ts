@@ -3869,27 +3869,11 @@ Build a widget that teaches: ${safePrompt}`;
     // so the teacher's view tracks the student's TRUE current state — the
     // self-healing fix for quiz/sim drift ("student on Q5, teacher on Q2").
     // Loss-tolerant (rate-limited as such) and relayed ONLY to the teacher.
-    socket.on('student_state', ({ roomId, html }: { roomId: string; html: string }) => {
-      if (!checkRateLimit(socket.id, true)) return;
-      const room = rooms.get(roomId);
-      if (!isMember(room, socket.id)) return;
-      const user = room.users.get(socket.id);
-      if (user?.role !== 'student') return;
-      // Only the control-holder drives the sim, so only their true DOM state
-      // is meaningful to stream up to the teacher.
-      if (user.name !== room.controlHolderName) return;
-      if (typeof html !== 'string' || html.length === 0 || html.length > MAX_FILE_SIZE) return;
-      // Resolve the current teacher socket (self-healing, mirrors the
-      // interaction relay so a stale teacherSocketId can't drop the stream).
-      let teacherId: string | null = room.teacherSocketId;
-      if (!(teacherId && room.users.get(teacherId)?.role === 'teacher')) {
-        teacherId = null;
-        for (const [sid, u] of room.users.entries()) {
-          if (u.role === 'teacher') { teacherId = sid; room.teacherSocketId = sid; break; }
-        }
-      }
-      if (teacherId) io.to(teacherId).emit('student_state', { html, studentId: socket.id, studentName: user.name });
-    });
+    // (Removed: the 'student_state' relay. A driving student used to send
+    //  its whole serialised document here after every click, and the
+    //  teacher's handler for it was a documented no-op. Under the mirror a
+    //  student cannot hold a state the teacher does not already have.)
+
 
     // ─── ATTENTION DETECTION ───
     socket.on('attention_change', ({ roomId, userName, isAttentive, timestamp }: { roomId: string; userName: string; isAttentive: boolean; timestamp: number }) => {
