@@ -4461,6 +4461,17 @@ Build a widget that teaches: ${safePrompt}`;
     return { ok: dbProbe.ok, error: dbProbe.error };
   }
 
+  // The release id release.sh writes after a successful deploy. Read once: the
+  // file cannot change without a restart, and healthz is called sixty times an
+  // hour. Falls back to the CI variables, then to 'dev' for a local run.
+  const RUNNING_RELEASE = (() => {
+    try {
+      const id = fs.readFileSync(path.join(process.cwd(), '.release-id'), 'utf8').trim();
+      if (id) return id.slice(0, 20);
+    } catch { /* not deployed by release.sh — fall through */ }
+    return (process.env.RENDER_GIT_COMMIT || process.env.GIT_COMMIT || 'dev').slice(0, 7);
+  })();
+
   app.get(['/healthz', '/api/healthz'], async (_req, res) => {
     const db = await databaseReachable();
     res.status(200).json({
@@ -4479,10 +4490,10 @@ Build a widget that teaches: ${safePrompt}`;
       idleMs: rooms.size === 0 ? null : Date.now() - Math.max(
         ...[...rooms.values()].map(r => r.lastActivityAt || 0),
       ),
-      // Which build is actually live. Render injects RENDER_GIT_COMMIT; this
-      // lets you curl /healthz and confirm your latest push really deployed
-      // (instead of guessing whether a fix is live). Falls back to 'dev' locally.
-      commit: (process.env.RENDER_GIT_COMMIT || process.env.GIT_COMMIT || 'dev').slice(0, 7),
+      // Which build is actually live, so "is the fix deployed?" is a question
+      // you can answer with curl instead of a guess. On this box the answer is
+      // the file release.sh writes; the env vars are what Render and CI set.
+      commit: RUNNING_RELEASE,
       durableRooms: roomStore.kind !== 'file',
       // Whether to show the prompt — never the code itself.
       passcodeRequired,
