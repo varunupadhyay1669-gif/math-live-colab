@@ -57,6 +57,7 @@ import ConnectionStatus from "../components/ConnectionStatus";
 import Leaderboard from "../components/Leaderboard";
 import Whiteboard from "../components/Whiteboard";
 import { useAuth } from "../lib/auth";
+import { PRODUCT, subjectFor } from '../lib/product';
 
 // ── Types ──
 interface FileEntry {
@@ -2368,7 +2369,7 @@ export default function Room() {
     const url = `${window.location.origin}/live/${roomId}`;
     let text = url;
     if (roomPassword) {
-      text = `Join my MathsLive session:\n${url}\nPasscode: ${roomPassword}`;
+      text = `Join my ${PRODUCT.name} session:\n${url}\nPasscode: ${roomPassword}`;
     }
     navigator.clipboard.writeText(text);
     setLinkCopied(true);
@@ -3226,6 +3227,7 @@ export default function Room() {
           student: users.find(u => u.role === 'student')?.name ?? null,
           timezones: { ...participantTzRef.current, ...(localTimezone() ? { [teacherName]: localTimezone()! } : {}) },
           textbook: classRowRef.current?.textbook ?? null,
+          subject: myClasses.find(c => c.room_code === roomId)?.label ?? null,
           studentProfile: classRowRef.current
             ? { grade: classRowRef.current.grade, level: classRowRef.current.level, goals: classRowRef.current.goals }
             : null,
@@ -3428,7 +3430,7 @@ export default function Room() {
         startedAt: pack.startedAt,
         endedAt: Date.now(),
         room: roomId || '',
-        subject: 'Math',
+        subject: subjectFor(myClasses.find(c => c.room_code === roomId)?.label),
         lessonNumber: null,
         participants: [
           // Our own zone we know first-hand; the student's arrived with their

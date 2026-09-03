@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { seededSyncScript } from '../lib/syncScript';
 import { LESSON_IFRAME_SANDBOX, LESSON_IFRAME_ALLOW } from '../lib/iframeAttrs';
+import { PRODUCT } from '../lib/product';
 
 // ── Session Re-watch Player ──
 // A fully OFFLINE viewer for a downloaded MathsLive recording (the JSON the
@@ -65,7 +66,7 @@ export default function ReplayView() {
     r.onload = () => {
       try {
         const data = JSON.parse(String(r.result));
-        if (!data || !Array.isArray(data.events)) { setError('That file is not a MathsLive recording.'); return; }
+        if (!data || !Array.isArray(data.events)) { setError(`That file is not a ${PRODUCT.name} recording.`); return; }
         data.events.sort((a: RecEvent, b: RecEvent) => a.timestamp - b.timestamp);
         loadedLessonTsRef.current = -1; lastAppliedIdxRef.current = -1; pendingApplyRef.current = false;
         setRec(data); setFileName(f.name); setPlayhead(0); setPlaying(false);

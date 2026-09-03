@@ -4,6 +4,7 @@ import { v4 as uuidv4 } from "uuid";
 import { savedBoards, templates, type SavedBoard, type LessonTemplate } from "../lib/prefs";
 import { useAuth } from "../lib/auth";
 import { apiFetch } from "../lib/passcode";
+import { PRODUCT } from '../lib/product';
 
 type Mode = null | "teacher" | "student" | "deploy";
 
@@ -727,7 +728,7 @@ export default function Home() {
 
         {/* Footer */}
         <footer className="ml-dark-footer">
-          <span>MathsLive</span>
+          <span>{PRODUCT.name}</span>
         </footer>
       </div>
     </div>

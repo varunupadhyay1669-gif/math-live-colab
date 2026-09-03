@@ -5,6 +5,7 @@ import BothSides from '../components/BothSides';
 import LessonTaster from '../components/LessonTaster';
 import StartFree from '../components/StartFree';
 import { getPublicPricing, type PublicPricing } from '../lib/billing';
+import { PRODUCT } from '../lib/product';
 
 // The page that has to convince a tutor in about fifteen seconds.
 //
@@ -135,7 +136,7 @@ export default function Landing() {
               <h3>Where do the simulations come from?</h3>
               <p>
                 You bring them. Anything that runs in a browser works, including the ones
-                people now build in a minute by asking an AI for them. MathsLive is what
+                people now build in a minute by asking an AI for them. {PRODUCT.name} is what
                 puts one in front of a child and lets them touch it.
               </p>
             </div>
@@ -174,7 +175,7 @@ export default function Landing() {
               <p>The parent sees a video call and wonders what they are paying for.</p>
             </div>
             <div className="ml-land-col is-us">
-              <span className="ml-land-tag">MathsLive</span>
+              <span className="ml-land-tag">{PRODUCT.name}</span>
               <p>The moving thing is on the board, moving.</p>
               <p>They take hold of it from their own screen.</p>
               <p>Every board and topic saved, per student.</p>

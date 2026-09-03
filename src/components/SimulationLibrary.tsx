@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { SEED_LESSONS } from '../lib/seedLessons';
+import { PRODUCT } from '../lib/product';
 
 interface FileEntry {
   id: string;
@@ -32,7 +33,7 @@ const BUILTIN: LibraryItem[] = SEED_LESSONS.map(l => ({
   savedAt: 0, builtin: true, blurb: l.blurb,
 }));
 
-const TOPICS = ['Algebra', 'Geometry', 'Calculus', 'Fractions', 'Probability', 'Trigonometry', 'Statistics', 'Other'];
+const TOPICS = PRODUCT.subjects;
 const STORAGE_KEY = 'mathslive_simulation_library';
 
 interface SimulationLibraryProps {

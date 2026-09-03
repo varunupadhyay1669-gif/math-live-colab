@@ -8,6 +8,7 @@ import {
 import { classifySilences, flagsFor, summariseAsrConfidence } from './packDerive';
 import { buildZip, dataUrlToBytes, type ZipEntry } from './zip';
 import { mergeTranscript, type NarrationLine } from './narration';
+import { PRODUCT } from './product';
 
 // Turning what was collected during a lesson into the machine-readable sidecar.
 //
@@ -386,7 +387,7 @@ function extensionFor(mime: string): string {
  * So: a section is listed only if it has contents. Nothing is promised.
  */
 function readme(baseName: string, pack: ClassPackJson, hasSummary: boolean): string {
-  const lines: string[] = ['MathsLive class pack', ''];
+  const lines: string[] = [`${PRODUCT.name} class pack`, ''];
   const has = (n: number) => n > 0;
 
   if (hasSummary) {

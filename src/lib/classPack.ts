@@ -2,6 +2,7 @@ import { PdfBuilder, dataUrlToBytes, type TextLine, type PdfImage } from './pdf'
 import { mergeTranscript, type NarrationLine } from './narration';
 import { averageHash, lumaGrid, isNearDuplicate } from './inkDelta';
 import type { SnapshotReason } from './packSchema';
+import { PRODUCT } from './product';
 
 // ─────────────────────────────────────────────────────────────────────────
 // The class pack — everything that happened in a lesson, in one file you can
@@ -352,7 +353,7 @@ export class ClassPack {
 
     // ── Cover: what a model should know before reading anything else ──
     const cover: TextLine[] = [
-      { text: 'MathsLive — class pack', size: 20, bold: true },
+      { text: `${PRODUCT.name} — class pack`, size: 20, bold: true },
       { text: 'Everything from one lesson, for context.', size: 10, gap: 4 },
       { text: '', gap: 8 },
       { text: 'Session', size: 12, bold: true, gap: 8 },

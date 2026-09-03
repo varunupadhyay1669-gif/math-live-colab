@@ -35,6 +35,15 @@ export interface StoredSide {
   timezones?: Record<string, string>;
   /** The student's record as it stood during the lesson. */
   textbook?: string | null;
+  /**
+   * What was taught, from the class's own label.
+   *
+   * Kept here because a pack rebuilt from storage has no live class row to ask,
+   * and both exporters used to write the literal 'Math' regardless — so every
+   * pack claimed the same subject, including packs from lessons that were not
+   * maths. Absent on packs stored before this existed; subjectFor() falls back.
+   */
+  subject?: string | null;
   studentProfile?: { grade: string | null; level: string | null; goals: string[] } | null;
 }
 

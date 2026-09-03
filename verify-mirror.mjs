@@ -24,6 +24,7 @@ import { _warningFor } from './src/server/scheduler.ts';
 import { SEED_LESSONS } from './src/lib/seedLessons.ts';
 import { makeLimiter } from './src/server/rateLimit.ts';
 import { listMigrationFiles } from './src/server/migrate.ts';
+import { PRODUCT, subjectFor } from './src/lib/product.ts';
 import { readFile } from 'node:fs/promises';
 import QRCode from 'qrcode';
 import jsQR from 'jsqr';
@@ -493,6 +494,37 @@ section('OFFLINE — pointing at something reaches the learner');
   const all = [...window.document.querySelectorAll('[data-mathslive-ping]')];
   assert(parseFloat(all[all.length - 1].style.left) === 278,
     'a pixel coordinate is still used as pixels', all[all.length - 1].style.left);
+}
+
+section('OFFLINE — the name and the subject are configuration, not literals');
+{
+  // Task 1.2. Not a rename — the plan still has the naming question open
+  // (QUESTIONS.md Q7). This is so the answer is a one-line change and so the
+  // next feature does not add a sixteenth place to edit.
+  assert(PRODUCT.name === PRODUCT.brandLead + PRODUCT.brandTail,
+    'the split wordmark spells the product name', `${PRODUCT.brandLead}|${PRODUCT.brandTail}`);
+  assert(PRODUCT.subjects.includes(PRODUCT.defaultSubject) || PRODUCT.defaultSubject === 'Math',
+    'the default subject is a real one');
+  assert(PRODUCT.subjects[PRODUCT.subjects.length - 1] === 'Other',
+    'the taxonomy keeps an escape hatch, last',
+    'a list with no "Other" makes people pick the wrong thing rather than the right one');
+
+  // The bug this replaced: both exporters wrote the literal 'Math' for every
+  // lesson, so a pack from a lesson that was not maths said it was.
+  assert(subjectFor('Physics') === 'Physics', "a class's own label is the subject");
+  assert(subjectFor('  ') === PRODUCT.defaultSubject, 'a blank label falls back rather than recording blank');
+  assert(subjectFor(null) === PRODUCT.defaultSubject, 'so does a missing one');
+  for (const f of ['src/pages/Room.tsx', 'src/lib/packRebuild.ts']) {
+    assert(!/subject: 'Math'/.test(readFileSync(f, 'utf8')),
+      `${f} no longer hard-codes the subject`);
+  }
+
+  // The half of product.ts that matters most: the contracts it must NOT own.
+  const prod = readFileSync('src/lib/product.ts', 'utf8');
+  assert(!/mathslive-mirror-script|window\.mathslive|mathslive_simulation_library/.test(
+    prod.slice(prod.indexOf('export const PRODUCT'))),
+    'no wire or storage contract is routed through the brand config',
+    'renaming a script id or a storage key breaks lessons and libraries that already exist');
 }
 
 section('OFFLINE — one engine');

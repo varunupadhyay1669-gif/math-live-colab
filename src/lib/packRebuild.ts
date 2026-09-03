@@ -3,6 +3,7 @@ import { buildPackJson, buildPackArchive, slugId, type PackInputs, type RawSnaps
 import type { StoredPack } from './packStore';
 import { summariseInteractives, type RecordedAttempt } from './interactives';
 import type { ClassPackJson, PackEvent, PackSurface, PackExplainerOutline, PackInteractive } from './packSchema';
+import { subjectFor } from './product';
 
 // Rebuilding a pack from a stored session.
 //
@@ -52,7 +53,7 @@ export function rebuildFromStored(stored: StoredPack): RebuiltPack | null {
     // A stored pack has no live clock; the last save is the best end we know.
     endedAt: stored.savedAt || pack.startedAt,
     room,
-    subject: 'Math',
+    subject: subjectFor(stored.side?.subject),
     lessonNumber: null,
     participants: [
       { role: 'tutor', id: `u_${slugId(teacher)}`, display_name: teacher, timezone: tz[teacher] || null },
