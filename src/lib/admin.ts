@@ -176,3 +176,76 @@ export function untilLabel(iso: string | null): { text: string; days: number | n
   if (days === 1) return { text: 'tomorrow', days, urgent: true };
   return { text: `in ${days}d`, days, urgent: days <= 7 };
 }
+
+// ── The people console (PLAN.md task 2.10) ─────────────────────────────────
+//
+// Reads and writes for the half of /admin that DOES things rather than only
+// reporting them. Every one of these is refused by the server unless the
+// caller holds the permission; what the page does with the answer below is
+// decide what to show, which is a courtesy and not a control.
+
+export interface AdminPerson {
+  id: string;
+  email: string;
+  role: 'super_admin' | 'staff' | 'teacher';
+  status: 'active' | 'suspended' | 'deleted';
+  created_at: string;
+  last_login_at: string | null;
+  trial_started_at: string | null;
+  paid_until: string | null;
+  learners: number;
+  lessons: number;
+  last_lesson: string | null;
+  grant_active: boolean;
+  grant_until: string | null;
+  grant_reason: string | null;
+  access: { state: string; until: string | null; daysLeft: number | null };
+}
+
+export interface AdminPersonDetail {
+  user: AdminPerson & { permissions: string[]; status_reason: string | null; timezone: string | null };
+  classes: Array<{ id: string; student_name: string; label: string | null; room_code: string; last_opened_at: string | null }>;
+  grants: Array<{ id: string; plan_code: string; until: string | null; reason: string | null; granted_by: string | null; created_at: string; revoked_at: string | null }>;
+  notes: Array<{ id: number; note: string; author_id: string | null; created_at: string }>;
+  payments: Array<{ id: string; amount_rupees: number; months: number; reference: string | null; claimed_at: string; confirmed_at: string | null; rejected_at: string | null }>;
+  audit: Array<{ id: number; actor_user_id: string | null; action: string; reason: string | null; at: string }>;
+}
+
+export interface AuditEntryRow {
+  id: number;
+  actor_email: string | null;
+  action: string;
+  target_type: string | null;
+  target_email: string | null;
+  target_id: string | null;
+  reason: string | null;
+  at: string;
+}
+
+/** What this signed-in person may do. Used only to hide what they cannot. */
+export const getAdminCapabilities = () =>
+  api.get<{ role: string | null; status: string | null; permissions: string[] }>('/api/admin/me');
+
+export const listPeople = (q: string) =>
+  api.get<{ people: AdminPerson[] }>(`/api/admin/people?q=${encodeURIComponent(q)}`);
+
+export const getPerson = (id: string) =>
+  api.get<AdminPersonDetail>(`/api/admin/people/${encodeURIComponent(id)}`);
+
+/** Free forever when untilIso is null. The reason is required by the server. */
+export const grantFreeAccess = (id: string, reason: string, untilIso: string | null = null) =>
+  api.post<{ ok: true; grantId: string; until: string | null }>(
+    `/api/admin/people/${encodeURIComponent(id)}/grant`, { reason, untilIso });
+
+export const revokeFreeAccess = (id: string, reason: string) =>
+  api.post<{ ok: true; revoked: number }>(
+    `/api/admin/people/${encodeURIComponent(id)}/revoke-grant`, { reason });
+
+export const setAccountStatus = (id: string, status: 'active' | 'suspended', reason: string) =>
+  api.post<{ ok: true; status: string }>(
+    `/api/admin/people/${encodeURIComponent(id)}/status`, { status, reason });
+
+export const addAdminNote = (id: string, note: string) =>
+  api.post<{ ok: true }>(`/api/admin/people/${encodeURIComponent(id)}/note`, { note });
+
+export const getAuditLog = () => api.get<{ entries: AuditEntryRow[] }>('/api/admin/audit');

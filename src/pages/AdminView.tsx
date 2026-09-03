@@ -8,6 +8,10 @@ import {
 } from '../lib/admin';
 import { humanTeachingTime } from '../lib/teachingTime';
 import { listClaims, confirmClaim, rejectClaim, type ClaimRow } from '../lib/billing';
+import { lazy, Suspense } from 'react';
+import { getAdminCapabilities } from '../lib/admin';
+const PeoplePanel = lazy(() => import('./admin/PeoplePanel'));
+const AuditPanel = lazy(() => import('./admin/AuditPanel'));
 
 // MathsLive Admin — who is using the platform.
 //
@@ -19,7 +23,7 @@ import { listClaims, confirmClaim, rejectClaim, type ClaimRow } from '../lib/bil
 // control is in Postgres (migration 004): the RPCs behind this refuse anyone
 // not listed in platform_admins, so calling them by hand gets you nothing.
 
-type Tab = 'money' | 'tutors' | 'students' | 'payments' | 'live';
+type Tab = 'money' | 'tutors' | 'students' | 'payments' | 'live' | 'people' | 'audit';
 
 export default function AdminView() {
   const auth = useAuth();
@@ -37,6 +41,20 @@ export default function AdminView() {
   const [renewals, setRenewals] = useState<Renewal[]>([]);
   const [live, setLive] = useState<LiveRoom[]>([]);
   const [graceDays, setGraceDays] = useState(3);
+  // What this signed-in person may do. Used ONLY to decide what to render —
+  // every route re-checks it in the database, so hiding a button is a courtesy
+  // to whoever is clicking and never the control.
+  const [perms, setPerms] = useState<string[]>([]);
+  const can = useCallback((p: string) => perms.includes(p), [perms]);
+
+  useEffect(() => {
+    if (!auth.user) return;
+    let stop = false;
+    void getAdminCapabilities()
+      .then(c => { if (!stop) setPerms(c.permissions || []); })
+      .catch(() => { /* the tabs simply stay read-only */ });
+    return () => { stop = true; };
+  }, [auth.user]);
 
   useEffect(() => {
     if (auth.loading) return;
@@ -131,6 +149,18 @@ export default function AdminView() {
           </form>
         )}
         {error && <p className="ml-admin-error">{error}</p>}
+
+      {tab === 'people' && (
+        <Suspense fallback={<p className="ml-admin-muted">Loading…</p>}>
+          <PeoplePanel can={can} />
+        </Suspense>
+      )}
+
+      {tab === 'audit' && (
+        <Suspense fallback={<p className="ml-admin-muted">Loading…</p>}>
+          <AuditPanel />
+        </Suspense>
+      )}
       </Shell>
     );
   }
@@ -227,6 +257,8 @@ export default function AdminView() {
         <button className={tab === 'live' ? 'is-on' : ''} onClick={() => setTab('live')}>
           Live{live.length > 0 ? ` (${live.length})` : ''}
         </button>
+        <button className={tab === 'people' ? 'is-on' : ''} onClick={() => setTab('people')}>People</button>
+        <button className={tab === 'audit' ? 'is-on' : ''} onClick={() => setTab('audit')}>Audit</button>
         <div style={{ flex: 1 }} />
         <button className="ml-admin-btn" onClick={() => { void load(); void loadBusiness(); void loadClaims(); void loadLive(); }} disabled={busy}>
           {busy ? 'Loading…' : 'Refresh'}

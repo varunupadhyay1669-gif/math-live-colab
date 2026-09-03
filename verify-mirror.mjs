@@ -544,6 +544,39 @@ section('OFFLINE — the name and the subject are configuration, not literals');
     'renaming a script id or a storage key breaks lessons and libraries that already exist');
 }
 
+section('OFFLINE — free forever means forever');
+{
+  // Task 2.2. From the brief: "I and anyone I hand-pick get full access free
+  // forever." Until now the only ways were to make somebody a platform admin —
+  // handing them every other teacher's data — or to push paid_until forward by
+  // hand, which is what was done for Vani on 2 Sep and left the reason nowhere
+  // but a chat log.
+  const now = new Date('2026-09-03T00:00:00Z');
+  const longExpired = { trial_started_at: '2020-01-01T00:00:00Z', paid_until: null };
+
+  assert(accessFrom(longExpired, now).state === 'expired', 'without a grant, an old trial is over');
+  assert(accessFrom({ ...longExpired, grant_active: true, grant_until: null }, now).state === 'active',
+    'a grant with no end makes an expired account active');
+  assert(accessFrom({ ...longExpired, grant_active: true, grant_until: null }, now).until === null,
+    'and reports no end date, so nothing can render a countdown at them',
+    'a hand-picked teacher must never see a deadline they do not have');
+
+  const soon = new Date(now.getTime() + 10 * 86_400_000).toISOString();
+  const dated = accessFrom({ ...longExpired, grant_active: true, grant_until: soon }, now);
+  assert(dated.state === 'active' && dated.daysLeft === 10, 'a dated grant counts down honestly');
+
+  // An expired comp must not be worse than no comp.
+  const stale = new Date(now.getTime() - 86_400_000).toISOString();
+  assert(accessFrom({ trial_started_at: now.toISOString(), paid_until: null, grant_active: true, grant_until: stale }, now).state === 'trial',
+    'an expired grant falls through to the trial rather than locking anyone out');
+
+  // The one that would quietly corrupt the business figures.
+  const billingSrc = readFileSync('src/server/billing.ts', 'utf8');
+  assert(/grant is not a payment/.test(billingSrc),
+    'a grant is kept out of paid_until',
+    'writing it there would make the MRR on /admin count people who have paid nothing');
+}
+
 section('OFFLINE — who may do what');
 {
   // Task 2.1. The answer used to live in four places, and a new endpoint had to

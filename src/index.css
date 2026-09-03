@@ -4823,3 +4823,58 @@ html, body, #root { background: var(--bg-primary); }
   .ml-waiting-row { flex-wrap: wrap; }
   .ml-waiting-go { width: 100%; text-align: center; }
 }
+
+/* ── The people console (PLAN.md task 2.10) ─────────────────────────────────
+   Literal colours, never theme tokens. /admin paints #0B1020 whatever the
+   viewer's theme is, so a token here renders white cards on navy in light
+   mode — which has happened once already and is the reason this comment is
+   longer than the rules. */
+.ml-admin-search {
+  display: flex; gap: 8px; align-items: center;
+  margin: 0 0 14px; flex-wrap: wrap;
+}
+.ml-admin-search .ml-dark-input { flex: 1; min-width: 220px; }
+
+/* Not a modal. A drawer below the table keeps the row you came from on screen,
+   which is what you want when you are comparing two accounts or checking you
+   opened the right one before suspending it. */
+.ml-admin-drawer {
+  margin-top: 18px;
+  padding: 18px;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.04);
+}
+.ml-admin-drawer-head {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; margin-bottom: 8px;
+}
+.ml-admin-drawer-head strong { color: #F1F5F9; font-size: 15px; }
+.ml-admin-drawer .ml-field-label {
+  display: block; margin: 14px 0 6px;
+  color: #94A3B8; font-size: 12px; font-weight: 600;
+}
+.ml-admin-drawer-actions {
+  display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px;
+}
+/* Suspension is the only thing here that takes something away from a person
+   mid-lesson, so it is the only thing that looks like it. */
+.ml-admin-danger {
+  border-color: rgba(244, 63, 94, 0.45) !important;
+  background: rgba(244, 63, 94, 0.14) !important;
+  color: #FDA4AF !important;
+}
+.ml-admin-danger:hover:not(:disabled) { background: rgba(244, 63, 94, 0.24) !important; }
+
+.ml-admin-list {
+  list-style: none; padding: 0; margin: 8px 0 0;
+  display: flex; flex-direction: column; gap: 6px;
+  font-size: 13px; color: #CBD5E1;
+}
+.ml-admin-list li { padding-bottom: 6px; border-bottom: 1px solid rgba(255, 255, 255, 0.06); }
+.ml-admin-list li:last-child { border-bottom: 0; }
+
+@media (max-width: 640px) {
+  .ml-admin-drawer { padding: 14px; }
+  .ml-admin-drawer-actions button { flex: 1; }
+}

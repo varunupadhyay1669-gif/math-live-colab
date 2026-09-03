@@ -126,6 +126,16 @@ export interface Access {
 interface BillingRow {
   trial_started_at: Date | string | null;
   paid_until: Date | string | null;
+  /**
+   * A live free-forever (or free-until) grant, if this teacher has one.
+   *
+   * Optional so every existing caller keeps working and simply never sees a
+   * grant; the ones that matter select it. Kept OUT of paid_until on purpose —
+   * a grant is not a payment, and writing it there would make the revenue
+   * figures on /admin count people who have paid nothing.
+   */
+  grant_active?: boolean | null;
+  grant_until?: Date | string | null;
 }
 
 const DAY_MS = 86_400_000;
@@ -140,6 +150,22 @@ const DAY_MS = 86_400_000;
 export function accessFrom(row: BillingRow | null | undefined, now = new Date()): Access {
   const base = { priceRupees: PRICE_RUPEES, trialDays: TRIAL_DAYS, graceDays: GRACE_DAYS };
   const t = now.getTime();
+
+  // A grant wins outright, and does not interact with trial or paid time.
+  // "Free forever" has to mean it: a hand-picked teacher must never see a
+  // countdown, a warning email, or a paywall, whatever their dates say.
+  if (row?.grant_active) {
+    const until = row.grant_until ? new Date(row.grant_until).getTime() : null;
+    if (until === null || !Number.isFinite(until)) {
+      return { ...base, state: 'active', until: null, daysLeft: Number.MAX_SAFE_INTEGER };
+    }
+    if (until > t) {
+      return { ...base, state: 'active', until: new Date(until).toISOString(),
+        daysLeft: Math.ceil((until - t) / DAY_MS) };
+    }
+    // An expired grant is simply no grant; fall through to trial and paid time
+    // rather than locking someone out because a temporary comp ran out.
+  }
 
   const paid = row?.paid_until ? new Date(row.paid_until).getTime() : null;
   const started = row?.trial_started_at ? new Date(row.trial_started_at).getTime() : null;
@@ -194,8 +220,20 @@ export function accessFrom(row: BillingRow | null | undefined, now = new Date())
 export async function accessForTeacher(pool: Pool, teacherId: string): Promise<Access> {
   const r = await pool.query(
     `SELECT u.trial_started_at, u.paid_until,
-            EXISTS (SELECT 1 FROM platform_admins p WHERE p.email = u.email) AS is_admin
-       FROM users u WHERE u.id = $1`,
+            EXISTS (SELECT 1 FROM platform_admins p WHERE p.email = u.email) AS is_admin,
+            g.id IS NOT NULL AS grant_active,
+            g.until       AS grant_until
+       FROM users u
+       -- The live grant that runs longest, so a second grant can only ever
+       -- extend the first. LIMIT 1 with NULLS FIRST puts "forever" on top.
+       LEFT JOIN LATERAL (
+         SELECT id, until FROM plan_grants
+          WHERE user_id = u.id AND revoked_at IS NULL
+            AND (until IS NULL OR until > now())
+          ORDER BY until DESC NULLS FIRST
+          LIMIT 1
+       ) g ON true
+      WHERE u.id = $1`,
     [teacherId],
   );
   const row = r.rows[0];
