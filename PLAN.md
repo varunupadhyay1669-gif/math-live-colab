@@ -1471,6 +1471,43 @@ Bluntly: a loop that only grows a list is filing, not evolving. `IMPROVEMENTS.md
 
 ---
 
+## Implementation log
+
+Kept here rather than in a separate file so the plan and what was actually
+built stay in one place, and so a phase cannot quietly be reported as done.
+
+**Phase 0 — complete, live 2 Sep 2026.** Tasks 0.1–0.7 shipped; 0.8–0.10 need
+accounts only the founder can create (Telegram, Backblaze, UptimeRobot, the AWS
+2 GB request, the Resend key rotation). Two things not on the list were found
+and fixed while deploying: every teacher who signed up between two restarts was
+told "Your free trial has ended" on their first lesson (`trial_started_at` was
+only ever set by boot-time DDL), and Vani was five days from being locked out.
+
+**Phase 1 — code complete 3 Sep 2026.**
+
+| Task | State |
+|---|---|
+| 1.1 migration runner | done, `0001_admin_read_indexes` applied in production |
+| 1.2 product config | done — brand and subject are one file; wire and storage contracts deliberately excluded |
+| 1.3 frame isolation | done for every display-only frame; the teacher's own frame still needs same-origin for the class-pack readers, which is the remainder of F1 |
+| 1.4 sanitiser | done, verified in two browsers against a hostile lesson |
+| 1.5 delete the retired engine | dead plumbing and a false "replayed N steps" toast removed; `syncScript.ts` itself still ships to `/replay`, which is its only remaining caller |
+| 1.6 peek | fixed — the follower had no handler for the request, so the panel hung for ever |
+| 1.7 remove the attention detector | **withdrawn**, the premise was wrong (see 6.4 item 5) |
+| 1.8 Playwright smoke | done, three tests, Chromium only, in CI |
+| 1.9 docs | done — AGENTS.md §3.5 describes the engine that runs; three dead host configs deleted |
+
+Found while doing it, not on the list: element pings never reached a learner
+(the ripple lived only in the source branch), and fixing peek revived a second
+caller that would have shipped the whole document after every click to a
+handler whose body is a comment.
+
+Tests: 132 → 196 offline, 38 pack, 3 smoke.
+
+**Not started:** Phase 2 onward.
+
+---
+
 # Self-review
 
 Checks required by the brief, what was found, and what was changed as a result.
