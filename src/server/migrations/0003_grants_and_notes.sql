@@ -55,3 +55,19 @@ SELECT 'grant_vani_2026_09', u.id, 'pro', NULL,
   FROM users u
  WHERE u.email = 'vaaniadvait@gmail.com'
  ON CONFLICT (id) DO NOTHING;
+
+-- ...and the bridge it replaces is taken down.
+--
+-- Left in place, her paid_until would still say "paid until Sep 2027", so the
+-- MRR strip on /admin would count her as a paying customer contributing ₹0 —
+-- the exact distortion accessFrom avoids by keeping grants out of paid_until.
+-- Cleared ONLY when there is no confirmed payment behind it, so this can never
+-- take paid time away from somebody who actually paid.
+UPDATE users u
+   SET paid_until = NULL
+ WHERE u.email = 'vaaniadvait@gmail.com'
+   AND EXISTS (SELECT 1 FROM plan_grants g WHERE g.user_id = u.id AND g.revoked_at IS NULL)
+   AND NOT EXISTS (
+     SELECT 1 FROM payment_claims c
+      WHERE c.teacher_id = u.id AND c.confirmed_at IS NOT NULL
+   );
