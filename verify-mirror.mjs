@@ -741,6 +741,37 @@ section('OFFLINE — a class keeps its last lesson, and nothing else for long');
     'behind the gate it would run once a day at 9am, or on a day the process restarted after that, never');
 }
 
+section('OFFLINE — a slow student cannot fill the server');
+{
+  // The crash that ended a live lesson on 4 Sep 2026: Node hit its heap limit,
+  // systemd restarted it, and both people saw "Reconnecting" mid-class. The log
+  // shows the eviction sweep trying to save it — "381MB of 300MB, 2 rooms" —
+  // and failing, because both rooms were in lessons and there was nothing idle
+  // to shed.
+  //
+  // A mirror frame is up to 3MB and a changing lesson makes about four a
+  // second. Socket.IO queues what it cannot write yet, PER CLIENT, with no
+  // ceiling. So one student on slow wifi does not merely lag; they make the
+  // server hold every frame they have not received.
+  //
+  // Volatile drops instead of queueing. Safe on these three streams and almost
+  // nowhere else, because all three are loss-tolerant by construction: the
+  // follower compares a fingerprint and asks for a resync, canvases re-send on
+  // a 120ms tick, and the beam keyframes every ~5s.
+  const srv = readFileSync('server.ts', 'utf8');
+  for (const ev of ['mirror_dom', 'mirror_canvas', 'beam_frame']) {
+    assert(srv.includes(`socket.volatile.to(roomId).emit('${ev}'`),
+      `${ev} frames are dropped, not queued, for a client that cannot take them`,
+      'a queued frame per slow client is unbounded server memory');
+  }
+  // The one-shot catch-up sends must NOT be volatile: they go to a single
+  // student who has just joined and has nothing on screen at all, and there is
+  // no follow-up tick to cover a drop.
+  assert(srv.includes("io.to(socket.id).emit('mirror_dom'"),
+    'the late-join catch-up frame is still delivered reliably',
+    'dropping it leaves a joining student staring at a blank lesson');
+}
+
 section('OFFLINE — free forever means forever');
 {
   // Task 2.2. From the brief: "I and anyone I hand-pick get full access free

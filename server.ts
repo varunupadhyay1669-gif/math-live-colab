@@ -3764,7 +3764,12 @@ Build a widget that teaches: ${safePrompt}`;
       if (!checkRateLimit(socket.id, true)) return;
       const room = rooms.get(roomId);
       if (!requireTeacher(room, socket.id)) return;
-      socket.to(roomId).emit('beam_frame', {
+      // Volatile, like the mirror's frames and for the same reason: this is a
+      // lossy stream by design — a keyframe follows within ~5s and the student
+      // can ask for one — so a frame a client is not ready to receive must be
+      // dropped, never queued. Queued frames are what took the heap out from
+      // under a live lesson on 4 Sep 2026.
+      socket.volatile.to(roomId).emit('beam_frame', {
         data,
         source: source === 'board' ? 'board' : 'screen',
         keyframe: !!keyframe,
@@ -3879,7 +3884,27 @@ Build a widget that teaches: ${safePrompt}`;
       room.mirrorAttrs = typeof attrs === 'string' ? attrs : null;
       if (typeof head === 'string') room.mirrorHead = head;
       room.mirrorHash = typeof h === 'string' ? h : null;
-      socket.to(roomId).emit('mirror_dom', { body, scrollX, scrollY, attrs, head, h });
+      // VOLATILE, and this is the fix for the crash that ended a live lesson on
+      // 4 Sep 2026: Node hit its heap limit, systemd restarted it, and both
+      // people saw "Reconnecting" mid-class.
+      //
+      // A frame is up to 3MB and a changing lesson produces about four a
+      // second. Socket.IO queues what it cannot write yet, per client, with no
+      // ceiling — so ONE student on slow wifi does not merely lag, they make
+      // the server hold every frame they have not received. Two rooms was
+      // enough: the log shows the eviction sweep trying to save it ("381MB of
+      // 300MB, 2 rooms") and failing, because both rooms were in lessons and
+      // there was nothing idle to shed.
+      //
+      // Volatile means: if this client's transport is not ready right now, drop
+      // the frame instead of queueing it. That is safe HERE and almost nowhere
+      // else, because this stream is already loss-tolerant by construction —
+      // the follower compares a fingerprint on every heartbeat and asks for a
+      // resync when it disagrees (MIRROR_STALE), and the source re-sends the
+      // whole body on the next change anyway. A dropped frame costs a student
+      // a moment of staleness that repairs itself; a queued one costs everyone
+      // the lesson.
+      socket.volatile.to(roomId).emit('mirror_dom', { body, scrollX, scrollY, attrs, head, h });
     });
     // Fingerprint heartbeat (a few bytes): lets a student detect that a snapshot
     // never arrived and request a resync. Rate-limited as loss-tolerant.
@@ -3896,7 +3921,11 @@ Build a widget that teaches: ${safePrompt}`;
       if (!checkRateLimit(socket.id, true)) return;
       const room = rooms.get(roomId);
       if (!isMirrorSource(room, socket.id)) return;
-      socket.to(roomId).emit('mirror_canvas', { canvases });
+      // Volatile for the same reason as the DOM frame above, and with even less
+      // to lose: canvas frames are WebP stills that the source already sends on
+      // a 120ms tick with a keyframe every ~5s, so a dropped one is replaced
+      // before anybody could read it.
+      socket.volatile.to(roomId).emit('mirror_canvas', { canvases });
     });
     // A student reporting the fingerprint they have actually rendered.
     //
