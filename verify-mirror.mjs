@@ -742,6 +742,33 @@ section('OFFLINE — a class keeps its last lesson, and nothing else for long');
     'behind the gate it would run once a day at 9am, or on a day the process restarted after that, never');
 }
 
+section('OFFLINE — saving every room does not serialise every room at once');
+{
+  // 4 Sep 2026, from the production log, and the WHERE is the point:
+  //
+  //   Received SIGTERM, persisting rooms before exit…
+  //   Mark-Compact (reduce) 575.8 -> 570.0 MB
+  //   FATAL ERROR: Reached heap limit
+  //
+  // It died in the shutdown path, so every restart risked killing the process
+  // before it saved anything. saveRooms built a write per room and awaited
+  // Promise.all, so every room's serialised JSON was in memory at the same
+  // moment — and the same function runs on a five-minute timer during ordinary
+  // teaching, which is the shape of "it says reconnecting in the middle of a
+  // class".
+  const srv = readFileSync('server.ts', 'utf8');
+  const save = srv.slice(srv.indexOf('async function saveRooms'), srv.indexOf('DEBOUNCED PER-ROOM SAVE'));
+
+  assert(!/Promise\.all\(writes\)/.test(save),
+    'the rooms are not all serialised at once',
+    'a few dozen boards stringified together is hundreds of megabytes on a 448MB heap');
+  assert(/await saveSingleRoom\(roomId, room\)/.test(save),
+    'each room is written before the next one is built');
+  assert(/catch/.test(save),
+    'one unwritable room does not abandon the rest',
+    'the shutdown path is the worst place to give up early');
+}
+
 section('OFFLINE — clearing a class does not clear the student');
 {
   // 4 Sep 2026: "delete all the data of the classes. Don't delete the name of

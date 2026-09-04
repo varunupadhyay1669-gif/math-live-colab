@@ -1139,14 +1139,40 @@ async function startServer() {
     if (saveInFlight) return;
     saveInFlight = true;
     try {
-      const writes: Promise<void>[] = [];
       let attempted = 0;
+      // ONE AT A TIME, and the reason is a crash that ended a live lesson.
+      //
+      // This used to build every room's write up front and await Promise.all,
+      // which meant every room's SERIALISED JSON existed in memory at the same
+      // moment. A room is the teacher's board, its pictures and the lesson
+      // state; a few dozen of them stringified together is hundreds of
+      // megabytes on a heap that has 448.
+      //
+      // On 4 Sep 2026 that is exactly how it died, and the log says so plainly:
+      //
+      //   Received SIGTERM, persisting rooms before exit…
+      //   Mark-Compact (reduce) 575.8 -> 570.0 MB
+      //   FATAL ERROR: Reached heap limit
+      //
+      // Note WHERE that is: the shutdown path. So every restart risked killing
+      // the process before it could save anything — and this same function runs
+      // on a five-minute timer during ordinary teaching, which is the shape of
+      // "it says reconnecting in the middle of a class".
+      //
+      // Sequentially, only one room's JSON exists at a time. It is slower, and
+      // the 4-second shutdown deadline may now cut a long list short — but
+      // persisting some rooms beats persisting none, which is what an OOM
+      // during the save actually achieved.
       for (const [roomId, room] of rooms.entries()) {
         if (!roomHasContent(room)) continue;
         attempted++;
-        writes.push(saveSingleRoom(roomId, room));
+        // One unwritable room must not abandon the rest of them.
+        try {
+          await saveSingleRoom(roomId, room);
+        } catch (err) {
+          console.error(`Could not persist room ${roomId}:`, (err as Error).message);
+        }
       }
-      await Promise.all(writes);
       if (attempted > 0) console.log(`💾 Persisted ${attempted} rooms → ${roomStore.kind}`);
     } finally {
       saveInFlight = false;
