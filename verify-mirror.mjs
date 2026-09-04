@@ -26,7 +26,7 @@ import { makeLimiter } from './src/server/rateLimit.ts';
 import { listMigrationFiles } from './src/server/migrate.ts';
 import { PRODUCT, subjectFor } from './src/lib/product.ts';
 import { can, permissionsOf } from './src/server/authz.ts';
-import { LESSON_HISTORY_KEEP } from './src/server/records.ts';
+import { LESSON_HISTORY_KEEP, LESSON_TTL_HOURS } from './src/server/records.ts';
 import { readFile } from 'node:fs/promises';
 import QRCode from 'qrcode';
 import jsQR from 'jsqr';
@@ -701,6 +701,38 @@ section('OFFLINE — a deploy checks before it touches anything');
   assert(/if \(existsSync\(MARKER\)\) unlinkSync\(MARKER\)/.test(pack),
     'a stale marker is deleted before a build and after a failure',
     'otherwise a broken build inherits the proof earned by the last good one');
+}
+
+section('OFFLINE — a class keeps its last lesson, and nothing else for long');
+{
+  // The founder, 4 Sep 2026: "every class data will remain for just twenty-four
+  // hours, after this everything gets deleted, except today's class data — so
+  // that we get efficient class working."
+  //
+  // Held together with his rule from the day before — "only if I'm joining that
+  // class now, I should have the data of the last class" — which a flat purge
+  // would break for every student he does not teach daily.
+  const src = readFileSync('src/server/records.ts', 'utf8');
+  const sweep = src.slice(src.indexOf('export async function sweepExpiredLessons'),
+                          src.indexOf('export function mountRecordRoutes'));
+
+  assert(LESSON_TTL_HOURS === 24, 'the window is twenty-four hours', `it is ${LESSON_TTL_HOURS}`);
+  assert(/DISTINCT ON \(class_id, teacher_id\)/.test(sweep),
+    "each class's newest lesson is exempt at any age",
+    'a Saturday student would otherwise arrive each week to an empty board');
+  assert(/ORDER BY class_id, teacher_id, started_at DESC, id DESC/.test(sweep),
+    'the exemption picks the newest, and breaks ties',
+    'DISTINCT ON takes the FIRST row of each group, so the ordering is the whole meaning');
+  assert(/started_at < now\(\) - /.test(sweep), 'age is measured by the database clock, not the caller');
+  assert(/catch/.test(sweep) && /return 0/.test(sweep),
+    'a failed sweep never reaches a live lesson');
+
+  // Time passing is the trigger, so it cannot hang off a new lesson arriving.
+  const sched = readFileSync('src/server/scheduler.ts', 'utf8');
+  const tick = sched.slice(sched.indexOf('const tick = async'), sched.indexOf('setInterval'));
+  assert(tick.indexOf('sweepExpiredLessons') < tick.indexOf('istHour() < SEND_HOUR_IST'),
+    'the sweep runs before the mail hour gate',
+    'behind the gate it would run once a day at 9am, or on a day the process restarted after that, never');
 }
 
 section('OFFLINE — free forever means forever');

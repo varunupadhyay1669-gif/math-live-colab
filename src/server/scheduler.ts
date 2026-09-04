@@ -18,6 +18,7 @@
 import type { Pool } from 'pg';
 import { accessFrom, TRIAL_DAYS, PRICE_RUPEES, GRACE_DAYS } from './billing';
 import { sendMail, ownerAddresses, siteUrl, istDay, istHour, niceDate } from './mailer';
+import { sweepExpiredLessons, LESSON_TTL_HOURS } from './records';
 
 export const MAIL_LOG_SCHEMA_SQL = `
   CREATE TABLE IF NOT EXISTS mail_log (
@@ -220,6 +221,16 @@ async function sendOwnerDigest(pool: Pool, day: string): Promise<boolean> {
  */
 export function startDailyJobs(pool: Pool): void {
   const tick = async () => {
+    // Data expiry runs on EVERY tick, deliberately before the hour gate below.
+    // The mail is a once-a-day thing and returns early for most of the day;
+    // deleting yesterday's lessons is not, and hanging it off the mail schedule
+    // would have meant it ran once a day at 9am or, on a day the process
+    // restarted after that, never.
+    try {
+      await sweepExpiredLessons(pool);
+    } catch (err) {
+      console.error('Lesson sweep failed:', (err as Error).message);
+    }
     try {
       if (istHour() < SEND_HOUR_IST) return;
       const day = istDay();
@@ -234,6 +245,7 @@ export function startDailyJobs(pool: Pool): void {
   // One run shortly after boot, so a deploy at 9am still sends that day's mail.
   setTimeout(() => { void tick(); }, 60_000).unref?.();
   console.log(`📮 Daily mail: expiry warnings + owner digest, from ${SEND_HOUR_IST}:00 IST`);
+  console.log(`🧹 Lesson sweep: older than ${LESSON_TTL_HOURS}h removed every 15 min, each class keeping its most recent`);
 }
 
 /** Exposed for tests: which warning, if any, a given state deserves. */

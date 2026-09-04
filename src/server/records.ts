@@ -49,6 +49,64 @@ function slug(s: string): string {
 export const LESSON_HISTORY_KEEP = Math.max(0, Number(process.env.LESSON_HISTORY_KEEP ?? 2));
 
 /**
+ * How long a lesson that is no longer the newest is kept. 0 disables the sweep.
+ *
+ * The founder's rule, 4 Sep 2026: "every class data will remain for just
+ * twenty-four hours, after this everything gets deleted, except today's class
+ * data — so that we get efficient class working."
+ *
+ * With one exception, which is his own earlier rule and not a softening of this
+ * one: the NEWEST lesson of every class is never deleted, at any age. He asked
+ * the day before for exactly the opposite guarantee — "only if I'm joining that
+ * class now, I should have the data of the last class" — and a flat 24-hour
+ * purge would break it for every student he does not teach daily. A Saturday
+ * student would arrive each week to an empty board.
+ *
+ * So: you always have the last lesson, plus anything from the last 24 hours.
+ * Everything else goes.
+ */
+export const LESSON_TTL_HOURS = Math.max(0, Number(process.env.LESSON_TTL_HOURS ?? 24));
+
+/**
+ * Delete every lesson older than LESSON_TTL_HOURS except each class's newest.
+ *
+ * Runs on a timer rather than on a new lesson, because time passing is the
+ * trigger — a class that is never taught again would otherwise keep its history
+ * for ever, and those are precisely the classes nobody is watching.
+ *
+ * One indexed DELETE across every class, so it is cheap enough to run on the
+ * ordinary 15-minute tick. Never throws, for the same reason as the prune
+ * below: a failed sweep is a larger table, and that is not worth an exception
+ * reaching a live lesson.
+ */
+export async function sweepExpiredLessons(pool: Pool): Promise<number> {
+  if (LESSON_TTL_HOURS === 0) return 0;
+  try {
+    const r = await pool.query(
+      `DELETE FROM teaching_sessions
+        WHERE started_at < now() - ($1 || ' hours')::interval
+          AND id NOT IN (
+            -- Each class's newest, kept at any age. DISTINCT ON takes the first
+            -- row of each group, so the ORDER BY must lead with the grouping
+            -- columns; started_at DESC then picks the newest within the group,
+            -- and id breaks a tie so two rows sharing a timestamp cannot both
+            -- claim to be it.
+            SELECT DISTINCT ON (class_id, teacher_id) id
+              FROM teaching_sessions
+             ORDER BY class_id, teacher_id, started_at DESC, id DESC
+          )`,
+      [String(LESSON_TTL_HOURS)],
+    );
+    const n = r.rowCount ?? 0;
+    if (n > 0) console.log(`🧹 ${n} lesson(s) past ${LESSON_TTL_HOURS}h removed; every class keeps its most recent`);
+    return n;
+  } catch (err) {
+    console.error('Could not sweep expired lessons:', (err as Error).message);
+    return 0;
+  }
+}
+
+/**
  * Delete a class's older lessons, keeping the newest LESSON_HISTORY_KEEP.
  *
  * Called after a NEW lesson row is created, which is once per class per day —
