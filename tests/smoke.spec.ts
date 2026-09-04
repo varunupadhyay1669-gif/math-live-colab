@@ -157,6 +157,67 @@ test.describe('the mirror', () => {
     await learner.close();
   });
 
+  test("a learner who is allowed to drive can work the lesson's own buttons", async ({ browser }) => {
+    // The reported failure, 4 Sep 2026: "the student cannot click on the button
+    // and go to the next concept … it was never an issue but for the last one
+    // or two days this is arising a lot."
+    //
+    // The learner's copy runs no scripts, so pressing the lesson's Next button
+    // does nothing locally by design: the click is forwarded to the teacher's
+    // authoritative copy, the lesson advances there, and the new DOM comes back.
+    // Three hops, and until now no test covered any of them from this direction
+    // — every mirror test drives from the teacher.
+    const code = room('drive');
+    const teacher = await (await browser.newContext()).newPage();
+    const learner = await (await browser.newContext()).newPage();
+
+    await teacher.goto(`${BASE}/room/${code}?name=Teacher`);
+    await runLesson(teacher, `<!doctype html><html><body>
+      <h1 id="t">Steps</h1>
+      <p id="step">1</p>
+      <!-- Centred, and that is not cosmetic. The parent app floats fixed
+           controls over the lesson on the LEARNER's screen — the annotation
+           toolbar top-left, the "Writing down what we say" pill bottom-left,
+           the call window, the reaction bar. Two earlier versions of this test
+           failed because those swallowed the press before it reached the
+           lesson, which is a real fault worth its own test and not the one
+           this test is for: this one asks whether a learner's click REACHES
+           the teacher's copy at all. -->
+      <div style="height:260px"></div>
+      <div style="text-align:center">
+        <button id="next" onclick="document.getElementById('step').textContent = String(+document.getElementById('step').textContent + 1)">Next</button>
+      </div>
+      <div style="height:260px"></div>
+    </body></html>`);
+    const src = await lessonFrame(teacher, 'Steps');
+
+    await learner.goto(`${BASE}/live/${code}?name=Learner`);
+    const fol = await lessonFrame(learner, 'Steps');
+    expect(await fol.locator('#step').textContent()).toBe('1');
+
+    // A fresh room already allows it — the teacher's toggle reads "Students can
+    // interact — click for view-only" — so this is the default state a class
+    // starts in, not a special mode the test arranges.
+    await expect(learner.getByText('INTERACTIVE')).toBeVisible({ timeout: 20_000 });
+
+    // The learner presses Next.
+    await fol.locator('#next').click();
+
+    // It has to advance on the teacher's copy, which is the only one running...
+    await expect.poll(async () => src.locator('#step').textContent(), {
+      timeout: 20_000,
+      message: "the learner's click never reached the teacher's lesson",
+    }).toBe('2');
+    // ...and come back to the learner, which is what they actually see.
+    await expect.poll(async () => fol.locator('#step').textContent(), {
+      timeout: 20_000,
+      message: 'the lesson advanced for the teacher and the learner stayed behind',
+    }).toBe('2');
+
+    await teacher.close();
+    await learner.close();
+  });
+
   test('a hostile lesson does not run on the learner', async ({ browser }) => {
     const code = room('b');
     const teacher = await (await browser.newContext()).newPage();

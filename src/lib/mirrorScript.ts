@@ -763,8 +763,7 @@ export const mirrorScript = `
   // Re-apply <body>'s own attributes (class/style/data-*). Without this a lesson
   // that toggles a body class rendered unstyled on the follower.
   function applyBodyAttrs(json) {
-    if (json == null || json === lastAttrs) return;
-    lastAttrs = json;
+    if (json == null || json === lastAttrs) return true;
     try {
       var want = JSON.parse(json), seen = {};
       for (var i = 0; i < want.length; i++) {
@@ -778,7 +777,12 @@ export const mirrorScript = `
       }
       var have = document.body.attributes;
       for (var j = have.length - 1; j >= 0; j--) { if (!seen[have[j].name]) document.body.removeAttribute(have[j].name); }
-    } catch (e) {}
+      // Recorded as applied only now. Recording it up front meant a throw
+      // halfway through left the follower believing it held attributes it had
+      // never finished writing, and the next identical frame was skipped.
+      lastAttrs = json;
+      return true;
+    } catch (e) { return false; }
   }
   // ─────────────────── SANITISE WHAT WE PAINT ───────────────────
   //
@@ -967,8 +971,7 @@ export const mirrorScript = `
   // styled lessons look identical. Kept in its own element so we never touch the
   // follower agent's own script/styles.
   function applyHead(html) {
-    if (html == null || html === lastHead) return;
-    lastHead = html;
+    if (html == null || html === lastHead) return true;
     try {
       var host = document.getElementById('mathslive-mirror-head');
       if (!host) {
@@ -982,9 +985,12 @@ export const mirrorScript = `
       // readily.
       var frag = inertFragment(html);
       if (!frag) return;
+      var headClone = document.importNode(frag, true);
       while (host.firstChild) host.removeChild(host.firstChild);
-      host.appendChild(document.importNode(frag, true));
-    } catch (e) {}
+      host.appendChild(headClone);
+      lastHead = html;
+      return true;
+    } catch (e) { return false; }
   }
 
   // ─────────────────── DOM MORPHING (fidelity core) ───────────────────
@@ -1119,10 +1125,17 @@ export const mirrorScript = `
       try {
         if (!frag) frag = inertFragment(html);
         if (!frag) return false;
+        // Build the replacement BEFORE tearing the old one down. importNode can
+        // throw, and in the previous order that left the learner looking at an
+        // EMPTY body — the old page destroyed, the new one never built.
+        var clone = document.importNode(frag, true);
         while (document.body.firstChild) document.body.removeChild(document.body.firstChild);
-        document.body.appendChild(document.importNode(frag, true));
-      } catch (e2) {}
-      return false;
+        document.body.appendChild(clone);
+        // The fallback painted. Slower and cruder than morphing, but the frame
+        // is on the screen, so it must not be reported as a failure — doing so
+        // would ask for a resync after every morph hiccup.
+        return true;
+      } catch (e2) { return false; }
     }
   }
 
@@ -1133,7 +1146,6 @@ export const mirrorScript = `
       return;
     }
     var firstPaint = (lastBody === null);
-    lastBody = d.body;
     // Replacing body.innerHTML resets scroll, focus, the text caret, and the
     // scroll position of every inner scrollable panel. On a LIVE update (the
     // student acts → the teacher's lesson changes → a snapshot comes back) that
@@ -1165,9 +1177,9 @@ export const mirrorScript = `
     // scroll/focus/inner-scroller restores below become no-ops when morphing
     // succeeds (nothing was destroyed, so nothing needs restoring); they still
     // cover the wholesale-swap fallback path.
-    applyBodyHtml(d.body);
-    applyBodyAttrs(d.attrs);
-    applyHead(d.head);
+    var painted = applyBodyHtml(d.body);
+    var attrsOk = applyBodyAttrs(d.attrs);
+    var headOk = applyHead(d.head);
     try {
       if (firstPaint && (typeof d.scrollX === 'number' || typeof d.scrollY === 'number')) {
         window.scrollTo(d.scrollX || 0, d.scrollY || 0);
@@ -1189,8 +1201,41 @@ export const mirrorScript = `
       } catch (e) {}
     }
     applyingDom = false;
-    if (d.h) appliedHash = d.h;
-    staleTicks = 0;
+
+    // Only NOW is the frame recorded as applied, and only if it really was.
+    //
+    // This is the bug that put a student on the previous page for the rest of a
+    // lesson, on 4 Sep 2026. lastBody was assigned BEFORE the paint and
+    // appliedHash after it unconditionally, so a frame that
+    // failed to paint left the follower claiming both: the next identical
+    // snapshot hit the "nothing to do" early return, and the fingerprint
+    // heartbeat — the one mechanism that repairs a lost frame — was told the
+    // screen already matched. The comment in sanitizeInto's catch said a
+    // dropped frame "costs a moment of staleness, which the heartbeat repairs
+    // a few seconds later". It could not. Nothing could.
+    //
+    // The student then also appears unable to click: their forwarded taps carry
+    // a path computed on a page the teacher left minutes ago.
+    //
+    // Gated on the BODY alone, deliberately. A failed body means the student is
+    // looking at the wrong page, which is the fault worth resyncing for. The
+    // attribute and head channels are the styling envelope: losing one is
+    // visible but it is not the wrong lesson, and a deterministic failure there
+    // would turn a resync request into a loop. They simply do not record
+    // themselves as applied, so the next frame tries them again.
+    if (painted) {
+      lastBody = d.body;
+      if (d.h) appliedHash = d.h;
+      staleTicks = 0;
+    } else {
+      // Leave appliedHash alone. The heartbeat compares it against the
+      // teacher's and will now genuinely disagree, which is what makes this
+      // self-healing; the request below is just the faster path.
+      paintFailed('body');
+    }
+    if (!attrsOk || !headOk) {
+      try { console.warn('[mirror] painted, but the ' + (!attrsOk ? 'body attributes' : 'head') + ' did not apply'); } catch (e) {}
+    }
     // A body swap recreates any <canvas> BLANK (innerHTML can't carry pixels).
     // Immediately re-draw the most recent captured frame so a lesson that
     // mutates the DOM while a canvas/3D sim runs doesn't flicker to empty
@@ -1200,6 +1245,18 @@ export const mirrorScript = `
   // Ask for a fresh full frame, at most once every few seconds. A miss usually
   // means the DOM snapshot carrying this canvas has not landed yet, so a burst
   // of requests would all fail for the same reason; one, then wait.
+  // A frame that could not be painted. Rate-limited for the same reason as the
+  // canvas rescue below: whatever stopped this frame will stop the next one
+  // too, so ask once and wait rather than sending a request per frame.
+  var lastPaintAskAt = 0;
+  function paintFailed(why) {
+    var now = Date.now();
+    if (now - lastPaintAskAt < 3000) return;
+    lastPaintAskAt = now;
+    try { console.warn('[mirror] could not paint the ' + why + ' of this frame — asking for a fresh one'); } catch (e) {}
+    post({ type: 'MIRROR_STALE' });
+  }
+
   var lastCanvasRescueAt = 0;
   function rescueCanvases(why) {
     var now = Date.now();

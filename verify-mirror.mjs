@@ -306,6 +306,59 @@ section('OFFLINE — a frame belongs to ONE canvas');
     'a repaint clears too');
 }
 
+section('OFFLINE — a frame that did not paint is not recorded as painted');
+{
+  // 4 Sep 2026, from a live class: the student sat on the previous page of the
+  // lesson while the teacher had moved on, and their clicks did nothing —
+  // because a forwarded tap carries a path computed on whatever page they can
+  // see, and theirs was minutes out of date.
+  //
+  // applySnapshot recorded lastBody BEFORE painting and appliedHash after it
+  // unconditionally. So a frame that failed to paint left the follower claiming
+  // both: the next identical snapshot hit the "nothing to do" early return, and
+  // the fingerprint heartbeat — the one thing that repairs a lost frame — was
+  // told the screen already matched. The source dedupes, so it never resends a
+  // body by itself. Nothing recovered.
+  const followerJs = mirrorScriptFor('follower')
+    .replace(/^[\s\S]*?<script[^>]*>/i, '')
+    .replace(/<\/script>[\s\S]*$/i, '');
+  const dom = new JSDOM('<!doctype html><html><body></body></html>',
+    { runScripts: 'outside-only', pretendToBeVisual: true });
+  const { window } = dom;
+  const asked = [];
+  window.parent = { postMessage: (m) => asked.push(m && m.type) };
+  window.eval(followerJs);
+  const send = (msg) => window.dispatchEvent(
+    new window.MessageEvent('message', { data: msg, source: window.parent }));
+
+  // Break the sanitiser for the whole of ONE frame — both attempts at it. Two,
+  // not one, because applyBodyHtml already survives a single throw: it retries
+  // through the wholesale-swap fallback, which is exactly the resilience it was
+  // written for. What has to be tested is the frame that fails outright.
+  const realWalker = window.document.createTreeWalker.bind(window.document);
+  let breaks = 2;
+  window.document.createTreeWalker = (...a) => {
+    if (breaks > 0) { breaks--; throw new Error('sanitiser blew up'); }
+    return realWalker(...a);
+  };
+
+  const page2 = '<h2 id="q">Sub-Concept 2</h2>';
+  send({ type: 'MIRROR_APPLY', body: page2, h: 'hash-of-page-2' });
+  assert(!window.document.body.innerHTML.includes('Sub-Concept 2'),
+    'a frame the sanitiser could not clean is not painted',
+    'the point of the sanitiser is that an uncleanable frame never reaches the child');
+  assert(asked.includes('MIRROR_STALE'),
+    'and the follower asks for a fresh one',
+    'the source dedupes and will never resend an unchanged body on its own');
+
+  // The same body arrives again. Before the fix this hit the early return,
+  // because lastBody already claimed it, and the student stayed on page 1.
+  send({ type: 'MIRROR_APPLY', body: page2, h: 'hash-of-page-2' });
+  assert(window.document.body.innerHTML.includes('Sub-Concept 2'),
+    'the retry paints it',
+    'lastBody was recorded before the paint, so the retry was skipped as a duplicate');
+}
+
 section('OFFLINE — the follower never runs the lesson');
 
 for (const [name, html] of Object.entries(LESSONS)) {
