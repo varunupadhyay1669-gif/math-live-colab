@@ -87,6 +87,76 @@ test.describe('the mirror', () => {
     await learner.close();
   });
 
+  test("a finished animation does not stay on the learner's screen", async ({ browser }) => {
+    // Reported from two real classes, and read both times as a frame being
+    // "stuck": a burst of celebration confetti that sat on top of the question
+    // for the rest of the lesson, and a geometry sim smeared with every
+    // position a dragged vertex had ever been in.
+    //
+    // Neither was stuck. A frame is a capture of the WHOLE canvas and WebP
+    // carries the alpha, so a follower that painted without clearing first
+    // composited every frame onto the one before it. Only pixels can show this:
+    // the DOM is identical either way, which is why it survived a suite that
+    // was otherwise thorough.
+    //
+    // The learner must be WATCHING while the animation runs. A learner who
+    // joins afterwards receives only the final frame and has nothing to pile
+    // up — which is how the first version of this test passed against the bug.
+    const code = room('anim');
+    const teacher = await (await browser.newContext()).newPage();
+    const learner = await (await browser.newContext()).newPage();
+
+    await teacher.goto(`${BASE}/room/${code}?name=Teacher`);
+    // A square that MOVES across a transparent canvas, clearing behind itself,
+    // and then stops. On the teacher this ends as one square on the right; a
+    // follower that accumulates ends with all four.
+    await runLesson(teacher, `<!doctype html><html><body style="margin:0">
+      <h1 id="t">Celebration</h1>
+      <canvas id="cel" width="200" height="100"></canvas>
+      <button id="go">celebrate</button>
+      <script>
+        var c = document.getElementById('cel'), g = c.getContext('2d'), step = 0;
+        function draw() {
+          g.clearRect(0, 0, 200, 100);
+          g.fillStyle = '#ff0000';
+          g.fillRect(step * 40, 40, 20, 20);
+          if (++step < 4) setTimeout(draw, 250);
+        }
+        document.getElementById('go').onclick = draw;
+      </script>
+    </body></html>`);
+    const src = await lessonFrame(teacher, 'Celebration');
+
+    await learner.goto(`${BASE}/live/${code}?name=Learner`);
+    const fol = await lessonFrame(learner, 'Celebration');
+    await fol.locator('#cel').waitFor({ timeout: 20_000 });
+
+    const sample = async () => fol.evaluate(() => {
+      const c = document.getElementById('cel') as HTMLCanvasElement | null;
+      const g = c && c.getContext('2d');
+      if (!g) return null;
+      const alphaAt = (x: number, y: number) => g.getImageData(x, y, 1, 1).data[3];
+      // Where the animation ENDED, and where it BEGAN.
+      return { last: alphaAt(130, 50), first: alphaAt(10, 50) };
+    });
+
+    // Now run it, with the learner already watching.
+    await src.locator('#go').click();
+
+    await expect.poll(async () => (await sample())?.last ?? 0, {
+      timeout: 25_000,
+      message: "the learner never received the animation's last frame",
+    }).toBeGreaterThan(200);
+
+    const px = await sample();
+    expect(px!.first,
+      'the start of the animation is still painted on the learner — frames are piling up instead of replacing each other')
+      .toBeLessThan(40);
+
+    await teacher.close();
+    await learner.close();
+  });
+
   test('a hostile lesson does not run on the learner', async ({ browser }) => {
     const code = room('b');
     const teacher = await (await browser.newContext()).newPage();

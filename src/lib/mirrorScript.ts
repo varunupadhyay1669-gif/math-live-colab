@@ -1265,6 +1265,22 @@ export const mirrorScript = `
         // canvas only ever grants one kind. Nothing can be drawn here, so say
         // so rather than failing mute.
         if (!ctx) { if (!isRepaint) rescueCanvases('no 2d context on ' + item.sel); return; }
+        // Clear before painting. A frame is a capture of the WHOLE canvas, so
+        // whatever is already on this one is not part of the picture — and WebP
+        // carries the alpha, so on any canvas that is not fully opaque the last
+        // frame shows through wherever this one is transparent. Every frame
+        // then piles on the one before it, for ever.
+        //
+        // Reported twice from real classes and read both times as the frame
+        // being "stuck": a burst of celebration confetti that sat on the screen
+        // for the rest of the lesson (every frame of the animation accumulated,
+        // and the pile outlived the canvas that drew it), and a geometry sim
+        // smeared with every position a dragged vertex had ever been in.
+        //
+        // It looked intermittent because the resize just above already clears a
+        // canvas as a side effect: one that changes size repaints cleanly, and
+        // only a fixed-size canvas accumulates.
+        ctx.clearRect(0, 0, c.width, c.height);
         ctx.drawImage(img, 0, 0);
       } catch (e) {
         if (!isRepaint) rescueCanvases('draw failed: ' + (e && e.name));

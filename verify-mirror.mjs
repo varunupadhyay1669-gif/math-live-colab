@@ -241,7 +241,10 @@ section('OFFLINE — a frame belongs to ONE canvas');
   const drawn = [];
   window.HTMLCanvasElement.prototype.getContext = function () {
     const el = this;
-    return { drawImage: () => drawn.push(el.id || '(no id)') };
+    return {
+      clearRect: () => drawn.push('clear:' + (el.id || '(no id)')),
+      drawImage: () => drawn.push(el.id || '(no id)'),
+    };
   };
   // jsdom decodes nothing; resolve immediately so onload actually runs.
   window.Image = class { set src(_v) { if (this.onload) this.onload(); } };
@@ -278,6 +281,29 @@ section('OFFLINE — a frame belongs to ONE canvas');
   send({ type: 'MIRROR_CANVAS', canvases: [
     { sel: 'body > canvas:nth-of-type(9)', idx: 0, w: 80, h: 80, data: 'data:image/webp;base64,LIVE' }] });
   assert(drawn.includes('lesson'), 'a live frame can still fall back to the canvas index');
+
+  section('OFFLINE — a frame replaces the last one, it does not pile on it');
+
+  // From two live classes, and misread both times as a frame being "stuck":
+  // celebration confetti that stayed on the screen for the rest of the lesson,
+  // and a geometry sim smeared with every position a dragged vertex had been
+  // in. A frame is a capture of the WHOLE canvas and WebP carries the alpha, so
+  // without a clear each one composites onto the last until nothing underneath
+  // is visible.
+  drawn.length = 0;
+  send({ type: 'MIRROR_CANVAS', canvases: [
+    { sel: 'body > canvas:nth-of-type(1)', idx: 0, w: 80, h: 80, data: 'data:image/webp;base64,ONE' }] });
+  assert(drawn[0] === 'clear:lesson' && drawn[1] === 'lesson',
+    'a frame clears the canvas before it paints',
+    `drew ${JSON.stringify(drawn)} — without the clear every frame piles onto the last`);
+
+  // Including the repaint after a body swap, which is the path that put a
+  // frozen pile of confetti back on screen after the animation had ended.
+  drawn.length = 0;
+  send({ type: 'MIRROR_APPLY', attrs: {},
+    body: '<canvas id="lesson" width="80" height="80"></canvas><p>after</p>' });
+  assert(drawn.length === 0 || drawn[0] === 'clear:lesson',
+    'a repaint clears too');
 }
 
 section('OFFLINE — the follower never runs the lesson');
