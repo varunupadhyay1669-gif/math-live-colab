@@ -3725,6 +3725,110 @@ Build a widget that teaches: ${safePrompt}`;
       });
     });
 
+    // ─── BEAM (still frames of the tutor's board or screen, over THIS socket) ───
+    //
+    // The emergency route for "at least let him see what I am showing". The
+    // WebRTC share above needs a peer connection to establish, and on a school
+    // network or Indian mobile data it does not: screenShare.ts hard-codes STUN
+    // and there is no TURN relay configured, so there is nothing to fall back
+    // to. This carries WebP still frames over the Socket.IO connection that is
+    // already working, because if that connection is down the student has no
+    // lesson either — there is no failure mode where the beam is broken and the
+    // rest of the class is fine.
+    //
+    // The server is a RELAY AND NOTHING ELSE. It deliberately does not keep the
+    // last frame per room, and that is not an oversight: this box has 1GB with
+    // Postgres beside it and the kernel has OOM-killed it repeatedly, and a
+    // retained ~900KB frame per room is exactly the shape that does it. The
+    // recovery a cached frame would have bought is bought instead by the source
+    // sending a keyframe every ~5s, so a late joiner and a lost frame both
+    // self-correct at zero cost here. For the same reason there is no beam
+    // field in RoomData, buildSessionState or applySessionState: a beam is not
+    // canonical session state, it is a picture in flight.
+    //
+    // Not in MUTATING_EVENTS either — nothing here changes anything that could
+    // be persisted, and a save per frame would be a save storm.
+    const MAX_BEAM_FRAME = 900 * 1024;
+    socket.on('beam_frame', (payload: { roomId: string; data: string; source?: string; keyframe?: boolean; seq?: number; w?: number; h?: number }) => {
+      const { roomId, data, source, keyframe, seq, w, h } = payload || ({} as typeof payload);
+      if (typeof roomId !== 'string' || typeof data !== 'string') return;
+      // Checked BEFORE anything else touches it. Socket.IO's maxHttpBufferSize
+      // is 5e6 and an oversize message does not get dropped — it KILLS the
+      // connection, which on this product means the student loses the lesson
+      // and not merely the picture. A data: URL is ASCII, so characters are
+      // bytes and .length is the honest measure.
+      if (data.length > MAX_BEAM_FRAME) return;
+      if (!data.startsWith('data:image/')) return;
+      // Loss-tolerant: a dropped frame is corrected by the next keyframe, and a
+      // beam must never be allowed to starve a click or an input.
+      if (!checkRateLimit(socket.id, true)) return;
+      const room = rooms.get(roomId);
+      if (!requireTeacher(room, socket.id)) return;
+      socket.to(roomId).emit('beam_frame', {
+        data,
+        source: source === 'board' ? 'board' : 'screen',
+        keyframe: !!keyframe,
+        seq: typeof seq === 'number' ? seq : 0,
+        w: typeof w === 'number' ? w : 0,
+        h: typeof h === 'number' ? h : 0,
+      });
+    });
+
+    // On/off, plus what the student's badge should say it is looking at.
+    socket.on('beam_state', ({ roomId, on, label }: { roomId: string; on: boolean; label?: string }) => {
+      if (typeof roomId !== 'string') return;
+      const room = rooms.get(roomId);
+      if (!requireTeacher(room, socket.id)) return;
+      const teacher = room.users.get(socket.id);
+      socket.to(roomId).emit('beam_state', {
+        on: !!on,
+        label: typeof label === 'string' ? label.slice(0, 80) : '',
+        name: teacher?.name || 'Your teacher',
+      });
+    });
+
+    // A student asking for a whole frame — they have just joined, or their
+    // overlay has gone stale. Addressed to the teacher only; a student cannot
+    // make the server produce anything.
+    socket.on('beam_request', ({ roomId }: { roomId: string }) => {
+      if (typeof roomId !== 'string') return;
+      if (!checkRateLimit(socket.id, true)) return;
+      const room = rooms.get(roomId);
+      if (!isMember(room, socket.id)) return;
+      if (room.teacherSocketId) io.to(room.teacherSocketId).emit('beam_request', {});
+    });
+
+    // The return channel, and the reason this feature exists.
+    //
+    // The old share set "Sharing" from the tutor's own getDisplayMedia call — a
+    // fact about their browser, not about the child — so the toolbar said the
+    // same thing whether one student was connected or none. This is the only
+    // evidence that anybody is actually seeing the picture, so it carries the
+    // student's NAME and the teacher's status pill is built from it.
+    //
+    // Throttled to one a second per socket, held on socket.data so it dies with
+    // the connection rather than accumulating in a Map keyed by socket id that
+    // something has to remember to clean up.
+    socket.on('beam_ack', ({ roomId, seq }: { roomId: string; seq?: number }) => {
+      if (typeof roomId !== 'string') return;
+      const now = Date.now();
+      const last = (socket.data as { beamAckAt?: number }).beamAckAt || 0;
+      if (now - last < 1000) return;
+      const room = rooms.get(roomId);
+      if (!isMember(room, socket.id)) return;
+      const user = room.users.get(socket.id);
+      if (user?.role !== 'student') return;
+      (socket.data as { beamAckAt?: number }).beamAckAt = now;
+      if (room.teacherSocketId) {
+        io.to(room.teacherSocketId).emit('beam_ack', {
+          studentId: socket.id,
+          studentName: user.name,
+          seq: typeof seq === 'number' ? seq : 0,
+          at: now,
+        });
+      }
+    });
+
         // ─── LIVE MIRROR relay (the "impossible to desync" engine) ───
     // The teacher's iframe is the single authoritative lesson instance; it
     // streams its REAL DOM here and the server relays it to every student, who

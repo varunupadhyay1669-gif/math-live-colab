@@ -16,7 +16,7 @@
 //
 //   npx playwright test              (needs `npm run dev` on :4000)
 //   npx playwright install chromium  (once, to fetch the browser)
-import { test, expect, type Page, type Frame } from '@playwright/test';
+import { test, expect, type Page, type Frame, type Locator } from '@playwright/test';
 
 const BASE = process.env.SMOKE_BASE_URL || 'http://localhost:4000';
 
@@ -43,6 +43,38 @@ async function lessonFrame(page: Page, contains: string, timeoutMs = 25_000): Pr
     await page.waitForTimeout(400);
   }
   throw new Error(`no lesson frame containing ${JSON.stringify(contains)} after ${timeoutMs}ms`);
+}
+
+/**
+ * How much genuine ink a canvas or an <img> holds, and how many colours.
+ *
+ * Read in the page rather than from a screenshot, because a screenshot proves
+ * only that the app drew something — the question here is whether the PIXELS
+ * that crossed the wire have a picture in them. White is painted first, exactly
+ * as the beam does: a transparent board read straight comes back black
+ * everywhere and would look like solid ink.
+ */
+async function inkStats(locator: Locator) {
+  return locator.evaluate((el) => {
+    const src = el as HTMLImageElement & HTMLCanvasElement;
+    const w = src.naturalWidth || src.width;
+    const h = src.naturalHeight || src.height;
+    if (!w || !h) return { colours: 0, dark: 0, w: 0, h: 0 };
+    const c = document.createElement('canvas');
+    c.width = w; c.height = h;
+    const g = c.getContext('2d')!;
+    g.fillStyle = '#ffffff';
+    g.fillRect(0, 0, w, h);
+    g.drawImage(src, 0, 0, w, h);
+    const d = g.getImageData(0, 0, w, h).data;
+    const seen = new Set<number>();
+    let dark = 0;
+    for (let i = 0; i < d.length; i += 4) {
+      seen.add((d[i] << 16) | (d[i + 1] << 8) | d[i + 2]);
+      if (d[i] * 0.299 + d[i + 1] * 0.587 + d[i + 2] * 0.114 < 120) dark++;
+    }
+    return { colours: seen.size, dark, w, h };
+  });
 }
 
 /** Paste a lesson into the teacher's room and run it. */
@@ -266,6 +298,103 @@ test.describe('the mirror', () => {
       timeout: 20_000,
       message: 'the learner stopped receiving the lesson after the whiteboard — this is the freeze',
     }).toBe('2');
+
+    await teacher.close();
+    await learner.close();
+  });
+
+  test("the beam puts the tutor's board on the learner's screen, and names who is receiving it", async ({ browser }) => {
+    // The founder's request, 4 Sep 2026: "at least the student knows exactly
+    // what I'm showing — although he cannot interact in that case, but he
+    // should know exactly."
+    //
+    // The BOARD source rather than the screen one, and not only because
+    // getDisplayMedia needs a permission this cannot grant headlessly: the
+    // board is the source whose failure is invisible. <Whiteboard> renders null
+    // when it is not the surface in front, so getCanvas() returns null and a
+    // beam started from anywhere else sends nothing at all, silently — which is
+    // the exact failure ("I thought he could see it") the feature exists to end.
+    //
+    // Real ink is drawn first and the pixels are read at the far end. An empty
+    // board is a legitimately blank frame, so a test that passed on one would
+    // pass just as happily on a beam that was transmitting nothing.
+    const code = room('beam');
+    const teacher = await (await browser.newContext()).newPage();
+    const learner = await (await browser.newContext()).newPage();
+
+    await teacher.goto(`${BASE}/room/${code}?name=Teacher`);
+    await runLesson(teacher, '<!doctype html><html><body><h1 id="t">Beam</h1></body></html>');
+    await lessonFrame(teacher, 'Beam');
+
+    await learner.goto(`${BASE}/live/${code}?name=Learner`);
+    await lessonFrame(learner, 'Beam');
+
+    // To the board, and pick up a pen — the board opens on the select tool.
+    await teacher.locator('[data-tip="Open the shared whiteboard"]').first().click();
+    const board = teacher.locator('.whiteboard-canvas-wrap canvas').first();
+    await board.waitFor({ timeout: 20_000 });
+    await teacher.locator('[aria-label="Pen"]').first().click();
+
+    // A block of ink, not a hairline. The frame is scaled to a 1280px long edge
+    // and encoded at WebP 0.6, and a single 4px stroke can be softened past the
+    // point where reading one pixel proves anything. Drawn centre-right: the
+    // board's own tool rail owns the left edge.
+    const box = (await board.boundingBox())!;
+    const x0 = box.x + box.width * 0.42;
+    const y0 = box.y + box.height * 0.34;
+    for (let row = 0; row < 12; row++) {
+      const y = y0 + row * 4;
+      await teacher.mouse.move(x0, y);
+      await teacher.mouse.down();
+      await teacher.mouse.move(x0 + 240, y, { steps: 10 });
+      await teacher.mouse.up();
+    }
+
+    // The ink is on the tutor's own board BEFORE anything is beamed. Without
+    // this, a beam that carried a blank board perfectly would fail below and
+    // read as a broken beam rather than a pen that never drew.
+    const drawn = await inkStats(board);
+    expect(drawn.dark, "the pen drew nothing on the tutor's own board").toBeGreaterThan(200);
+
+    // Start the beam: the toolbar button, then "The whiteboard" from its menu.
+    // Both by data-testid — the parent app floats fixed controls over the
+    // lesson area that swallow a click aimed at anything else.
+    await teacher.locator('[data-testid="beam-button"]').click();
+    await teacher.locator('[data-testid="beam-board"]').click();
+
+    // 1. A picture arrives at all, as a data: URL over the lesson socket —
+    //    no peer connection, no relay, nothing that can be blocked separately.
+    const img = learner.locator('[data-testid="beam-image"]');
+    await img.waitFor({ timeout: 25_000 });
+    await expect.poll(async () => (await img.getAttribute('src'))?.slice(0, 5), {
+      timeout: 20_000,
+      message: 'the learner has no frame — the beam sent nothing',
+    }).toBe('data:');
+
+    // 2. It is a picture OF SOMETHING. Polled, because the first frame can
+    //    legitimately land before the stroke does.
+    await expect.poll(async () => (await inkStats(img)).dark, {
+      timeout: 25_000,
+      message: "the beamed frame has no ink in it — the tutor's board did not travel",
+    }).toBeGreaterThan(50);
+    const got = await inkStats(img);
+    expect(got.colours, 'the beamed frame is one flat colour — it captured nothing')
+      .toBeGreaterThan(1);
+
+    // 3. The learner is told, in words, that this is not something to touch.
+    //    A greyed-out cursor is not a message a child reads.
+    await expect(learner.locator('[data-testid="beam-viewonly"]')).toHaveText('VIEW ONLY');
+
+    // 4. And the tutor is told, BY NAME, that it actually arrived. This is the
+    //    point of the feature: "My screen" set its state from the tutor's own
+    //    getDisplayMedia call, so it said "Sharing" to an empty room. This is
+    //    built from acks the learner sent back.
+    await expect(teacher.locator('[data-testid="beam-reach"]')).toContainText('Learner', {
+      timeout: 20_000,
+    });
+    await expect(teacher.locator('[data-testid="beam-reach"]')).toContainText('can see this', {
+      timeout: 20_000,
+    });
 
     await teacher.close();
     await learner.close();

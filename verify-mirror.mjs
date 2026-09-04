@@ -27,6 +27,12 @@ import { listMigrationFiles } from './src/server/migrate.ts';
 import { PRODUCT, subjectFor } from './src/lib/product.ts';
 import { can, permissionsOf } from './src/server/authz.ts';
 import { LESSON_HISTORY_KEEP, LESSON_TTL_HOURS } from './src/server/records.ts';
+import {
+  frameBytes, freshBudget, accountFrame, shrinkAfterOversize, fitScratch, paintScratch,
+  samplePoints, looksBlank, reachSummary,
+  BEAM_TICK_MS, BEAM_MAX_TICK_MS, BEAM_QUALITY, BEAM_MIN_QUALITY, BEAM_MAX_EDGE,
+  BEAM_MAX_FRAME_BYTES, BEAM_ACK_STALE_MS,
+} from './src/lib/beam.ts';
 import { readFile } from 'node:fs/promises';
 import QRCode from 'qrcode';
 import jsQR from 'jsqr';
@@ -1178,6 +1184,191 @@ section('OFFLINE — who may put a picture on the board');
   const mount = src.slice(src.indexOf('export function mountBoardImageRoutes'));
   assert(mount.indexOf('userFromRequest') < mount.indexOf('parseDataUrl'),
     'the session is checked BEFORE a 6 MB body is parsed');
+}
+
+section('OFFLINE — a beam gets worse rather than stopping');
+{
+  // The governor. A tutor mid-explanation cannot act on "your connection is
+  // too slow"; they can act on a picture that is still arriving. So past the
+  // budget the beam drops quality AND halves its rate, and it keeps going.
+  const big = 'data:image/webp;base64,' + 'A'.repeat(70 * 1024);
+  assert(frameBytes(big) === big.length,
+    'a frame is charged the characters that actually go on the wire',
+    'a data: URL is ASCII and Socket.IO bills the encoded message — measuring the decoded image would under-count by a third');
+  assert(frameBytes(undefined) === 0 && frameBytes(null) === 0,
+    'a frame that was never encoded costs nothing');
+
+  let b = freshBudget(0);
+  assert(b.tickMs === BEAM_TICK_MS && b.quality === BEAM_QUALITY, 'a fresh beam starts at full quality and full rate');
+
+  // Two 70KB frames inside one second is 140KB/s — over the 120KB/s budget.
+  b = accountFrame(b, frameBytes(big), 200);
+  assert(b.tickMs === BEAM_TICK_MS && b.bytes > 0,
+    'a frame inside the window is charged and changes nothing yet',
+    'reacting per-frame instead of per-second would chase every spike');
+  b = accountFrame(b, frameBytes(big), 1000);
+  assert(b.quality < BEAM_QUALITY, 'past the budget the picture gets cheaper', `quality=${b.quality}`);
+  assert(b.tickMs === BEAM_TICK_MS * 2, 'and it is sent half as often', `tickMs=${b.tickMs}`);
+  assert(b.bytes === 0 && b.windowStart === 1000, 'and the next second starts clean');
+
+  // Sustained overload. It must never reach a state where nothing is sent —
+  // a beam that has turned itself off is the silent failure this replaced.
+  let t = 1000;
+  for (let i = 0; i < 20; i++) { t += 1000; b = accountFrame(b, frameBytes(big) * 4, t); }
+  assert(b.quality >= BEAM_MIN_QUALITY, 'quality has a floor', `quality=${b.quality}`);
+  assert(b.tickMs <= BEAM_MAX_TICK_MS && b.tickMs > 0,
+    'the beam never stops, however bad the line is',
+    `tickMs=${b.tickMs} — a stopped beam is the failure this feature exists to remove`);
+
+  // And it comes back when the line does.
+  for (let i = 0; i < 20; i++) { t += 1000; b = accountFrame(b, 1024, t); }
+  assert(b.quality === BEAM_QUALITY && b.tickMs === BEAM_TICK_MS,
+    'a beam that was throttled recovers when there is room again',
+    `quality=${b.quality} tickMs=${b.tickMs}`);
+
+  // A window that ran long (a backgrounded tab, a slow encode) is a rate, not
+  // a spike. Charging it as one would throttle a beam that was behaving.
+  const slow = accountFrame({ ...freshBudget(0), bytes: 150 * 1024 }, 0, 5000);
+  assert(slow.quality === BEAM_QUALITY,
+    'a window that took five seconds is judged per second, not as one burst',
+    `quality=${slow.quality}`);
+
+  // One frame over the hard cap is not a budget question. Socket.IO's
+  // maxHttpBufferSize is 5e6 and an oversize message KILLS the connection —
+  // which here costs the student the whole lesson, not just the picture.
+  assert(BEAM_MAX_FRAME_BYTES < 5e6, 'the frame cap is under the socket buffer that would kill the connection');
+  const shrunk = shrinkAfterOversize(freshBudget(0));
+  assert(shrunk.quality < BEAM_QUALITY, 'an oversize frame drops quality at once rather than waiting for the window');
+}
+
+section('OFFLINE — the picture is drawn white-first, at a sane size');
+{
+  // WebP keeps its alpha and the student's beam overlay is dark. A whiteboard
+  // is transparent everywhere the tutor has not drawn, so a frame composited
+  // straight onto that overlay is black paper with black ink — the board looks
+  // empty, which is indistinguishable from the beam being broken.
+  const calls = [];
+  const ctx = {
+    fillStyle: '',
+    fillRect: (...a) => calls.push(['fillRect', ...a]),
+    drawImage: (...a) => calls.push(['drawImage', a[1], a[2], a[3], a[4]]),
+  };
+  paintScratch(ctx, { fake: 'canvas' }, 640, 480);
+  assert(calls[0] && calls[0][0] === 'fillRect', 'the scratch canvas is filled BEFORE the picture is drawn',
+    'drawing first and filling after would paint over the frame entirely');
+  assert(String(ctx.fillStyle).toLowerCase() === '#ffffff', 'and it is filled white', `fillStyle=${ctx.fillStyle}`);
+  assert(calls[1] && calls[1][0] === 'drawImage' && calls[1][3] === 640 && calls[1][4] === 480,
+    'the source is stretched to the scratch canvas, not drawn at its own size');
+
+  // A 4K monitor is not worth 4K of wire, and a small board must not be
+  // upscaled — that spends bandwidth transmitting interpolation.
+  const big = fitScratch(3840, 2160);
+  assert(Math.max(big.width, big.height) === BEAM_MAX_EDGE, 'a 4K screen is capped at the long edge',
+    `${big.width}x${big.height}`);
+  assert(Math.abs(big.width / big.height - 3840 / 2160) < 0.01, 'and keeps its aspect ratio');
+  const small = fitScratch(900, 600);
+  assert(small.width === 900 && small.height === 600, 'a source under the cap is left alone');
+  const tall = fitScratch(600, 3000);
+  assert(tall.height === BEAM_MAX_EDGE, 'a tall source is capped on its own long edge', `${tall.width}x${tall.height}`);
+  assert(fitScratch(0, 0).width >= 1 && fitScratch(NaN, NaN).height >= 1,
+    'a source with no size still yields a canvas that can exist',
+    'a 0x0 canvas throws on toDataURL and would kill the tick');
+}
+
+section('OFFLINE — a blank capture is noticed, not shipped in silence');
+{
+  // Chrome hands back a tab capture of a PDF that is entirely white — the
+  // plugin surface is not in the captured layer — and the tutor cannot tell,
+  // because their own screen looks right. The student sees an empty rectangle
+  // and says nothing. Sixty-four probes that all agree is the signature.
+  const grid = samplePoints(800, 600);
+  assert(grid.length === 64, 'the probe is an 8x8 grid', `${grid.length} points`);
+  assert(grid.every(p => p.x >= 0 && p.x < 800 && p.y >= 0 && p.y < 600),
+    'every probe lands inside the frame');
+  assert(grid.every(p => p.x > 0 && p.y > 0),
+    'and none of them sits on the border',
+    'a border sample on a captured window reads the window chrome, not the content');
+
+  assert(looksBlank(new Array(64).fill(0xffffff)), 'an all-white capture is blank');
+  assert(looksBlank(new Array(64).fill(0x000000)), 'an all-black capture is blank too');
+  assert(looksBlank([]), 'a capture with nothing to sample is blank');
+  const faint = new Array(64).fill(0xffffff).map((_, i) => (i % 2 ? 0xfffefe : 0xffffff));
+  assert(looksBlank(faint), 'a page with a faint background gradient is still blank',
+    'exact equality would miss the very captures this is for');
+  const real = new Array(64).fill(0xffffff);
+  real[20] = 0x101820;
+  assert(!looksBlank(real), 'one patch of dark ink is enough to prove something was captured',
+    'a real page is mostly white — demanding lots of variety would warn on every worksheet');
+}
+
+section('OFFLINE — the tutor is told who can see this, by name');
+{
+  // The failure being fixed. myScreenOn was set from the tutor's own
+  // getDisplayMedia call — a fact about their browser, not about the child —
+  // so the toolbar said "Sharing" whether one student was connected or none.
+  // "I thought he could see it" is what that costs, and a fallback that can
+  // fail silently just reproduces it.
+  const now = 100_000;
+  const two = [{ id: 'a', name: 'Aarav' }, { id: 'b', name: 'Meera' }];
+
+  const none = reachSummary(two, {}, now);
+  assert(none.seeing.length === 0 && none.notSeeing.length === 2, 'a beam nobody has acked reaches nobody');
+  assert(/Aarav/.test(none.text) && /Meera/.test(none.text), 'and both of them are named', none.text);
+  assert(!/\b1 of 2\b/.test(none.text), 'not counted — a count is not a sentence in a one-to-one lesson');
+
+  const all = reachSummary(two, { a: now - 500, b: now - 2000 }, now);
+  assert(all.seeing.length === 2 && all.notSeeing.length === 0, 'two fresh acks means two students seeing it');
+  assert(all.text === 'Aarav and Meera can see this.', 'and it reads as a sentence', all.text);
+
+  // Acks arrive at most once a second, so three missed ones is the point at
+  // which a tutor should be told — long enough not to flicker on a hiccup.
+  const dropped = reachSummary(two, { a: now - 500, b: now - 30_000 }, now);
+  assert(dropped.seeing.length === 1 && dropped.notSeeing[0] === 'Meera',
+    'a student who stopped acking is reported as not receiving it',
+    'this is the whole feature: silence must not read as success');
+  assert(/Aarav can see this/.test(dropped.text) && /Not reaching Meera/.test(dropped.text),
+    'and the pill says both halves', dropped.text);
+
+  const empty = reachSummary([], {}, now);
+  assert(empty.seeing.length === 0 && /Nobody has joined/.test(empty.text),
+    'beaming to an empty room says so rather than looking fine', empty.text);
+
+  const three = reachSummary(
+    [{ id: 'a', name: 'Aarav' }, { id: 'b', name: 'Meera' }, { id: 'c', name: 'Sam' }],
+    { a: now, b: now, c: now }, now);
+  assert(three.text === 'Aarav, Meera and Sam can see this.', 'three names read as English', three.text);
+
+  // A stale ack from a PREVIOUS beam must not carry over into this one. The
+  // teacher clears the acks on start; this asserts the staleness window would
+  // have caught it anyway.
+  assert(reachSummary([{ id: 'a', name: 'Aarav' }], { a: now - BEAM_ACK_STALE_MS - 1 }, now).seeing.length === 0,
+    'an ack older than the staleness window does not count');
+}
+
+section('OFFLINE — the beam relays and keeps nothing');
+{
+  // This box is 1GB with Postgres beside it and the kernel has OOM-killed it
+  // repeatedly. A retained ~900KB frame per room is exactly the shape that
+  // does it, so the server must be a pure relay — the recovery a cache would
+  // have bought is bought by the keyframe instead.
+  const src = await readFile(new URL('./server.ts', import.meta.url), 'utf8');
+  const start = src.indexOf("socket.on('beam_frame'");
+  const end = src.indexOf('LIVE MIRROR relay', start);
+  assert(start > 0 && end > start, 'the beam relay is in server.ts');
+  const beam = src.slice(start, end);
+  assert(!/room\.beam/.test(beam), 'no beam frame is stored on the room',
+    'a retained frame per room is the shape that has OOM-killed this box');
+  assert(/requireTeacher\(room, socket\.id\)/.test(beam), 'only the teacher may put a frame on the wire');
+  assert(/isMember\(room, socket\.id\)/.test(beam), 'and only a member of the room may ask for one or ack one');
+  assert(/checkRateLimit\(socket\.id, true\)/.test(beam), 'frames are rate-limited as loss-tolerant',
+    'a beam must never be allowed to starve a click');
+  const cap = beam.indexOf('MAX_BEAM_FRAME');
+  assert(cap > 0 && beam.indexOf('data.length >') > 0 && beam.indexOf('data.length >') < beam.indexOf('rooms.get'),
+    'the size cap is checked BEFORE anything else touches the frame',
+    'Socket.IO does not drop an oversize message, it kills the connection');
+  const mutating = src.slice(src.indexOf('const MUTATING_EVENTS'), src.indexOf('const MUTATING_EVENTS') + 2000);
+  assert(!/beam_/.test(mutating), 'no beam event schedules a save',
+    'a save per frame would be a save storm on a box that dies of memory');
 }
 
 // LIVE — the protocol, against a running server.

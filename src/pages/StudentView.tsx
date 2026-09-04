@@ -11,6 +11,7 @@ import { socketAuth, isPasscodeError, refusePasscode, apiFetch } from "../lib/pa
 import { ScreenPeer, screenShareSupported, displayCaptureOptions } from "../lib/screenShare";
 import ScreenSharePrompt from "../components/ScreenSharePrompt";
 import TeacherScreenView from "../components/TeacherScreenView";
+import BeamView from "../components/BeamView";
 import { sounds } from "../lib/sounds";
 import { LESSON_IFRAME_SANDBOX_VIEW_ONLY, LESSON_IFRAME_ALLOW } from "../lib/iframeAttrs";
 
@@ -145,6 +146,20 @@ export default function StudentView() {
   const [teacherScreen, setTeacherScreen] = useState<MediaStream | null>(null);
   const [teacherScreenName, setTeacherScreenName] = useState('Your teacher');
   const teacherScreenPeerRef = useRef<ScreenPeer | null>(null);
+  // ── Receiving the BEAM (still frames over this same socket) ──
+  // The route that works when WebRTC does not come up at all — no relay is
+  // configured, so on a school network the tutor's screen never arrives and
+  // nothing says so. A frame arriving IS the beam being on: the server keeps
+  // no state per room (it has been OOM-killed too many times for that), so a
+  // student who joins mid-beam learns about it from the next keyframe rather
+  // than from anything the server remembered.
+  const [beamFrame, setBeamFrame] = useState<{ data: string; at: number } | null>(null);
+  const [beamLabelText, setBeamLabelText] = useState('screen');
+  const [beamTeacherName, setBeamTeacherName] = useState('Your teacher');
+  const lastBeamAckRef = useRef(0);
+  const requestBeamFrame = useCallback(() => {
+    socketRef.current?.emit('beam_request', { roomId });
+  }, [roomId]);
 
   const endShare = useCallback((tell = true) => {
     screenPeerRef.current?.close();
@@ -901,6 +916,33 @@ export default function StudentView() {
         endShareRef.current?.(false);
         setShareAsk(null);
       }
+    });
+
+    // ── Beam: a picture of what the tutor is showing ──
+    newSocket.on("beam_frame", ({ data, seq }: { data: string; seq?: number }) => {
+      if (typeof data !== 'string' || !data.startsWith('data:image/')) return;
+      setBeamFrame({ data, at: Date.now() });
+      // Ack at most once a second. This is the ONLY evidence the tutor has that
+      // anybody is receiving the picture — the old share reported its own
+      // getDisplayMedia call and said "Sharing" to an empty room — so it is
+      // sent from the frame actually arriving here, not from a connection
+      // state, and it carries the sequence so a stale ack cannot be read as a
+      // fresh one.
+      const now = Date.now();
+      if (now - lastBeamAckRef.current >= 1000) {
+        lastBeamAckRef.current = now;
+        newSocket.emit('beam_ack', { roomId, seq: typeof seq === 'number' ? seq : 0 });
+      }
+    });
+    newSocket.on("beam_state", ({ on, label, name }: { on: boolean; label?: string; name?: string }) => {
+      if (name) setBeamTeacherName(name);
+      if (label) setBeamLabelText(label);
+      if (on) {
+        // Do not wait up to five seconds for the next keyframe.
+        newSocket.emit('beam_request', { roomId });
+        return;
+      }
+      setBeamFrame(null);
     });
 
     // Arriving room state IS the join succeeding — stop waiting and stop
@@ -1731,6 +1773,10 @@ export default function StudentView() {
 
       {teacherScreen && (
         <TeacherScreenView stream={teacherScreen} teacherName={teacherScreenName} />
+      )}
+      {beamFrame && (
+        <BeamView src={beamFrame.data} at={beamFrame.at} teacherName={beamTeacherName}
+          label={beamLabelText} onRequestFrame={requestBeamFrame} />
       )}
       {shareAsk && (
         <ScreenSharePrompt teacherName={shareAsk} onShare={beginShare} onDecline={declineShare} />

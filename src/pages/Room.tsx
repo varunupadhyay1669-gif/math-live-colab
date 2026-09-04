@@ -33,6 +33,7 @@ import { localTimezone } from "../lib/tz";
 import { socketAuth, isPasscodeError, refusePasscode } from "../lib/passcode";
 import { getClassByRoomCode } from "../lib/classes";
 import { ScreenPeer, shareFailureMessage, screenShareSupported, displayCaptureOptions, type ShareStatus } from "../lib/screenShare";
+import { BeamRunner, beamLabel, reachSummary, type BeamSource } from "../lib/beam";
 import ScreenShareViewer from "../components/ScreenShareViewer";
 import { parseGoals } from "../lib/studentProfile";
 import LessonSwitcher from "../components/LessonSwitcher";
@@ -1359,6 +1360,19 @@ export default function Room() {
     // ── Control handoff ──
     newSocket.on("mirror_status", ({ studentId, ok, at }: { studentId: string; studentName: string; ok: boolean; at: number }) => {
       setSyncStatus(prev => ({ ...prev, [studentId]: { ok, at: at || Date.now() } }));
+    });
+
+    // ── Beam: who is actually receiving the picture ──
+    // The only honest source for the status pill. A student acks the frame they
+    // painted, at most once a second.
+    newSocket.on("beam_ack", ({ studentId, at }: { studentId: string; studentName: string; seq: number; at: number }) => {
+      if (typeof studentId !== 'string') return;
+      setBeamAckAt(prev => ({ ...prev, [studentId]: at || Date.now() }));
+    });
+    // Somebody joined mid-beam, or their picture went stale. Send a whole frame
+    // rather than waiting up to five seconds for the scheduled keyframe.
+    newSocket.on("beam_request", () => {
+      beamRef.current?.requestKeyframe();
     });
 
     newSocket.on("control_changed", ({ holderName }: { holderName: string | null }) => {
@@ -2693,6 +2707,86 @@ export default function Room() {
     myScreenStreamRef.current?.getTracks().forEach(t => { try { t.stop(); } catch { /* noop */ } });
   }, []);
 
+  // ── BEAM: still pictures of what the tutor is showing, over the lesson socket ──
+  //
+  // "My screen" above is WebRTC with hard-coded STUN and no TURN relay, so on a
+  // school network or Indian mobile data it never connects — and myScreenOn was
+  // set from getDisplayMedia alone, so the toolbar said "Sharing" to a class
+  // that was receiving nothing. This route cannot fail that way: it rides the
+  // Socket.IO connection that is already delivering the lesson, and the status
+  // pill below is built from acks that came BACK from students, so it reports
+  // what is happening rather than what was attempted.
+  const beamRef = useRef<BeamRunner | null>(null);
+  const [beamSource, setBeamSource] = useState<BeamSource | null>(null);
+  const [beamAckAt, setBeamAckAt] = useState<Record<string, number>>({});
+  // Ticks once a second while beaming, so "Aarav can see this" becomes "Not
+  // reaching Aarav" on its own when he drops off. Without it the pill would
+  // only change when some other state happened to re-render the page — which
+  // is precisely the stale-reassurance failure this feature exists to end.
+  const [beamClock, setBeamClock] = useState(0);
+  useEffect(() => {
+    if (!beamSource) return;
+    const id = setInterval(() => setBeamClock(c => c + 1), 1000);
+    return () => clearInterval(id);
+  }, [beamSource]);
+
+  const stopBeam = useCallback((tell = true) => {
+    beamRef.current?.stop();
+    beamRef.current = null;
+    setBeamSource(null);
+    setBeamAckAt({});
+    if (tell && socket) socket.emit('beam_state', { roomId, on: false, label: '' });
+  }, [socket, roomId]);
+
+  const startBeam = useCallback(async (source: BeamSource) => {
+    if (!socket) return;
+    // <Whiteboard> renders null when it is not the visible surface, so
+    // getCanvas() returns null and a board beam would send nothing at all —
+    // silently, which is the one thing this must never do.
+    if (source === 'board' && !whiteboardModeRef.current) toggleWhiteboardModeRef.current?.();
+    beamRef.current?.stop();
+    const runner = new BeamRunner({
+      source,
+      getBoardCanvas: () => whiteboardRef.current?.getCanvas() ?? null,
+      send: (frame) => socket.emit('beam_frame', { roomId, ...frame }),
+      onBlank: () => showNotif('That capture came back blank — stop and pick the Window, not the Chrome Tab.'),
+      onEnded: () => stopBeamRef.current?.(true),
+    });
+    try {
+      await runner.start();
+    } catch (e) {
+      // A closed picker is a decision, not a fault; anything else is worth a word.
+      if ((e as { name?: string })?.name !== 'NotAllowedError') showNotif('That could not be captured.');
+      return;
+    }
+    beamRef.current = runner;
+    setBeamSource(source);
+    setBeamAckAt({});
+    socket.emit('beam_state', { roomId, on: true, label: beamLabel(source) });
+    showNotif(`Beaming ${beamLabel(source).toLowerCase()} — they can see it but not touch it.`);
+  }, [socket, roomId]);
+
+  // Refs so the runner's callbacks can reach the latest versions without
+  // rebuilding the runner (and restarting the capture) on every render.
+  const stopBeamRef = useRef(stopBeam);
+  useEffect(() => { stopBeamRef.current = stopBeam; }, [stopBeam]);
+  const toggleWhiteboardModeRef = useRef<(() => void) | null>(null);
+
+  // Leaving the page must release the capture — the browser keeps the "sharing"
+  // indicator up otherwise, with nobody on the other end.
+  useEffect(() => () => { beamRef.current?.stop(); beamRef.current = null; }, []);
+
+  const beamReach = useMemo(
+    () => reachSummary(
+      users.filter(u => u.role === 'student').map(u => ({ id: u.id, name: u.name })),
+      beamAckAt,
+      Date.now(),
+    ),
+    // beamClock is the dependency that matters: nothing else changes when a
+    // student goes quiet.
+    [users, beamAckAt, beamClock],
+  );
+
   const stopWatchingScreen = () => {
     const watching = screenShareRef.current;
     screenPeerRef.current?.close();
@@ -2753,6 +2847,10 @@ export default function Room() {
       socket.emit('whiteboard_mode_toggle', { roomId, active: newMode });
     }
   };
+
+  // Handed to the beam so that starting a board beam can bring the board to the
+  // front first — a hidden <Whiteboard> renders null and has no canvas to send.
+  useEffect(() => { toggleWhiteboardModeRef.current = toggleWhiteboardMode; });
 
   const startWithWhiteboard = () => {
     if (!whiteboardMode) toggleWhiteboardMode();
@@ -4188,6 +4286,10 @@ export default function Room() {
               onToggleFollowStudentClicks={() => setFollowStudentClicks(v => !v)}
               myScreenOn={myScreenOn}
               onToggleMyScreen={() => (myScreenOn ? stopMyScreen(true) : void startMyScreen())}
+              beamOn={!!beamSource}
+              beamSource={beamSource}
+              onStartBeam={(s) => { void startBeam(s); }}
+              onStopBeam={() => stopBeam(true)}
               whiteboardMode={whiteboardMode}
               explanationActive={showTempContent && !!tempContent}
               explanationName={tempContent?.name ?? null}
@@ -4846,6 +4948,46 @@ export default function Room() {
                 )}
               </div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* ═══ BEAM STATUS ═══
+          The point of the whole feature, and the reason it is on screen rather
+          than in a menu. The old share reported the tutor's own getDisplayMedia
+          call, so "Sharing" was true whether one student was connected or none,
+          and a tutor could talk over a PDF for ten minutes to a child who was
+          looking at something else. This says who is receiving it, BY NAME,
+          from acks the students sent back — and says so just as plainly when
+          the answer is nobody. Right-hand side: the annotation toolbar owns the
+          top-left and the transcription pill the bottom-left. */}
+      {beamSource && (
+        <div className="fixed bottom-3 right-3 z-40 select-none" data-testid="beam-status">
+          <div
+            className="px-3 py-2 rounded-lg text-xs font-medium flex items-center gap-2.5"
+            style={{
+              background: beamReach.seeing.length > 0 ? 'var(--bg-card)' : 'rgba(180, 83, 9, 0.96)',
+              color: beamReach.seeing.length > 0 ? 'var(--text-primary)' : '#fff',
+              border: `1px solid ${beamReach.seeing.length > 0 ? 'var(--border-subtle)' : 'transparent'}`,
+              boxShadow: 'var(--shadow-lg)',
+              maxWidth: '48vw',
+            }}
+          >
+            <span className="ml-badge-dot" style={{ background: beamReach.seeing.length > 0 ? 'var(--accent-emerald)' : '#fff' }} />
+            <span>
+              Beaming {beamLabel(beamSource).toLowerCase()}. <span data-testid="beam-reach">{beamReach.text}</span>
+            </span>
+            <button
+              data-testid="beam-stop"
+              onClick={() => stopBeam(true)}
+              className="px-2.5 py-1 text-xs rounded-lg font-semibold shrink-0"
+              style={{
+                background: beamReach.seeing.length > 0 ? 'var(--bg-surface)' : 'rgba(255,255,255,0.2)',
+                color: 'inherit',
+              }}
+            >
+              Stop
+            </button>
           </div>
         </div>
       )}

@@ -2,6 +2,7 @@ import React, { useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Socket } from 'socket.io-client';
 import { TIMER_PRESETS, parseDuration, formatDuration, presetLabel } from '../lib/timerOptions';
+import type { BeamSource } from '../lib/beam';
 
 interface TeacherControlsProps {
   socket: Socket | null;
@@ -75,6 +76,11 @@ interface TeacherControlsProps {
   // Sharing the tutor's own screen with the class
   myScreenOn: boolean;
   onToggleMyScreen: () => void;
+  // Beam — still pictures over the lesson socket, for when WebRTC will not come up
+  beamOn: boolean;
+  beamSource: BeamSource | null;
+  onStartBeam: (source: BeamSource) => void;
+  onStopBeam: () => void;
 }
 
 const PEN_COLORS = ['#5B5FE6', '#0F1117', '#10B981', '#0EA5E9', '#EF4444', '#F59E0B'];
@@ -100,6 +106,7 @@ export default function TeacherControls({
   shapeTool, onSetShapeTool,
   followStudentClicks, onToggleFollowStudentClicks,
   myScreenOn, onToggleMyScreen,
+  beamOn, beamSource, onStartBeam, onStopBeam,
 }: TeacherControlsProps) {
   const [showTimerMenu, setShowTimerMenu] = useState(false);
   const [customTime, setCustomTime] = useState('');
@@ -112,8 +119,11 @@ export default function TeacherControls({
   // block for position:fixed children, confining the click-away backdrop.
   const timerBtnRef = useRef<HTMLButtonElement>(null);
   const reactionBtnRef = useRef<HTMLButtonElement>(null);
+  const beamBtnRef = useRef<HTMLButtonElement>(null);
   const [timerMenuPos, setTimerMenuPos] = useState<{ left: number; top: number } | null>(null);
   const [reactionMenuPos, setReactionMenuPos] = useState<{ left: number; top: number } | null>(null);
+  const [showBeamMenu, setShowBeamMenu] = useState(false);
+  const [beamMenuPos, setBeamMenuPos] = useState<{ left: number; top: number } | null>(null);
   const anchorMenu = (btn: HTMLButtonElement | null, menuWidth: number) => {
     if (!btn) return null;
     const r = btn.getBoundingClientRect();
@@ -474,6 +484,63 @@ export default function TeacherControls({
           </svg>
           <span className="tb-label-text">{myScreenOn ? 'Sharing' : 'My screen'}</span>
         </button>
+
+        {/* Beam — the emergency route.
+            "My screen" above is WebRTC, and there is no TURN relay configured,
+            so on a school network or Indian mobile data it never connects and
+            says "Sharing" anyway. This sends still pictures over the socket
+            that is already carrying the lesson: if THAT is down the student has
+            no lesson either, so there is no state where the beam is broken and
+            the class is fine. It is view-only and says so on their screen. */}
+        <div className="relative" style={{ display: 'inline-flex' }}>
+          <button
+            ref={beamBtnRef}
+            data-testid="beam-button"
+            onClick={() => {
+              if (beamOn) { onStopBeam(); setShowBeamMenu(false); return; }
+              if (!showBeamMenu) setBeamMenuPos(anchorMenu(beamBtnRef.current, 268));
+              setShowBeamMenu(!showBeamMenu);
+            }}
+            className={`tb-btn-screen${beamOn ? ' is-on' : ''}`}
+            data-tip={beamOn
+              ? `Beaming ${beamSource === 'board' ? 'the whiteboard' : 'a window'} — click to stop`
+              : 'Send the class a picture of what you are showing, over the lesson connection (works when screen sharing will not connect)'}
+          >
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <rect x="3" y="4" width="18" height="14" rx="2" /><path d="M8 21h8" /><path d="m9 9 5 2-5 2z" />
+            </svg>
+            <span className="tb-label-text">{beamOn ? 'Beaming' : 'Beam'}</span>
+          </button>
+          {showBeamMenu && beamMenuPos && createPortal(
+            <>
+              <div className="fixed inset-0 z-40" onClick={() => setShowBeamMenu(false)} />
+              <div className="animate-slide-down dropdown-menu"
+                style={{ position: 'fixed', left: beamMenuPos.left, top: beamMenuPos.top, zIndex: 50, width: 268 }}>
+                <button
+                  data-testid="beam-board"
+                  onClick={() => { onStartBeam('board'); setShowBeamMenu(false); }}
+                  className="dropdown-item">
+                  The whiteboard
+                </button>
+                <button
+                  data-testid="beam-screen"
+                  onClick={() => { onStartBeam('screen'); setShowBeamMenu(false); }}
+                  className="dropdown-item">
+                  A window on my screen
+                </button>
+                {/* Said here rather than after it fails. Chrome's tab capture
+                    of a PDF comes back blank — the plugin surface is not in the
+                    captured layer — and the tutor cannot tell, because their
+                    own screen looks right. */}
+                <div className="px-3 py-2 text-xs" style={{ color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+                  Pick the <strong>Window</strong> tab in the box that opens, not
+                  Chrome Tab — a tab capture of a PDF comes back blank.
+                </div>
+              </div>
+            </>,
+            document.body
+          )}
+        </div>
 
         {/* What only the tutor knows: the lesson's aim, and last week's homework. */}
         <button
