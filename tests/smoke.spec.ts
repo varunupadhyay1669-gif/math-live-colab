@@ -218,6 +218,59 @@ test.describe('the mirror', () => {
     await learner.close();
   });
 
+  test('the lesson keeps mirroring after a trip to the whiteboard', async ({ browser }) => {
+    // THE 4 Sep 2026 FREEZE. "The student cannot click on the button and go to
+    // the next concept." What the screenshots actually showed was the teacher on
+    // Sub-Concept 2 and the student still on the page before it.
+    //
+    // The learner's lesson iframe stays MOUNTED while the whiteboard is over it
+    // — hidden, not unmounted, so returning to it is instant. Returning fires no
+    // load event. Readiness was cleared on every surface change and could only
+    // be set true by a load event or by a rescue that read contentDocument, and
+    // that rescue died the moment the frame was given an opaque origin: reading
+    // contentDocument cross-origin returns null rather than throwing, so it
+    // silently answered "not ready" for ever. Every mirror frame then went to a
+    // queue nobody flushed.
+    //
+    // The student's clicks still travelled — which is why it reads as a dead
+    // button rather than a frozen screen: they carried a path computed on a page
+    // the teacher had left.
+    const code = room('wb');
+    const teacher = await (await browser.newContext()).newPage();
+    const learner = await (await browser.newContext()).newPage();
+
+    await teacher.goto(`${BASE}/room/${code}?name=Teacher`);
+    await runLesson(teacher, `<!doctype html><html><body>
+      <h1 id="t">Concepts</h1>
+      <p id="step">1</p>
+      <button id="go" onclick="document.getElementById('step').textContent='2'">next</button>
+    </body></html>`);
+    const src = await lessonFrame(teacher, 'Concepts');
+
+    await learner.goto(`${BASE}/live/${code}?name=Learner`);
+    const fol = await lessonFrame(learner, 'Concepts');
+    expect(await fol.locator('#step').textContent()).toBe('1');
+
+    // Over to the whiteboard and back — the shared board, so the learner goes
+    // with him. This is the ordinary thing a tutor does mid-explanation.
+    // One button, two tooltips — it renames itself once the board is open.
+    await teacher.locator('[data-tip="Open the shared whiteboard"]').first().click();
+    await teacher.locator('[data-tip="Back to simulation"]').first().click();
+    await expect(teacher.locator('[data-tip="Open the shared whiteboard"]').first())
+      .toBeVisible({ timeout: 20_000 });
+
+    // Now teach the next concept.
+    await src.locator('#go').click();
+
+    await expect.poll(async () => fol.locator('#step').textContent(), {
+      timeout: 20_000,
+      message: 'the learner stopped receiving the lesson after the whiteboard — this is the freeze',
+    }).toBe('2');
+
+    await teacher.close();
+    await learner.close();
+  });
+
   test('a hostile lesson does not run on the learner', async ({ browser }) => {
     const code = room('b');
     const teacher = await (await browser.newContext()).newPage();

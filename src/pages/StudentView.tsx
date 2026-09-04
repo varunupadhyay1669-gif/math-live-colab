@@ -440,6 +440,17 @@ export default function StudentView() {
   // ── Iframe readiness ──
   const iframeReadyRef = useRef(false);
   const pendingMessagesRef = useRef<any[]>([]);
+  // Which iframe ELEMENT has finished loading which src.
+  //
+  // A boolean cannot answer this. The lesson frame stays MOUNTED while the
+  // whiteboard or an explanation sits on top of it (hidden, not unmounted), so
+  // coming back to it fires no load event — and readiness was being cleared on
+  // every surface change. Keyed by element AND src because React reuses the
+  // same <iframe> when the lesson changes: same element, new document, and it
+  // is not ready again until that document loads.
+  const loadedFramesRef = useRef(new WeakMap<HTMLIFrameElement, string>());
+  const frameIsLoaded = useCallback((el: HTMLIFrameElement | null) =>
+    !!el && loadedFramesRef.current.get(el) === el.getAttribute('src'), []);
   const syncEpochRef = useRef(0);
   const lastInboundSeqRef = useRef(0);
   const lastStudentMissAtRef = useRef(0);
@@ -1332,7 +1343,18 @@ export default function StudentView() {
     // question was on screen at the time, while the rest of the class moved on.
     let ready = iframeReadyRef.current;
     if (!ready && win) {
-      try { ready = iframeRef.current?.contentDocument?.readyState === 'complete'; } catch { ready = false; }
+      // This rescue used to read iframeRef.current.contentDocument.readyState,
+      // which worked only while the learner's frame was same-origin. Since the
+      // frame was given an opaque origin on 2 Sep 2026, contentDocument is null
+      // — and reading it does not throw, so the catch never fired either. The
+      // rescue silently became dead code, and with it the only way readiness
+      // could ever be repaired: every mirror frame went to the queue below and
+      // the student sat frozen while the class moved on. That is the bug this
+      // whole block was written for, reintroduced by a sandbox change.
+      //
+      // So ask something that crosses an origin boundary: did THIS element
+      // finish loading the src it is currently pointing at?
+      ready = frameIsLoaded(iframeRef.current);
       if (ready) {
         iframeReadyRef.current = true;
         const stalled = pendingMessagesRef.current;
@@ -1348,7 +1370,7 @@ export default function StudentView() {
         pendingMessagesRef.current.push(msg);
       }
     }
-  }, []);
+  }, [frameIsLoaded]);
 
   // ── Iframe onLoad: flush pending messages ──
   const handleIframeLoad = useCallback(() => {
@@ -1399,16 +1421,29 @@ export default function StudentView() {
   const tempFrameRef = useRef<HTMLIFrameElement | null>(null);
 
   const handleSurfaceLoad = useCallback((el: HTMLIFrameElement | null, isActive: boolean) => {
+    if (el) loadedFramesRef.current.set(el, el.getAttribute('src') || '');
     if (!isActive) return;   // a hidden surface loading is not our channel
     iframeRef.current = el;
     handleIframeLoad();
   }, [handleIframeLoad]);
 
   // Coming back to a surface that never went away fires no load event, so the
-  // pointer is set on the switch itself as well.
+  // pointer is set on the switch itself as well — and so is READINESS, in the
+  // same place, because the two must never disagree. Readiness used to be
+  // cleared unconditionally by its own effect further down; with no load event
+  // to set it true again, one trip to the whiteboard froze the student's lesson
+  // for the rest of the class.
   useEffect(() => {
-    iframeRef.current = showTempContent ? tempFrameRef.current : lessonFrameRef.current;
-  }, [showTempContent, whiteboardMode, tempUrl, lessonUrl]);
+    const el = showTempContent ? tempFrameRef.current : lessonFrameRef.current;
+    iframeRef.current = el;
+    const ready = !whiteboardMode && frameIsLoaded(el);
+    iframeReadyRef.current = ready;
+    if (ready && el?.contentWindow) {
+      const stalled = pendingMessagesRef.current;
+      pendingMessagesRef.current = [];
+      for (const m of stalled) el.contentWindow.postMessage(m, '*');
+    }
+  }, [showTempContent, whiteboardMode, tempUrl, lessonUrl, frameIsLoaded]);
 
   // Re-push zoom when level changes
   useEffect(() => {
@@ -1457,6 +1492,17 @@ export default function StudentView() {
       // Loss-tolerant by nature — a missed ack just means one stale reading.
       if (type === 'MIRROR_ACK') { socket.emit('mirror_ack', { roomId, h: e.data.h, ok: !!e.data.ok }); return; }
       if (type === 'MIRROR_FOLLOWER_READY') {
+        // Belt and braces, and the only readiness signal that needs nothing
+        // from the DOM: this message came OUT of that document, so it is
+        // running. Whatever we believed about load events, believe this.
+        const el = iframeRef.current;
+        if (el && e.source === el.contentWindow) {
+          loadedFramesRef.current.set(el, el.getAttribute('src') || '');
+          iframeReadyRef.current = true;
+          const stalled = pendingMessagesRef.current;
+          pendingMessagesRef.current = [];
+          for (const m of stalled) el.contentWindow?.postMessage(m, '*');
+        }
         socket.emit('mirror_request', { roomId });
         // Tell the follower its permissions IMMEDIATELY on announce. The mirror
         // now boots scroll-LOCKED and waits for this; previously the lock only
@@ -1577,10 +1623,12 @@ export default function StudentView() {
   // delivered. The server broadcasts sync_full_state on EVERY join, which is
   // exactly what recomputes lessonUrl: one student joining went and froze
   // another student, mid-lesson, with no error anywhere.
-  const mountedSurface = whiteboardMode ? null : showTempContent ? tempUrl : lessonUrl;   // the ACTIVE document
-  useEffect(() => {
-    iframeReadyRef.current = false;
-  }, [mountedSurface]);
+  // The effect that used to live here set iframeReadyRef.current = false on
+  // every change of the active document. That was right when the only way back
+  // to true was a load event — and wrong the moment a surface could be returned
+  // to without reloading. Readiness now moves with the pointer, above, and is
+  // derived from whether the element actually finished loading its current src
+  // rather than from having seen a load event at some point.
 
 
   // ── Push interaction mode to iframe ──
