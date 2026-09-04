@@ -27,6 +27,7 @@ import { listMigrationFiles } from './src/server/migrate.ts';
 import { PRODUCT, subjectFor } from './src/lib/product.ts';
 import { can, permissionsOf } from './src/server/authz.ts';
 import { LESSON_HISTORY_KEEP, LESSON_TTL_HOURS } from './src/server/records.ts';
+import { cutoffFrom } from './src/server/classData.ts';
 import {
   frameBytes, freshBudget, accountFrame, shrinkAfterOversize, fitScratch, paintScratch,
   samplePoints, looksBlank, reachSummary,
@@ -739,6 +740,61 @@ section('OFFLINE — a class keeps its last lesson, and nothing else for long');
   assert(tick.indexOf('sweepExpiredLessons') < tick.indexOf('istHour() < SEND_HOUR_IST'),
     'the sweep runs before the mail hour gate',
     'behind the gate it would run once a day at 9am, or on a day the process restarted after that, never');
+}
+
+section('OFFLINE — clearing a class does not clear the student');
+{
+  // 4 Sep 2026: "delete all the data of the classes. Don't delete the name of
+  // the student, just the data of the classes. And also give an option in the
+  // admin section where I can directly click on clear data of the classes and
+  // select date."
+  //
+  // The distinction in that sentence is the whole design, and it is one table
+  // away from being got wrong: `classes` holds the student's name, grade, goals
+  // and room code. Losing it means re-adding every student by hand and
+  // reissuing every learner link.
+  const cd = readFileSync('src/server/classData.ts', 'utf8');
+
+  assert(!/classes/.test(cd.replace(/\/\/.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '')),
+    'no statement in the clear path can reach the students table',
+    'the roster is who he teaches; the boards are only what a class produced');
+  for (const t of ['rooms', 'board_images', 'teaching_sessions']) {
+    assert(cd.includes(`FROM ${t}`), `${t} is cleared`);
+  }
+
+  // A date that silently becomes Invalid Date compares false against every row,
+  // so the delete would quietly remove NOTHING and report success.
+  assert(/Number\.isNaN\(d\.getTime\(\)\)/.test(cd),
+    'an unreadable date is refused, not treated as "everything"');
+  assert(cutoffFrom('') === null && cutoffFrom(undefined) === null,
+    'no date means everything');
+  assert(cutoffFrom('2026-09-01').toISOString().startsWith('2026-09-01'),
+    'a date is read as given');
+  let threw = false;
+  try { cutoffFrom('not a date'); } catch { threw = true; }
+  assert(threw, 'nonsense is rejected');
+
+  // The count shown in the confirmation must be the count that goes.
+  assert(/updated_at < \$1/.test(cd) && /created_at < \$1/.test(cd) && /started_at < \$1/.test(cd),
+    'each table is filtered by its own timestamp');
+
+  // A picture is content-addressed and shared between boards, so age alone
+  // cannot decide it: an old picture may sit on a board that is not going.
+  assert(/NOT EXISTS/.test(cd) && /position\(bi\.id in r\.data::text\)/.test(cd),
+    'pictures are collected by reference, not by age',
+    'deleting an old picture still used by a surviving board leaves a hole in it');
+  assert(/pg_column_size\(data\) > 8388608/.test(cd),
+    'the reference scan is skipped when a board is still large',
+    'casting a big jsonb to text has taken this database down twice; skipping keeps a picture that could have gone, which is the safe direction');
+
+  assert(/confirm !== true/.test(cd), 'the delete needs an explicit confirmation');
+  assert(/'users\.manage'/.test(cd),
+    'it takes the same permission as suspending an account',
+    'erasing every board is not a lesser act than disabling one login');
+  assert(/action: 'class_data\.clear'/.test(cd), 'and it is written to the audit log');
+  assert(cd.indexOf("client.query('COMMIT')") < cd.indexOf("action: 'class_data.clear'"),
+    'the audit line is written after the transaction commits',
+    'a rolled-back delete that still logged would be worse than no log');
 }
 
 section('OFFLINE — production does not compile TypeScript while it teaches');

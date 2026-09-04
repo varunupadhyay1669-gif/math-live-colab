@@ -15,6 +15,7 @@ import { BOARD_IMAGE_SCHEMA_SQL, mountBoardImageRoutes, externaliseBoardImages }
 import { BILLING_SCHEMA_SQL, mountBillingRoutes, accessForTeacher } from './src/server/billing';
 import { mountOwnerDashRoutes, type LiveRoom } from './src/server/ownerDash';
 import { mountPeopleRoutes } from './src/server/people';
+import { mountClassDataRoutes } from './src/server/classData';
 import { MAIL_LOG_SCHEMA_SQL, startDailyJobs } from './src/server/scheduler';
 import { rateLimit, makeLimiter, handshakeIp } from './src/server/rateLimit';
 import { runMigrations } from './src/server/migrate';
@@ -4804,6 +4805,7 @@ Build a widget that teaches: ${safePrompt}`;
     mountBoardImageRoutes(app, appPool, { secret: sessionSecret });
     mountBillingRoutes(app, appPool, { secret: sessionSecret });
     mountPeopleRoutes(app, appPool, { secret: sessionSecret });
+    mountClassDataRoutes(app, appPool, { secret: sessionSecret });
     mountOwnerDashRoutes(app, appPool, {
       secret: sessionSecret,
       // Names only, and only for rooms that are actually occupied. The admin

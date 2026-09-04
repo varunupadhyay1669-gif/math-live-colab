@@ -12,6 +12,7 @@ import { lazy, Suspense } from 'react';
 import { getAdminCapabilities } from '../lib/admin';
 const PeoplePanel = lazy(() => import('./admin/PeoplePanel'));
 const AuditPanel = lazy(() => import('./admin/AuditPanel'));
+const ClassDataPanel = lazy(() => import('./admin/ClassDataPanel'));
 
 // MathsLive Admin — who is using the platform.
 //
@@ -23,7 +24,7 @@ const AuditPanel = lazy(() => import('./admin/AuditPanel'));
 // control is in Postgres (migration 004): the RPCs behind this refuse anyone
 // not listed in platform_admins, so calling them by hand gets you nothing.
 
-type Tab = 'money' | 'tutors' | 'students' | 'payments' | 'live' | 'people' | 'audit';
+type Tab = 'money' | 'tutors' | 'students' | 'payments' | 'live' | 'people' | 'audit' | 'data';
 
 export default function AdminView() {
   const auth = useAuth();
@@ -161,6 +162,12 @@ export default function AdminView() {
           <AuditPanel />
         </Suspense>
       )}
+
+      {tab === 'data' && (
+        <Suspense fallback={<p className="ml-admin-muted">Loading…</p>}>
+          <ClassDataPanel can={can} />
+        </Suspense>
+      )}
       </Shell>
     );
   }
@@ -259,6 +266,7 @@ export default function AdminView() {
         </button>
         <button className={tab === 'people' ? 'is-on' : ''} onClick={() => setTab('people')}>People</button>
         <button className={tab === 'audit' ? 'is-on' : ''} onClick={() => setTab('audit')}>Audit</button>
+        <button className={tab === 'data' ? 'is-on' : ''} onClick={() => setTab('data')}>Class data</button>
         <div style={{ flex: 1 }} />
         <button className="ml-admin-btn" onClick={() => { void load(); void loadBusiness(); void loadClaims(); void loadLive(); }} disabled={busy}>
           {busy ? 'Loading…' : 'Refresh'}
