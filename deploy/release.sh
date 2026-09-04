@@ -28,7 +28,7 @@ KEEP=${KEEP_RELEASES:-5}
 # installed by npm on the box, and it changes only when package.json does —
 # which is why package.json and its lock file ARE included, so a rollback can
 # tell you it needs an `npm ci`.
-PARTS=(server.ts src dist package.json package-lock.json index.html vite.config.ts tsconfig.json .typecheck-ok)
+PARTS=(server.ts src dist dist-server package.json package-lock.json index.html vite.config.ts tsconfig.json .typecheck-ok)
 
 say() { printf '\n\033[1;36m%s\033[0m\n' "$*"; }
 die() { printf '\033[1;31m%s\033[0m\n' "$*" >&2; exit 1; }

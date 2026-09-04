@@ -53,11 +53,18 @@ const LOCK_ID = 8675309;
  * is worse than no migration runner at all.
  */
 function migrationsDir(): string {
+  // Two layouts, both real. Running from source (tsx, and the test suite) this
+  // file sits beside its own migrations folder. Running the PRE-BUILT server
+  // it does not: production bundles to dist-server/server.mjs, and the .sql
+  // files are data that no bundler carries. So the sibling is tried first and
+  // the repo path second — and the check is existsSync rather than a try/catch,
+  // because resolving the wrong directory does not throw, it silently finds no
+  // migrations and reports "nothing to do".
   try {
-    return path.join(path.dirname(fileURLToPath(import.meta.url)), 'migrations');
-  } catch {
-    return path.join(process.cwd(), 'src', 'server', 'migrations');
-  }
+    const beside = path.join(path.dirname(fileURLToPath(import.meta.url)), 'migrations');
+    if (fs.existsSync(beside)) return beside;
+  } catch { /* no import.meta in this context — fall through */ }
+  return path.join(process.cwd(), 'src', 'server', 'migrations');
 }
 
 export interface MigrationResult {

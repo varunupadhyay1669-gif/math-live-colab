@@ -9,7 +9,9 @@
   "scripts": {
     "dev": "tsx server.ts",
     "build": "vite build",
-    "start": "NODE_ENV=production node --max-old-space-size=${NODE_HEAP_MB:-256} ./node_modules/tsx/dist/cli.mjs server.ts",
+    "build:server": "esbuild server.ts --bundle --platform=node --format=esm --packages=external --target=node20 --outfile=dist-server/server.mjs",
+    "start": "NODE_ENV=production node --max-old-space-size=${NODE_HEAP_MB:-256} dist-server/server.mjs",
+    "start:tsx": "NODE_ENV=production node --max-old-space-size=${NODE_HEAP_MB:-256} ./node_modules/tsx/dist/cli.mjs server.ts",
     "preview": "vite preview",
     "clean": "rm -rf dist",
     "lint": "tsc --noEmit",

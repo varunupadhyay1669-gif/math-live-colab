@@ -32,7 +32,7 @@ const OUT = process.env.PACK_OUT || join(tmpdir(), 'mathslive-app.tgz');
 // rolled-back release carries the proof that IT was checked and not the proof
 // belonging to the release that replaced it.
 const PARTS = [
-  'server.ts', 'src', 'dist', 'package.json', 'package-lock.json',
+  'server.ts', 'src', 'dist', 'dist-server', 'package.json', 'package-lock.json',
   'index.html', 'vite.config.ts', 'tsconfig.json', 'deploy', '.typecheck-ok',
 ];
 
@@ -69,7 +69,7 @@ const dirty = git(['status', '--porcelain'], '') !== '';
 const id = dirty ? `${commit}-dirty` : commit;
 
 run('1/4  Checking it (types, mirror, packing)', 'npm test');
-run('2/4  Building the client', 'npm run build');
+run('2/4  Building the client and the server', 'npm run build && npm run build:server');
 
 say('3/4  Marking it as checked');
 writeFileSync(

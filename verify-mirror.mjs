@@ -741,6 +741,45 @@ section('OFFLINE — a class keeps its last lesson, and nothing else for long');
     'behind the gate it would run once a day at 9am, or on a day the process restarted after that, never');
 }
 
+section('OFFLINE — production does not compile TypeScript while it teaches');
+{
+  // 4 Sep 2026, 03:10 UTC: the app died 75 seconds after a deploy with no rooms
+  // open, and the V8 stack said where —
+  //
+  //   Runtime_CompileLazy -> Compiler::Compile -> Scope::AllocateScopeInfos
+  //
+  // It ran out of memory COMPILING JAVASCRIPT. Production ran through tsx,
+  // which transpiles every .ts file at runtime inside the same heap the lessons
+  // live in, so the compiler and its scope info competed with the class for a
+  // 448MB ceiling on a 911MB box that also runs Postgres. Measured on one
+  // machine with 61 rooms loaded: tsx 135MB across two processes, the prebuilt
+  // bundle 61MB in one.
+  const pkg = JSON.parse(readFileSync('package.json', 'utf8'));
+  assert(!/tsx/.test(pkg.scripts.start),
+    'the start script does not run TypeScript through tsx',
+    'the transpiler is a bigger process than the app, and it allocates while a class is running');
+  assert(/dist-server\/server\.mjs/.test(pkg.scripts.start),
+    'production runs a bundle built ahead of time');
+  assert(typeof pkg.scripts['build:server'] === 'string',
+    'and there is a step that builds it');
+
+  // A bundle that is never shipped is worse than no bundle: the box would run
+  // whatever stale copy it already had.
+  const pack = readFileSync('tools/pack_release.mjs', 'utf8');
+  assert(/'dist-server'/.test(pack), 'the release carries the built server');
+  assert(/build:server/.test(pack), 'and rebuilds it on every pack');
+  const rel = readFileSync('deploy/release.sh', 'utf8');
+  assert(/PARTS=\(.*dist-server.*\)/.test(rel),
+    'a rollback restores the server build belonging to the release it restores');
+
+  // .sql files are data; no bundler carries them. Resolving the wrong directory
+  // does not throw — it silently finds nothing and reports "nothing to do".
+  const mig = readFileSync('src/server/migrate.ts', 'utf8');
+  assert(/existsSync\(beside\)/.test(mig),
+    'the migration runner checks the folder is really there before trusting it',
+    'bundled, this file no longer sits beside its own migrations');
+}
+
 section('OFFLINE — a slow student cannot fill the server');
 {
   // The crash that ended a live lesson on 4 Sep 2026: Node hit its heap limit,
