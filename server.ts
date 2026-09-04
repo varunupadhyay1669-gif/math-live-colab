@@ -1275,8 +1275,13 @@ async function startServer() {
     room.liveSnapshotHtml = raw.liveSnapshotHtml || null;
     room.whiteboard = raw.whiteboard
       ? {
-          objects: raw.whiteboard.objects || [],
-          strokes: raw.whiteboard.strokes || [],
+          // Trimmed HERE as well as on the way in, because a board that grew
+          // before the cap existed is still out there and is otherwise
+          // permanently unopenable: every join reloads it, and every join
+          // killed the process. Newest kept — the recent end of a board is the
+          // part a lesson is actually using.
+          objects: capBoard(raw.whiteboard.objects, MAX_BOARD_OBJECTS, raw.roomId || 'unknown', 'pictures'),
+          strokes: capBoard(raw.whiteboard.strokes, 5000, raw.roomId || 'unknown', 'strokes'),
           shapes: raw.whiteboard.shapes || [],
           view: raw.whiteboard.view ?? null,
           // gridMode and instruments were added later — restore them too
@@ -1420,7 +1425,31 @@ async function startServer() {
   // approached it took the whole service down, which is how this ended up
   // suspended. Twelve is still more lessons than a room needs and caps the
   // worst case at ~24MB. Raise MAX_FILES_PER_ROOM on a bigger instance.
+  /** Keep the newest `max` of a persisted board array, and say so if it trimmed. */
+  function capBoard(list: any, max: number, roomId: string, what: string): any[] {
+    if (!Array.isArray(list)) return [];
+    if (list.length <= max) return list;
+    console.warn(`✂️  room ${roomId}: ${list.length} ${what} on the board, keeping the newest ${max}`);
+    return list.slice(-max);
+  }
+
   const MAX_FILES_PER_ROOM = Number(process.env.MAX_FILES_PER_ROOM) || 12;
+
+  // How many objects one whiteboard may hold. The strokes beside them have been
+  // capped at 5000 since they were written; objects never were, and that gap is
+  // what killed the server repeatedly on 4 Sep 2026.
+  //
+  // Room anna-r had accumulated 441,195 of them — a 130MB whiteboard that
+  // Postgres compressed down to 2MB, so nothing looked wrong from the outside
+  // until somebody opened it. Parsing that back into JavaScript took the heap
+  // from nothing to 585MB in twenty-three seconds against a limit of 448, every
+  // single time anyone joined. The eviction sweep logged "shedding every idle
+  // room: 585MB of 300MB (195%), 1 rooms in memory" and could not help, because
+  // the one room WAS the problem.
+  //
+  // 2000 is far past any real lesson — a genuine board holds a few dozen
+  // pictures — and far below what a runaway can produce.
+  const MAX_BOARD_OBJECTS = 2000;
 
   function sanitizeString(str: unknown, maxLen: number): string {
     if (typeof str !== 'string') return '';
@@ -2843,6 +2872,13 @@ Build a widget that teaches: ${safePrompt}`;
         return;
       }
       room.whiteboard.objects.push(object);
+      // Oldest first, exactly as the strokes above do it. Dropping the oldest
+      // picture off a board nobody has cleared in months is a smaller loss than
+      // the board becoming unopenable — which is the state this cap was written
+      // in response to.
+      if (room.whiteboard.objects.length > MAX_BOARD_OBJECTS) {
+        room.whiteboard.objects = room.whiteboard.objects.slice(-MAX_BOARD_OBJECTS);
+      }
       io.to(roomId).emit('whiteboard_add_image', { object });
     });
 

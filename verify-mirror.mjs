@@ -742,6 +742,48 @@ section('OFFLINE — a class keeps its last lesson, and nothing else for long');
     'behind the gate it would run once a day at 9am, or on a day the process restarted after that, never');
 }
 
+section('OFFLINE — one board cannot grow until it kills the server');
+{
+  // The actual cause of the 4 Sep 2026 crash loop, found after two other real
+  // memory bugs had been fixed and it kept dying anyway. The log named the
+  // room:
+  //
+  //   Lazy-restored room anna-r from postgres on join
+  //   memory critical — shedding every idle room: 585MB of 300MB (195%),
+  //     1 rooms in memory
+  //   FATAL ERROR: Reached heap limit
+  //
+  // anna-r held 441,195 whiteboard objects — a 130MB board that Postgres
+  // compressed to 2MB, so nothing looked wrong until somebody opened it. The
+  // strokes beside those objects had been capped at 5000 since they were
+  // written. The objects never were.
+  const srv = readFileSync('server.ts', 'utf8');
+
+  assert(/const MAX_BOARD_OBJECTS = \d+/.test(srv), 'a board has a ceiling at all');
+  const cap = Number(/const MAX_BOARD_OBJECTS = (\d+)/.exec(srv)[1]);
+  assert(cap > 100 && cap <= 5000,
+    'the ceiling is past any real lesson and far below a runaway',
+    `it is ${cap}`);
+
+  const add = srv.slice(srv.indexOf("socket.on('whiteboard_add_image'"), srv.indexOf("socket.on('whiteboard_update_object'"));
+  assert(/slice\(-MAX_BOARD_OBJECTS\)/.test(add),
+    'adding past the ceiling drops the oldest, as the strokes already did');
+
+  // The room that already grew is the one that matters: it is reloaded on every
+  // join, and every join killed the process.
+  const hydrate = srv.slice(srv.indexOf('function hydrateRoom'), srv.indexOf('function hydrateRoom') + 4000);
+  assert(/capBoard\(raw\.whiteboard\.objects, MAX_BOARD_OBJECTS/.test(hydrate),
+    'a board that grew before the cap existed is trimmed when it is loaded',
+    'otherwise it is permanently unopenable — every join reloads all of it');
+  assert(/capBoard\(raw\.whiteboard\.strokes, 5000/.test(hydrate),
+    'and so are the strokes');
+  assert(/return list\.slice\(-max\)/.test(srv),
+    'the NEWEST are kept',
+    'the recent end of a board is the part the lesson is using');
+  assert(/console\.warn\(`✂️/.test(srv),
+    "and it says so, rather than silently discarding a tutor's work");
+}
+
 section('OFFLINE — saving every room does not serialise every room at once');
 {
   // 4 Sep 2026, from the production log, and the WHERE is the point:
