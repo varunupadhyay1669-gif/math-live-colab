@@ -1425,6 +1425,31 @@ async function startServer() {
   // approached it took the whole service down, which is how this ended up
   // suspended. Twelve is still more lessons than a room needs and caps the
   // worst case at ~24MB. Raise MAX_FILES_PER_ROOM on a bigger instance.
+  /**
+   * Put an item on the board, or replace the one already carrying its id.
+   *
+   * This is the fix for how a whiteboard reached 441,195 objects. Three places
+   * in Room.tsx replay a saved board by re-emitting every item on it — applying
+   * a template, reopening a saved session, loading a lesson onto the board —
+   * and the server appended every one of them, every time. Only
+   * loadLessonOntoBoard clears first; "reopen" guards on whether the LOCAL
+   * copy looks empty, which says nothing about what the server is holding. So a
+   * board saved at 200 objects reopened to 400, was saved at 400, reopened to
+   * 800. Eleven of those is four hundred thousand.
+   *
+   * Every one of these handlers already required an `id` and then ignored it.
+   * Using it makes a replay idempotent — the same board replayed twice is the
+   * same board — which fixes the path that is amplifying and every other one
+   * like it, including the ones nobody has written yet. It also fixes the
+   * visible half of the same bug on shapes and texts, which were bounded by
+   * their own caps and so merely showed everything twice.
+   */
+  function upsertById(list: any[], item: any): void {
+    const i = list.findIndex(x => x && x.id === item.id);
+    if (i >= 0) list[i] = item;
+    else list.push(item);
+  }
+
   /** Keep the newest `max` of a persisted board array, and say so if it trimmed. */
   function capBoard(list: any, max: number, roomId: string, what: string): any[] {
     if (!Array.isArray(list)) return [];
@@ -2871,7 +2896,7 @@ Build a widget that teaches: ${safePrompt}`;
         console.warn(`Rejected oversize whiteboard image from ${socket.id}: ${object.src.length} bytes`);
         return;
       }
-      room.whiteboard.objects.push(object);
+      upsertById(room.whiteboard.objects, object);
       // Oldest first, exactly as the strokes above do it. Dropping the oldest
       // picture off a board nobody has cleared in months is a smaller loss than
       // the board becoming unopenable — which is the state this cap was written
@@ -2978,7 +3003,7 @@ Build a widget that teaches: ${safePrompt}`;
       if (!requireTeacher(room, socket.id) || !shape || typeof shape.id !== 'string') return;
       // Avoid duplicates if the same shape arrives twice
       if (room.whiteboard.shapes.some((s: any) => s.id === shape.id)) return;
-      room.whiteboard.shapes.push(shape);
+      upsertById(room.whiteboard.shapes, shape);
       // Cap to prevent unbounded growth
       if (room.whiteboard.shapes.length > 2000) room.whiteboard.shapes = room.whiteboard.shapes.slice(-2000);
       io.to(roomId).emit('whiteboard_add_shape', { shape });
@@ -3015,7 +3040,7 @@ Build a widget that teaches: ${safePrompt}`;
       if (!requireTeacher(room, socket.id) || !instrument || typeof instrument.id !== 'string') return;
       if (!Array.isArray(room.whiteboard.instruments)) room.whiteboard.instruments = [];
       if (room.whiteboard.instruments.some((i: any) => i.id === instrument.id)) return;
-      room.whiteboard.instruments.push(instrument);
+      upsertById(room.whiteboard.instruments, instrument);
       if (room.whiteboard.instruments.length > 16) {
         room.whiteboard.instruments = room.whiteboard.instruments.slice(-16);
       }
@@ -3070,7 +3095,7 @@ Build a widget that teaches: ${safePrompt}`;
       // Cap individual text length so no single label can be megabytes.
       if (text.text.length > MAX_TEXT_LENGTH) text.text = text.text.slice(0, MAX_TEXT_LENGTH);
       stampText(text);
-      room.whiteboard.texts.push(text);
+      upsertById(room.whiteboard.texts, text);
       if (room.whiteboard.texts.length > MAX_TEXTS_PER_ROOM) {
         room.whiteboard.texts = room.whiteboard.texts.slice(-MAX_TEXTS_PER_ROOM);
       }

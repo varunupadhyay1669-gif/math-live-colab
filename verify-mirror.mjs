@@ -1651,6 +1651,62 @@ if (!PORT) {
   assert(status && status.ok === true, "a student's ack reaches the teacher as status",
     status ? JSON.stringify(status) : 'no mirror_status');
 
+  section('LIVE — replaying a saved board does not double it');
+  {
+    // How a whiteboard reached 441,195 objects and killed the server on every
+    // join. Three places in Room.tsx replay a saved board by re-emitting every
+    // item on it, and the server appended each one every time — so a board
+    // saved at 200 reopened to 400, was saved at 400, reopened to 800.
+    //
+    // Every one of those handlers already required an `id` and then ignored it.
+    // This is the behaviour that proves it no longer does.
+    const wbRoom = 'wb' + Math.random().toString(36).slice(2, 8);
+    const t = connect();
+    await waitFor(t, 'connect');
+    t.emit('join_room', { roomId: wbRoom, userName: 'T', role: 'teacher' });
+    await waitFor(t, 'session_state', { timeout: 4000 }).catch(() => null);
+
+    const pic = { id: 'img-same', src: '/api/board-image/abc', x: 1, y: 1, w: 10, h: 10 };
+    // Twice with the same id — exactly what a replay sends.
+    t.emit('whiteboard_add_image', { roomId: wbRoom, object: pic });
+    t.emit('whiteboard_add_image', { roomId: wbRoom, object: { ...pic, x: 2 } });
+    t.emit('whiteboard_add_shape', { roomId: wbRoom, shape: { id: 'sh-same', kind: 'line', x1: 0, y1: 0, x2: 1, y2: 1 } });
+    t.emit('whiteboard_add_shape', { roomId: wbRoom, shape: { id: 'sh-same', kind: 'line', x1: 0, y1: 0, x2: 2, y2: 2 } });
+    await new Promise(r => setTimeout(r, 400));
+
+    // Read it the way a joining student would.
+    const joiner = connect();
+    await waitFor(joiner, 'connect');
+    joiner.emit('join_room', { roomId: wbRoom, userName: 'S', role: 'student' });
+    const st = await waitFor(joiner, 'session_state', { timeout: 4000 }).catch(() => null);
+    const wb = st && st.whiteboard ? st.whiteboard : null;
+
+    assert(!!wb, 'a joiner is sent the board at all');
+    const sameId = (wb?.objects || []).filter(o => o && o.id === 'img-same');
+    assert(sameId.length === 1,
+      'the same picture replayed twice is on the board once',
+      `it is there ${sameId.length} times — this is the doubling that reached 441,195`);
+    assert(sameId[0]?.x === 2,
+      'and it is the LATER one that survived',
+      'a replay carries the current position; keeping the older copy would move it back');
+    const sameShape = (wb?.shapes || []).filter(x => x && x.id === 'sh-same');
+    assert(sameShape.length === 1, 'and the same holds for shapes');
+
+    // A genuinely different picture must still be added — the whole risk of
+    // deduping by id is that it silently swallows real work.
+    t.emit('whiteboard_add_image', { roomId: wbRoom, object: { ...pic, id: 'img-other' } });
+    await new Promise(r => setTimeout(r, 300));
+    const j2 = connect();
+    await waitFor(j2, 'connect');
+    j2.emit('join_room', { roomId: wbRoom, userName: 'S2', role: 'student' });
+    const st2 = await waitFor(j2, 'session_state', { timeout: 4000 }).catch(() => null);
+    assert((st2?.whiteboard?.objects || []).length === 2,
+      'a different picture is still added',
+      'deduping by id must never swallow a real second picture — duplicate and paste both mint a fresh id');
+
+    [t, joiner, j2].forEach(x => x.close());
+  }
+
   section('LIVE — a lesson that can say where it is');
   teacher.emit('mirror_state', { roomId, state: '{"i":4,"score":3}' });
   await new Promise(r => setTimeout(r, 200));
