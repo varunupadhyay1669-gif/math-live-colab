@@ -1548,7 +1548,37 @@ Both are the same lesson from two directions: **a green health check proves the
 web server is answering and nothing else.** When a dependency is added, decide
 what healthz does when it dies, before it dies.
 
-Tests: 196 → 230 offline, 38 pack, 3 smoke.
+**Phase 2 task 2.4 (the account library) shipped 9 Sep 2026, and not for the
+reason the plan gave.** The plan justified it as convenience: a lesson written on
+the laptop could not be opened on the iPad. What forced it was the clear-class-
+data button shipped on 5 Sep. 33 lesson files were living inside 31 rooms with
+the library in browser localStorage, so the database's only copy of a term of
+work sat inside the rows that button deletes — and the founder had asked to press
+it. Migration 0004 lifted them out (33 files → 31 lessons, 1.3 MB, deduped on
+content; 14 had no class to attribute them to and went to the platform owner with
+that recorded). The same table closes 2.4.
+
+**The crash week, 3–4 Sep 2026, in one place.** One report — "during the session
+it is saying reconnecting" — was five separate memory faults:
+
+| # | Fault | Fix |
+|---|---|---|
+| 1 | Socket.IO queued undelivered frames per client, unbounded | `volatile` on the three loss-tolerant streams |
+| 2 | Production transpiled TypeScript at runtime through tsx | esbuild bundle; 500 MB → 37 MB RSS |
+| 3 | `saveRooms` serialised every room at once, on a 5-minute timer | one room at a time |
+| 4 | One whiteboard held 441,195 objects; strokes were capped, objects never were | `MAX_BOARD_OBJECTS`, enforced on push AND on load |
+| 5 | Board replays appended instead of upserting, so a reopen doubled the board | `upsertById` on objects, shapes, texts, instruments |
+
+Fault 4 was the one actually killing it, and it hid because Postgres compression
+made a 130 MB board measure as 2 MB. Fault 5 explains how the board got that big.
+Each fix was verified by removing it and watching its own test fail.
+
+Also fixed in that window: the follower painted every canvas frame onto the last
+(frozen confetti, a smeared geometry sim), and a sandbox change silently disabled
+the mirror's readiness rescue, freezing a student's screen after any trip to the
+whiteboard — reported as "the student cannot click the button".
+
+Tests: 196 → 335 offline, 38 pack, 3 → 7 smoke.
 
 ---
 
