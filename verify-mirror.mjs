@@ -746,6 +746,40 @@ section('OFFLINE — a class keeps its last lesson, and nothing else for long');
     'behind the gate it would run once a day at 9am, or on a day the process restarted after that, never');
 }
 
+section('OFFLINE — nothing a room holds may grow without a ceiling');
+{
+  // The generalisation of the crash week, written so the next one is caught by
+  // a test rather than by a tutor.
+  //
+  // Twice now the fault has been the same shape: one way into a list is
+  // guarded and another way in is not. Whiteboard strokes were capped at 5000
+  // from the day they were written and objects never were — one board reached
+  // 441,195 and killed the server on every join. Then on 9 Sep the upload path
+  // checked MAX_FILES_PER_ROOM and the AI-generation path, three hundred lines
+  // away, pushed a whole lesson document with no check at all.
+  //
+  // So this does not test a list. It finds every place the server grows one and
+  // demands a ceiling near it — naming that list, so a cap belonging to its
+  // neighbour cannot be mistaken for its own.
+  const srv = readFileSync('server.ts', 'utf8');
+  const sites = [
+    ...srv.matchAll(/room\.(?:whiteboard\.)?([a-zA-Z]+)\.push\(/g),
+    ...srv.matchAll(/upsertById\(room\.(?:whiteboard\.)?([a-zA-Z]+),/g),
+  ];
+  assert(sites.length >= 7, 'the growth sites are actually being found', `found ${sites.length}`);
+  const uncapped = [];
+  for (const m of sites) {
+    const name = m[1];
+    // Wide enough for a guard that returns early before the push, tight enough
+    // that it is still the same handler.
+    const near = srv.slice(Math.max(0, m.index - 900), m.index + 500);
+    if (!new RegExp(`${name}\.length`).test(near)) uncapped.push(name);
+  }
+  assert(uncapped.length === 0,
+    'every list a room grows has a ceiling beside it',
+    uncapped.length ? `no ceiling near: ${[...new Set(uncapped)].join(', ')}` : '');
+}
+
 section('OFFLINE — one board cannot grow until it kills the server');
 {
   // The actual cause of the 4 Sep 2026 crash loop, found after two other real

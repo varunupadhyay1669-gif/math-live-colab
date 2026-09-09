@@ -2353,6 +2353,24 @@ Build a widget that teaches: ${safePrompt}`;
           html,
           uploadedAt: Date.now(),
         };
+        // The same ceiling the upload path three hundred lines up enforces, and
+        // it was missing here. That asymmetry — one way in guarded, another way
+        // in not — is precisely the shape of the bug that cost a week: strokes
+        // were capped and whiteboard objects were not, and one board reached
+        // 441,195 objects and killed the server on every join.
+        //
+        // A file is a whole lesson document, up to MAX_FILE_SIZE, so a room
+        // generating lesson after lesson grows by megabytes with nothing to
+        // stop it. Refused rather than evicted, matching upload: silently
+        // dropping the tutor's oldest lesson to make room for a new one is a
+        // worse outcome than saying no, and since 9 Sep their lessons live in
+        // the account library where clearing a file loses nothing.
+        if (room.files.length >= MAX_FILES_PER_ROOM) {
+          socket.emit('generate_lesson_error', {
+            message: `This room already holds ${MAX_FILES_PER_ROOM} lessons — remove one and generate again.`,
+          });
+          return;
+        }
         room.files.push(file);
         room.activeFileId = file.id;
         room.lastRunHtml = html;
