@@ -511,7 +511,11 @@ section('OFFLINE — schema changes that are not just "create it if missing"');
   // is a migration that cannot survive a restore from the nightly dump.
   for (const f of files) {
     const sql = readFileSync(`src/server/migrations/${f}`, 'utf8');
-    const statements = sql.split(';').map(s => s.replace(/--[^\n]*/g, '').trim()).filter(Boolean);
+    // Comments stripped BEFORE splitting, not after. Splitting first meant a
+    // semicolon inside a `--` comment cut a statement in half and the front
+    // half lost its IF NOT EXISTS — 0004 was reported unguarded because one
+    // of its comments contained "in five different rooms; without".
+    const statements = sql.replace(/--[^\n]*/g, '').split(';').map(s => s.trim()).filter(Boolean);
     // A backfill cannot carry IF NOT EXISTS, so UPDATE is allowed — on the
     // condition the author makes it CONVERGENT, i.e. its WHERE clause stops
     // matching once it has run. That is a rule this check states rather than
@@ -809,6 +813,49 @@ section('OFFLINE — saving every room does not serialise every room at once');
   assert(/catch/.test(save),
     'one unwritable room does not abandon the rest',
     'the shutdown path is the worst place to give up early');
+}
+
+section('OFFLINE — a lesson outlives the room that ran it');
+{
+  // Found on 9 Sep 2026 while looking at the clear-class-data button built
+  // three days earlier: 33 lesson files were living inside 31 rooms, and the
+  // library was browser localStorage. So the database's only copy of
+  // "12_times_table_adventure" and thirty-two others was inside the very rows
+  // that button deletes, and the founder had asked to press it.
+  const mig = readFileSync('src/server/migrations/0004_lesson_library.sql', 'utf8');
+  const api = readFileSync('src/server/lessons.ts', 'utf8');
+
+  assert(/CREATE TABLE IF NOT EXISTS lessons/.test(mig), 'lessons have a table of their own');
+  assert(/UNIQUE \(teacher_id, content_key\)/.test(mig),
+    'the same lesson taught in five rooms is filed once',
+    'the rescue reads every room; without this it files five copies');
+  assert(/ON CONFLICT \(teacher_id, content_key\) DO NOTHING/.test(mig),
+    'and running the rescue twice inserts nothing');
+  assert(/LEFT JOIN classes c ON c\.room_code = r\.room_id/.test(mig),
+    'ownership comes from the class the room belongs to');
+  assert(/owner unknown/.test(mig),
+    'a guessed owner says it is a guess',
+    '14 of the files are in rooms with no class; dropping them was the alternative');
+
+  // Every statement scoped to the signed-in teacher.
+  for (const q of ['WHERE teacher_id = $1', 'WHERE id = $1 AND teacher_id = $2']) {
+    assert(api.includes(q), `the API is scoped by teacher (${q})`);
+  }
+  // The list query must report the SIZE of each lesson and never the lesson.
+  // Checked by removing the one legitimate mention and looking for any other.
+  const listQuery = api.slice(api.indexOf('SELECT id, name, topic, source'), api.indexOf('ORDER BY updated_at DESC'));
+  assert(/length\(html\) AS bytes/.test(listQuery), 'the list reports how big each lesson is');
+  assert(!listQuery.replace('length(html) AS bytes', '').includes('html'),
+    'and never the lesson body itself',
+    'a teacher with fifty lessons should not download all of them to read a list of names');
+
+  // The client must not lose what was already in the browser.
+  const lib = readFileSync('src/components/SimulationLibrary.tsx', 'utf8');
+  assert(/local\.filter\(x => !seen\.has\(x\.id\)\)/.test(lib),
+    'the account and the browser copies are merged, not replaced',
+    'a tutor signed out, offline or in a demo room still has their library');
+  assert(/if \(item\.html\) \{ onLoad/.test(lib),
+    'a lesson already in hand opens without a round trip');
 }
 
 section('OFFLINE — clearing a class does not clear the student');

@@ -52,17 +52,71 @@ export default function SimulationLibrary({ isOpen, onClose, onLoad, currentHtml
   const [showSaveForm, setShowSaveForm] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
 
-  // Load from localStorage
+  const [syncing, setSyncing] = useState(false);
+
+  // The account first, this browser second.
+  //
+  // Until 9 Sep 2026 this was localStorage and nothing else, which had two
+  // consequences that turned out to be the same one. A lesson written on the
+  // laptop could not be opened on the iPad. And when 33 lesson files were found
+  // living inside rooms — with a button three days old that deletes rooms — the
+  // database's only copy of a term of work was inside the rows about to be
+  // erased. Migration 0004 lifted them out; this is where they reappear.
+  //
+  // The local copy is kept and merged rather than replaced: a tutor who is
+  // signed out, offline, or in an anonymous demo room still has their library,
+  // and nothing they saved before today quietly vanishes.
   useEffect(() => {
+    let alive = true;
+    let local: LibraryItem[] = [];
     try {
       const stored = localStorage.getItem(STORAGE_KEY);
-      if (stored) setItems(JSON.parse(stored));
-    } catch {}
+      if (stored) local = JSON.parse(stored);
+    } catch { /* a corrupt library is an empty one, not a crash */ }
+    if (alive) setItems(local);
+
+    (async () => {
+      try {
+        const r = await fetch('/api/lessons', { credentials: 'include' });
+        if (!r.ok) return;                       // signed out: local is the library
+        const { lessons } = await r.json();
+        if (!alive || !Array.isArray(lessons)) return;
+        // The list carries no html — it is fetched when one is opened, because
+        // a teacher with fifty lessons should not download all of them to read
+        // a list of names.
+        const remote: LibraryItem[] = lessons.map((l: any) => ({
+          id: l.id, name: l.name, html: '', topic: l.topic || 'Other',
+          savedAt: new Date(l.updated_at).getTime(), blurb: l.source || undefined,
+        }));
+        const seen = new Set(remote.map(x => x.id));
+        setItems([...remote, ...local.filter(x => !seen.has(x.id))]);
+      } catch { /* offline: local is the library */ }
+    })();
+    return () => { alive = false; };
   }, []);
 
   const save = (updated: LibraryItem[]) => {
     setItems(updated);
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
+    // Still written locally, so the library survives being signed out.
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(updated.filter(i => i.html)));
+    } catch { /* quota: the account copy is the one that matters */ }
+  };
+
+  /** Fetch the body of a lesson that lives in the account. */
+  const openItem = async (item: LibraryItem) => {
+    if (item.html) { onLoad(item.html, item.name); return; }
+    setSyncing(true);
+    try {
+      const r = await fetch(`/api/lessons/${encodeURIComponent(item.id)}`, { credentials: 'include' });
+      if (!r.ok) throw new Error('not found');
+      const { lesson } = await r.json();
+      onLoad(lesson.html, lesson.name);
+    } catch {
+      alert('Could not open that lesson. Check you are signed in.');
+    } finally {
+      setSyncing(false);
+    }
   };
 
   const handleSave = () => {
@@ -77,10 +131,31 @@ export default function SimulationLibrary({ isOpen, onClose, onLoad, currentHtml
     save([newItem, ...items]);
     setShowSaveForm(false);
     setSaveName('');
+    // To the account as well, so it is there on the iPad this evening. Failure
+    // is deliberately quiet: the lesson is already saved locally, and a tutor
+    // mid-class does not need a dialog about sync.
+    void (async () => {
+      try {
+        const r = await fetch('/api/lessons', {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: newItem.name, html: newItem.html, topic: newItem.topic }),
+        });
+        if (!r.ok) return;
+        const { lesson } = await r.json();
+        // Adopt the server's id, so deleting it later deletes it there too.
+        setItems(prev => prev.map(i => (i.id === newItem.id ? { ...i, id: lesson.id } : i)));
+      } catch { /* offline; it is saved in this browser */ }
+    })();
   };
 
   const handleDelete = (id: string) => {
     save(items.filter(i => i.id !== id));
+    if (id.startsWith('les-')) {
+      void fetch(`/api/lessons/${encodeURIComponent(id)}`, { method: 'DELETE', credentials: 'include' })
+        .catch(() => { /* it is gone from this browser either way */ });
+    }
   };
 
   if (!isOpen) return null;
@@ -201,9 +276,12 @@ export default function SimulationLibrary({ isOpen, onClose, onLoad, currentHtml
                   </span>
                 </div>
               </div>
-              <button onClick={() => onLoad(item.html, item.name)}
+              {/* Goes through openItem, because a lesson that lives in the
+                  account arrives here without its html — the list deliberately
+                  does not carry fifty lesson bodies just to draw fifty names. */}
+              <button onClick={() => void openItem(item)} disabled={syncing}
                 className="btn-primary text-[11px]" style={{ padding: '5px 12px' }}>
-                Load
+                {syncing ? 'Opening…' : 'Load'}
               </button>
               {/* Built-ins have no delete: a teacher who cleared the shipped set
                   by accident would be back to the empty shelf this exists to

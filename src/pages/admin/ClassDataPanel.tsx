@@ -90,6 +90,13 @@ export default function ClassDataPanel({ can }: { can: (p: string) => boolean })
         Removes saved boards, whiteboard pictures and lesson records.
         <b> Students, their names and their links are not touched.</b>
       </p>
+      {/* Added 9 Sep 2026, because until that morning this was not true. 33
+          lesson files were living inside rooms and nowhere else, so this button
+          would have deleted a term of work along with the boards. Migration
+          0004 moved them into the account library first. */}
+      <p className="ml-admin-muted" style={{ marginTop: 6, fontSize: 12 }}>
+        Your lessons are safe: they live in your library, not in the rooms.
+      </p>
 
       <label style={{ display: 'block', margin: '14px 0 6px', fontWeight: 600 }}>
         Delete everything older than
