@@ -29,6 +29,10 @@ import { can, permissionsOf } from './src/server/authz.ts';
 import { LESSON_HISTORY_KEEP, LESSON_TTL_HOURS } from './src/server/records.ts';
 import { cutoffFrom } from './src/server/classData.ts';
 import {
+  calculate, compile, parse, evaluate, tokenize, formatResult, freeVariables,
+  ExpressionError, FUNCTION_NAMES,
+} from './src/lib/mathExpr.ts';
+import {
   frameBytes, freshBudget, accountFrame, shrinkAfterOversize, fitScratch, paintScratch,
   samplePoints, looksBlank, reachSummary,
   BEAM_TICK_MS, BEAM_MAX_TICK_MS, BEAM_QUALITY, BEAM_MIN_QUALITY, BEAM_MAX_EDGE,
@@ -1696,6 +1700,233 @@ section('OFFLINE — the beam relays and keeps nothing');
   const mutating = src.slice(src.indexOf('const MUTATING_EVENTS'), src.indexOf('const MUTATING_EVENTS') + 2000);
   assert(!/beam_/.test(mutating), 'no beam event schedules a save',
     'a save per frame would be a save storm on a box that dies of memory');
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+section('OFFLINE — the calculator works a sum out, it never runs it');
+{
+  // Asked for on 10 Sep 2026: "different calculator options for the teacher and
+  // if he want for the students also." What that turns into is an engine that
+  // reads text a person typed into a browser — the one kind of string this
+  // codebase does not execute — and that the function plotter will then call at
+  // several hundred sample points a frame. Both of those are load-bearing, so
+  // both are checked here.
+  const near = (a, b, eps = 1e-9) => Math.abs(a - b) <= eps;
+  const failure = (src, opts) => {
+    try { calculate(src, opts); return null; } catch (err) { return err; }
+  };
+  const deg = { degrees: true };
+  const atX = (x) => ({ vars: { x } });
+
+  // ── Precedence, and which way a chain leans ──
+  //
+  // 2^3^2 is the one that separates a parser from a fold over a token list:
+  // right-associative it is 2^9, left it is 8^2, and a tutor demonstrating
+  // powers on the board is owed the first one.
+  assert(calculate('2^3^2') === 512, 'powers are right-associative: 2^3^2 is 512',
+    `it came out ${calculate('2^3^2')} — 64 means the tree was built the wrong way round`);
+  assert(calculate('2+3*4') === 14, 'multiplication binds tighter than addition');
+  assert(calculate('(2+3)*4') === 20, 'and a bracket beats both');
+  assert(calculate('8/4/2') === 1, 'division leans left: 8/4/2 is 1, not 4');
+  assert(calculate('2^3!') === 64, 'a factorial inside an exponent is worked out first');
+  assert(calculate('3!^2') === 36, 'and a factorial under one is too');
+
+  // ── A minus sign is two different things ──
+  assert(calculate('-2^2') === -4, '-2^2 is -4, not 4',
+    'the minus is applied to the whole power; binding it to the 2 would contradict the lesson being taught');
+  assert(calculate('2-3') === -1, 'a minus between two numbers is a subtraction');
+  assert(calculate('2--3') === 5, 'and a minus straight after an operator is a sign');
+  assert(calculate('2 - -3') === 5, 'spacing does not change which one it is');
+  assert(calculate('2^-3') === 0.125, 'an exponent is allowed to be negative');
+  assert(calculate('-5!') === -120, 'the factorial happens before the sign, so -5! is -120');
+
+  // ── The × nobody types ──
+  assert(calculate('2x', atX(4)) === 8, '2x is two times x');
+  assert(calculate('3(x+1)', atX(4)) === 15, '3(x+1) needs no multiplication sign');
+  assert(near(calculate('2sin(30)', deg), 1), '2sin(30) is 1 in degrees');
+  assert(calculate('2x^2', atX(4)) === 32, '2x^2 is 2(x²) and not (2x)²',
+    'the implicit product takes a whole power on its right, or a plotted parabola is the wrong parabola');
+  assert(calculate('(2)(3)') === 6, 'two bracketed values side by side multiply');
+  assert(calculate('2pi') === Math.PI * 2, 'a number in front of a constant multiplies it');
+  const sideBySide = failure('12 34');
+  assert(sideBySide instanceof ExpressionError && /two numbers in a row/.test(sideBySide.message),
+    'two numbers side by side are refused, not multiplied',
+    '12 34 quietly answering 408 is a wrong number that gets copied onto a board and believed');
+
+  // ── Degrees or radians: the same three characters, two answers ──
+  assert(near(calculate('sin(30)', deg), 0.5), 'sin(30) is 0.5 in degrees');
+  assert(near(calculate('sin(30)'), Math.sin(30)) && calculate('sin(30)') < 0,
+    'the same sin(30) in radians is -0.988',
+    'a toggle that did nothing would be worse than no toggle — both answers look plausible');
+  assert(calculate('cos(90)', deg) === 0, 'cos(90) is exactly 0 in degrees',
+    'Math.cos(90 * π/180) is 6.1e-17, which a student who has just been taught cos 90 = 0 should never be shown');
+  assert(Number.isNaN(calculate('tan(90)', deg)), 'tan(90) has no value at all',
+    'Math.tan of the same angle is 1.6e16, which reads as an answer');
+  assert(near(calculate('asin(1)', deg), 90), 'the inverse functions answer in degrees too');
+  assert(near(calculate('atan(1)', deg), 45), 'atan(1) is 45 degrees');
+  assert(calculate('sinh(1)') === calculate('sinh(1)', deg),
+    'the hyperbolic functions ignore the toggle entirely',
+    'sinh takes a number, not an angle — converting it would be a silent wrong answer');
+  assert(calculate('log(100)') === 2 && calculate('ln(e)') === 1 && calculate('log2(8)') === 3,
+    'log is base ten, ln is natural, log2 is base two',
+    'that is what those three mean in a school exercise book');
+
+  // ── A question with no answer is a value, not an exception ──
+  //
+  // The plotter will call this thousands of times per frame. An asymptote must
+  // cost a NaN and a gap in the line, never a throw and a dead render.
+  for (const [src, what] of [
+    ['1/0', 'dividing by zero'],
+    ['0/0', 'zero over zero'],
+    ['sqrt(-1)', 'the root of a negative'],
+    ['ln(0)', 'the log of zero'],
+    ['(-8)^0.5', 'a fractional power of a negative'],
+    ['0.5!', 'the factorial of a half'],
+    ['171!', 'a factorial past what a double can hold'],
+  ]) {
+    let value, threw = false;
+    try { value = calculate(src); } catch { threw = true; }
+    assert(!threw && Number.isNaN(value), `${src} comes back NaN — ${what}`,
+      threw ? 'it threw instead' : `it answered ${value}, and Infinity is not an answer a tutor can use`);
+  }
+
+  // ── A typo gets a sentence, not a stack trace ──
+  for (const [src, expected] of [
+    ['2+)', /unexpected '\)'/],
+    ['(2+3', /never closed/],
+    ['foo(3)', /unknown function 'foo'/],
+    ['sin', /needs brackets/],
+    ['sin(1,2)', /takes 1 value/],
+    ['2+', /stops after/],
+    ['3..4', /decimal points/],
+    ['2 @ 3', /can't read '@'/],
+    ['2y', /don't know what 'y' is/],
+  ]) {
+    const err = failure(src);
+    assert(err instanceof ExpressionError && expected.test(err.message),
+      `"${src}" is answered with a readable message`,
+      err ? err.message : 'it did not complain at all');
+  }
+  const pointed = failure('2+)');
+  assert(pointed.at === 2, 'and the message knows which character it was',
+    `at=${pointed && pointed.at} — a calculator that cannot point is a calculator he has to re-read`);
+
+  // ── Nothing typed into it can execute ──
+  //
+  // The whole reason this file exists rather than a one-line eval(). These are
+  // the shapes that reach for a JavaScript engine through a lookup table; a
+  // plain object literal would answer `constructor` with the Function
+  // constructor, so the tables are Maps with no prototype behind them.
+  globalThis.__calcEscaped = false;
+  const attacks = [
+    'constructor.constructor("globalThis.__calcEscaped=true")()',
+    'constructor(1)',
+    'hasOwnProperty(1)',
+    '__proto__',
+    'alert(1)',
+    'globalThis.__calcEscaped=true',
+    '0;globalThis.__calcEscaped=true',
+    'process.exit(1)',
+    'require("fs")',
+    'import("fs")',
+    '`${1}`',
+  ];
+  let allRefused = true;
+  for (const src of attacks) {
+    const err = failure(src);
+    if (!(err instanceof ExpressionError)) { allRefused = false; console.log(`      (${src} was not refused)`); }
+  }
+  assert(allRefused, 'every string that reaches for JavaScript is refused as a typo',
+    'these are the inputs that turn an expression evaluator into remote code execution');
+  assert(globalThis.__calcEscaped === false, 'and none of them ran',
+    'the sentinel was set, which means something in there executed');
+  assert(Number.isNaN(evaluate(parse('constructor'), {})),
+    'a variable named after something on Object.prototype is simply unknown',
+    'reading it off a plain {} would hand a caller a function where a number belongs');
+
+  const engineSrc = await readFile(new URL('./src/lib/mathExpr.ts', import.meta.url), 'utf8');
+  const engineCode = engineSrc.replace(/\/\/[^\n]*/g, '').replace(/\/\*[\s\S]*?\*\//g, '');
+  assert(!/\beval\s*\(/.test(engineCode) && !/new\s+Function\b/.test(engineCode),
+    'the engine contains no eval and no new Function',
+    'the day one appears "just for the plotter", every lesson on the platform is running whatever was typed');
+
+  // ── Parse once, sample many ──
+  assert(failure('2+)') && (() => { try { compile('2+)'); return false; } catch { return true; } })(),
+    'compile() reports a typo before a plotter draws anything',
+    'discovering it at sample 400 means an empty canvas and no explanation');
+  let unknownAtCompile = '';
+  try { compile('2y'); } catch (err) { unknownAtCompile = err.message; }
+  assert(/don't know what 'y' is/.test(unknownAtCompile),
+    'and it checks the names once, up front',
+    `got: ${unknownAtCompile || '(no complaint)'}`);
+
+  const parabola = compile('2x^2 + 3x - 1');
+  assert(parabola(2) === 13 && parabola(-1) === -2 && parabola(0) === -1,
+    'a compiled expression is a plain (x) => number');
+  const asymptote = compile('tan(x)');
+  let sampled = 0, exploded = false;
+  try {
+    for (let i = 0; i < 1000; i++) asymptote(-Math.PI + (i * 2 * Math.PI) / 999);
+    sampled = 1000;
+  } catch { exploded = true; }
+  assert(!exploded && sampled === 1000, 'and it can be sampled across an asymptote 1000 times without throwing',
+    'this is the loop the plotter runs every frame of a drag');
+  assert(Number.isNaN(compile('1/x')(0)) && compile('1/x')(4) === 0.25,
+    'a hole in a curve is NaN at that point and fine either side of it');
+
+  // Relative, not absolute, because the box this runs on is a 1GB Lightsail
+  // instance and a millisecond budget would be a flaky test. What is being
+  // proved is structural: sampling does not re-read the text.
+  {
+    const src = 'sin(x)*cos(2x)+sqrt(abs(x))';
+    const f = compile(src);
+    const N = 20000;
+    const t0 = performance.now();
+    for (let i = 0; i < N; i++) f(i * 0.001);
+    const compiled = performance.now() - t0;
+    const t1 = performance.now();
+    for (let i = 0; i < N; i++) calculate(src, { vars: { x: i * 0.001 } });
+    const reparsed = performance.now() - t1;
+    assert(compiled * 4 < reparsed, 'sampling a compiled expression is far cheaper than re-reading the text',
+      `compiled ${compiled.toFixed(1)}ms vs ${reparsed.toFixed(1)}ms for ${N} points — the plotter needs the first number`);
+  }
+
+  // ── The small things a calculator is judged on ──
+  assert(formatResult(0.1 + 0.2) === '0.3', '0.1 + 0.2 shows as 0.3',
+    'a class watching 0.30000000000000004 appear has learned the wrong thing about arithmetic');
+  assert(formatResult(1 / 3) === '0.333333333333' && formatResult(NaN) === 'undefined',
+    'a third keeps its digits and an impossible sum says so');
+  assert(calculate('50%') === 0.5 && near(calculate('200*15%'), 30),
+    'percent is a hundredth, so 15% of 200 is 30');
+  assert(calculate('round(-2.5)') === -3, 'rounding a half goes away from zero: -2.5 is -3',
+    'Math.round answers -2, and being marked wrong by the tutor\'s own calculator is indefensible');
+  assert(calculate('√16') === 4 && calculate('3 × 4') === 12 && calculate('5 ÷ 2') === 2.5,
+    'the symbols on an iPad keyboard and in a pasted worksheet are read as themselves');
+  assert(freeVariables(parse('2x + ans')).join(',') === 'x,ans',
+    'the engine can say which names an expression still needs');
+  for (const name of ['sin', 'cos', 'tan', 'asin', 'acos', 'atan', 'sinh', 'cosh', 'tanh',
+    'sqrt', 'cbrt', 'abs', 'ln', 'log', 'log2', 'exp', 'floor', 'ceil', 'round', 'sign',
+    'min', 'max', 'pow']) {
+    if (!FUNCTION_NAMES.includes(name)) { assert(false, `the engine knows ${name}`); break; }
+  }
+  assert(FUNCTION_NAMES.length >= 23, 'every function the keypad and the plotter offer exists',
+    `only ${FUNCTION_NAMES.length} are defined`);
+  assert(tokenize('2x').length === 2 && tokenize('log2(8)')[0].text === 'log2',
+    'log2 is one name and 2x is two tokens',
+    'splitting names into letters would turn ans into a × n × s');
+
+  // ── And the panel that uses it stays out of the sync path ──
+  const panelSrc = await readFile(new URL('./src/components/Calculator.tsx', import.meta.url), 'utf8');
+  const panelCode = panelSrc.replace(/\/\/[^\n]*/g, '').replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/\{\s*\/\*[\s\S]*?\*\/\s*\}/g, '');
+  assert(!/socket/i.test(panelCode) && !/roomId/.test(panelCode),
+    'the calculator holds no socket and no room',
+    'a floating panel that can emit is a second source of truth; the room does the sending or nobody does');
+  assert(!/\beval\s*\(/.test(panelCode) && !/new\s+Function\b/.test(panelCode),
+    'and it does not evaluate anything itself either');
+  assert(/!open \|\| !canUse/.test(panelCode),
+    'a student without permission gets no calculator at all',
+    'the whole second half of the request was "and for the students IF he wants"');
 }
 
 // LIVE — the protocol, against a running server.

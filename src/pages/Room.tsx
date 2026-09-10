@@ -57,6 +57,7 @@ import SimulationLibrary from "../components/SimulationLibrary";
 import ConnectionStatus from "../components/ConnectionStatus";
 import Leaderboard from "../components/Leaderboard";
 import Whiteboard from "../components/Whiteboard";
+import Calculator from "../components/Calculator";
 import { useAuth } from "../lib/auth";
 import { PRODUCT, subjectFor } from '../lib/product';
 
@@ -447,6 +448,11 @@ export default function Room() {
 
   // ── Student Interaction Mode ──
   const [studentInteractionAllowed, setStudentInteractionAllowed] = useState(false);
+  // The tutor's own calculator, and whether the students have one too. Two
+  // separate things on purpose: opening yours should not hand one to a child
+  // in the middle of a mental-arithmetic drill.
+  const [calculatorOpen, setCalculatorOpen] = useState(false);
+  const [studentCalculatorAllowed, setStudentCalculatorAllowed] = useState(false);
 
   // ── Whiteboard Mutual Sync (Miro/Canva "shared book" model) ──
   // Default ON — both sides see each other's pan/zoom in real time. Toggle
@@ -719,6 +725,7 @@ export default function Room() {
     if (typeof state.isPaused === 'boolean') setIsPaused(state.isPaused);
     if (typeof state.scrollSyncEnabled === 'boolean') setScrollSyncEnabled(state.scrollSyncEnabled);
     if (typeof state.studentInteractionAllowed === 'boolean') setStudentInteractionAllowed(state.studentInteractionAllowed);
+    if (typeof state.studentCalculatorAllowed === 'boolean') setStudentCalculatorAllowed(state.studentCalculatorAllowed);
     if (typeof state.currentStep === 'number') setCurrentStep(state.currentStep);
     if (typeof state.zoomLevel === 'number') setZoomLevel(state.zoomLevel);
     if (state.gates) setGates(state.gates);
@@ -947,6 +954,7 @@ export default function Room() {
       setIsPaused(state.isPaused);
       if (typeof state.scrollSyncEnabled === 'boolean') setScrollSyncEnabled(state.scrollSyncEnabled);
       if (typeof state.studentInteractionAllowed === 'boolean') setStudentInteractionAllowed(state.studentInteractionAllowed);
+      if (typeof state.studentCalculatorAllowed === 'boolean') setStudentCalculatorAllowed(state.studentCalculatorAllowed);
       setUsers(state.users || []);
       setChatMessages(state.chat || []);
       if (typeof state.revision === 'number') lastRevisionRef.current = state.revision;
@@ -2864,6 +2872,24 @@ export default function Room() {
     showNotif(next ? '📖 Shared view: pan and zoom mirror both sides' : '🔓 Independent view: your canvas moves only for you');
   };
 
+  // The room is the authority, not this tab. Without this a tutor with the room
+  // open twice would see the toggle disagree with itself.
+  useEffect(() => {
+    if (!socket) return;
+    const onChange = ({ allowed }: { allowed: boolean }) => setStudentCalculatorAllowed(!!allowed);
+    socket.on('student_calculator_changed', onChange);
+    return () => { socket.off('student_calculator_changed', onChange); };
+  }, [socket]);
+
+  const toggleStudentCalculator = () => {
+    if (!socket) return;
+    const next = !studentCalculatorAllowed;
+    setStudentCalculatorAllowed(next);
+    socket.emit('toggle_student_calculator', { roomId, allowed: next });
+    packRef.current.note(next ? 'Gave the student a calculator' : 'Took the calculator back');
+    showNotif(next ? '🧮 Your student now has a calculator' : '🚫 Calculator taken back');
+  };
+
   const toggleStudentInteraction = () => {
     if (!socket) return;
     const newAllowed = !studentInteractionAllowed;
@@ -4271,6 +4297,10 @@ export default function Room() {
               scrollSyncEnabled={scrollSyncEnabled}
               onToggleScrollSync={toggleScrollSync}
               studentInteractionAllowed={studentInteractionAllowed}
+              calculatorOpen={calculatorOpen}
+              onToggleCalculator={() => setCalculatorOpen(o => !o)}
+              studentCalculatorAllowed={studentCalculatorAllowed}
+              onToggleStudentCalculator={toggleStudentCalculator}
               onToggleStudentInteraction={toggleStudentInteraction}
               onResetView={resetView}
               onAttentionCheck={sendAttentionCheck}
@@ -5263,6 +5293,16 @@ export default function Room() {
         />
       )}
 
+      {/* Rendered ALWAYS, not behind `calculatorOpen &&`. It returns null when
+          closed, so mounting it once keeps the tape and the memory across a
+          mid-lesson close — a tutor who shuts it to see the board and reopens
+          it should not have lost the working. */}
+      <Calculator
+        open={calculatorOpen}
+        canUse
+        onClose={() => setCalculatorOpen(false)}
+        title="Calculator"
+      />
     </div>
   );
 }

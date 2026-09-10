@@ -54,6 +54,8 @@ interface RoomData {
   // Sync modes
   scrollSyncEnabled: boolean;
   studentInteractionAllowed: boolean; // When false, students are view-only (like screen share)
+  /** Has the tutor handed the students a calculator? Off until he says so. */
+  studentCalculatorAllowed: boolean;
   // Is the tutor currently sharing their screen? Kept on the room so a student
   // who joins or reconnects mid-share is told, instead of sitting on a lesson
   // the tutor has already given up on and moved past.
@@ -233,6 +235,7 @@ interface SessionStatePayload {
   /** Is the tutor sharing their screen right now? */
   teacherScreenOn: boolean;
   studentInteractionAllowed: boolean;
+  studentCalculatorAllowed?: boolean;
   currentStep: number;
   gates: Record<number, { question: string; options: string[]; correctIndex: number }>;
   tempContent: { html: string; name: string } | null;
@@ -588,6 +591,11 @@ async function startServer() {
       // tutor's. Defaulting to participation and switching to lockstep when
       // needed is the right way round for a one-to-one maths lesson.
       studentInteractionAllowed: true,
+      // Off by default, and deliberately NOT tied to the interaction
+      // toggle. Handing over the compass is a decision about construction;
+      // handing over a calculator is a different decision, and a tutor who
+      // wants one is often saying no to the other.
+      studentCalculatorAllowed: false,
       teacherScreenOn: false,
       password: null,
       pendingSyncStudents: new Set(),
@@ -1057,6 +1065,7 @@ async function startServer() {
       gates: room.gates,
       scrollSyncEnabled: room.scrollSyncEnabled,
       studentInteractionAllowed: room.studentInteractionAllowed,
+      studentCalculatorAllowed: room.studentCalculatorAllowed,
       // So a student joining or reconnecting mid-share knows to expect the
       // tutor's screen rather than the lesson.
       teacherScreenOn: room.teacherScreenOn,
@@ -1232,7 +1241,7 @@ async function startServer() {
   const MUTATING_EVENTS = new Set<string>([
     'set_room_password', 'upload_file', 'update_file', 'delete_file', 'switch_file',
     'run_preview', 'sync_html_update', 'dom_snapshot',
-    'toggle_scroll_sync', 'toggle_student_interaction', 'zoom_changed',
+    'toggle_scroll_sync', 'toggle_student_interaction', 'toggle_student_calculator', 'zoom_changed',
     'draw_stroke', 'draw_delete_stroke', 'draw_clear',
     'whiteboard_draw', 'whiteboard_set_image', 'whiteboard_add_image',
     'whiteboard_update_object', 'whiteboard_remove_object',
@@ -1269,6 +1278,11 @@ async function startServer() {
     // while new rooms behaved differently. A tutor who deliberately switched
     // interaction OFF stored an explicit false, and that is still honoured.
     room.studentInteractionAllowed = raw.studentInteractionAllowed !== false;
+    // `=== true`, not `!== false`: a room saved before this field existed
+    // has no opinion, and the safe reading of "no opinion" is that the tutor
+    // never handed a calculator over. The line above defaults the other way
+    // for the opposite reason — rooms predate it and were already interactive.
+    room.studentCalculatorAllowed = raw.studentCalculatorAllowed === true;
     room.password = raw.password || null;
     room.scores = raw.scores || {};
     room.revision = raw.revision || 0;
@@ -1634,6 +1648,7 @@ async function startServer() {
       isPaused: room.isPaused,
       scrollSyncEnabled: room.scrollSyncEnabled,
       studentInteractionAllowed: room.studentInteractionAllowed,
+      studentCalculatorAllowed: room.studentCalculatorAllowed,
       currentStep: room.currentStep,
       gates: room.gates,
       tempContent: room.tempContent,
@@ -2166,6 +2181,7 @@ async function startServer() {
         isPaused: room.isPaused,
         scrollSyncEnabled: room.scrollSyncEnabled,
         studentInteractionAllowed: room.studentInteractionAllowed,
+        studentCalculatorAllowed: room.studentCalculatorAllowed,
         currentStep: room.currentStep,
         gates: role === 'teacher' ? room.gates : sanitizeGatesForStudent(room.gates),
         revision: room.revision,
@@ -2673,6 +2689,21 @@ Build a widget that teaches: ${safePrompt}`;
       io.to(roomId).emit('student_interaction_changed', { allowed, revision });
       // No broadcastFullState — see comment in toggle_scroll_sync above.
       console.log(`${allowed ? '🖐️' : '👁️'} Room ${roomId}: Student interaction ${allowed ? 'enabled' : 'disabled (view-only)'}`);
+    });
+
+    // Hand the students a calculator, or take it back.
+    //
+    // Its own toggle rather than a rider on interaction, because they are
+    // different teaching decisions and often opposite ones: a tutor teaching
+    // construction hands over the compass and keeps the calculator away, and a
+    // tutor doing a long division check does the reverse.
+    socket.on('toggle_student_calculator', ({ roomId, allowed }: { roomId: string; allowed: boolean }) => {
+      const room = rooms.get(roomId);
+      if (!requireTeacher(room, socket.id)) return;
+      room.studentCalculatorAllowed = !!allowed;
+      const revision = bumpRevision(room);
+      io.to(roomId).emit('student_calculator_changed', { allowed: !!allowed, revision });
+      console.log(`${allowed ? '🧮' : '🚫'} Room ${roomId}: Student calculator ${allowed ? 'allowed' : 'taken away'}`);
     });
 
     // ─── RESET VIEW (scroll everyone to top) ───

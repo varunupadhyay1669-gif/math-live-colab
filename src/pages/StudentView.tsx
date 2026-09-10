@@ -11,6 +11,7 @@ import { socketAuth, isPasscodeError, refusePasscode, apiFetch } from "../lib/pa
 import { ScreenPeer, screenShareSupported, displayCaptureOptions } from "../lib/screenShare";
 import ScreenSharePrompt from "../components/ScreenSharePrompt";
 import TeacherScreenView from "../components/TeacherScreenView";
+import Calculator from "../components/Calculator";
 import BeamView from "../components/BeamView";
 import { sounds } from "../lib/sounds";
 import { LESSON_IFRAME_SANDBOX_VIEW_ONLY, LESSON_IFRAME_ALLOW } from "../lib/iframeAttrs";
@@ -378,6 +379,12 @@ export default function StudentView() {
 
   // ── Student Interaction Mode ──
   const [interactionAllowed, setInteractionAllowed] = useState(false);
+  // The calculator the tutor may hand over. Two flags, not one: `allowed` is
+  // the permission and `open` is only where it sits on screen, so taking it
+  // back really removes it rather than hiding it behind a button the student
+  // could press again.
+  const [calculatorAllowed, setCalculatorAllowed] = useState(false);
+  const [calculatorOpen, setCalculatorOpen] = useState(false);
   // ── Control grant ("the chalk") ──
   // The teacher can hand exclusive drive rights to ONE student. When this
   // student holds it, their interactions drive the shared sim even if the
@@ -515,6 +522,12 @@ export default function StudentView() {
     if (typeof state.isPaused === 'boolean') setIsPaused(state.isPaused);
     if (typeof state.scrollSyncEnabled === 'boolean') setScrollSyncEnabled(state.scrollSyncEnabled);
     if (typeof state.studentInteractionAllowed === 'boolean') setInteractionAllowed(state.studentInteractionAllowed);
+    // Applied on JOIN as well as on change, or a student arriving after the
+    // tutor handed it over would sit there without one.
+    if (typeof state.studentCalculatorAllowed === 'boolean') {
+      setCalculatorAllowed(state.studentCalculatorAllowed);
+      if (state.studentCalculatorAllowed) setCalculatorOpen(true);
+    }
     if (typeof state.currentStep === 'number') setCurrentStep(state.currentStep);
     if (typeof state.zoomLevel === 'number') setZoomLevel(state.zoomLevel);
     if (state.gates && typeof state.gates === 'object') setGates(state.gates);
@@ -767,6 +780,12 @@ export default function StudentView() {
       setIsPaused(state.isPaused);
       if (typeof state.scrollSyncEnabled === 'boolean') setScrollSyncEnabled(state.scrollSyncEnabled);
       if (typeof state.studentInteractionAllowed === 'boolean') setInteractionAllowed(state.studentInteractionAllowed);
+      // Applied on JOIN as well as on change, or a student arriving after the
+      // tutor handed it over would sit there without one.
+      if (typeof state.studentCalculatorAllowed === 'boolean') {
+        setCalculatorAllowed(state.studentCalculatorAllowed);
+        if (state.studentCalculatorAllowed) setCalculatorOpen(true);
+      }
       if (typeof state.currentStep === 'number') setCurrentStep(state.currentStep);
       setChatMessages(state.chat || []);
       if (typeof state.revision === 'number') lastRevisionRef.current = state.revision;
@@ -1132,6 +1151,18 @@ export default function StudentView() {
     newSocket.on("scroll_sync_changed", ({ enabled }: { enabled: boolean }) => {
       setScrollSyncEnabled(enabled);
       showNotification(enabled ? '🔗 Scroll sync enabled' : '🔓 Free scroll — you can scroll independently');
+    });
+
+    // ── The calculator the tutor may hand over ──
+    // Separate from interaction on purpose: a tutor teaching construction
+    // hands over the compass and keeps the calculator away; one checking a
+    // long division does the reverse.
+    newSocket.on("student_calculator_changed", ({ allowed }: { allowed: boolean }) => {
+      setCalculatorAllowed(!!allowed);
+      // Opened for them when it arrives: a permission a child has to go
+      // hunting for is one they will not find mid-question.
+      setCalculatorOpen(!!allowed);
+      showNotification(allowed ? '🧮 Your teacher gave you a calculator' : '🚫 Calculator closed by your teacher');
     });
 
     // ── Student Interaction Mode ──
@@ -1774,6 +1805,12 @@ export default function StudentView() {
       {teacherScreen && (
         <TeacherScreenView stream={teacherScreen} teacherName={teacherScreenName} />
       )}
+      <Calculator
+        open={calculatorOpen && calculatorAllowed}
+        canUse={calculatorAllowed}
+        onClose={() => setCalculatorOpen(false)}
+        title="Calculator"
+      />
       {beamFrame && (
         <BeamView src={beamFrame.data} at={beamFrame.at} teacherName={beamTeacherName}
           label={beamLabelText} onRequestFrame={requestBeamFrame} />

@@ -32,6 +32,10 @@ interface TeacherControlsProps {
   onToggleScrollSync: () => void;
   studentInteractionAllowed: boolean;
   onToggleStudentInteraction: () => void;
+  calculatorOpen: boolean;
+  onToggleCalculator: () => void;
+  studentCalculatorAllowed: boolean;
+  onToggleStudentCalculator: () => void;
   onResetView: () => void;
   onAttentionCheck: () => void;
   // Zoom sync
@@ -95,6 +99,8 @@ export default function TeacherControls({
   lastSyncTime, onOpenQuiz, onSendReaction,
   scrollSyncEnabled, onToggleScrollSync,
   studentInteractionAllowed, onToggleStudentInteraction,
+  calculatorOpen, onToggleCalculator,
+  studentCalculatorAllowed, onToggleStudentCalculator,
   onResetView, onAttentionCheck,
   zoomLevel, onZoomIn, onZoomOut, onZoomReset,
   onHardReset, leaderboardCount, onToggleLeaderboard,
@@ -303,6 +309,35 @@ export default function TeacherControls({
         <div className="toolbar-divider" />
 
         {/* ── Student Controls ── */}
+        {/* The tutor's own calculator. */}
+        <button onClick={onToggleCalculator}
+          className={`tb-btn-label ${calculatorOpen ? 'active-emerald' : ''}`}
+          data-testid="calculator-button"
+          data-tip={calculatorOpen ? 'Close the calculator' : 'Calculator — basic and scientific'}>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+            <rect x="4" y="3" width="16" height="18" rx="2" /><path d="M8 7h8" />
+            <path d="M8 12h.01M12 12h.01M16 12h.01M8 16h.01M12 16h.01M16 16h.01" />
+          </svg>
+          <span className="tb-label-text">Calc</span>
+        </button>
+
+        {/* And whether the student has one. Beside the interaction toggle
+            because both answer the same question — what may the student do —
+            and separate from it because they are opposite decisions as often as
+            they are the same one. */}
+        <button onClick={onToggleStudentCalculator}
+          className={`tb-btn-label ${studentCalculatorAllowed ? 'active-emerald' : ''}`}
+          data-testid="student-calculator-toggle"
+          data-tip={studentCalculatorAllowed
+            ? 'Your student has a calculator — click to take it back'
+            : 'Give your student a calculator'}>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+            <rect x="4" y="3" width="16" height="18" rx="2" /><path d="M8 7h8" />
+            <path d="M9 15l6-4M9 11l6 4" />
+          </svg>
+          <span className="tb-label-text">{studentCalculatorAllowed ? 'Student calc' : 'No student calc'}</span>
+        </button>
+
         <button onClick={onToggleStudentInteraction}
           className={`tb-btn-label ${studentInteractionAllowed ? 'active-emerald' : ''}`}
           data-tip={studentInteractionAllowed ? 'Students can interact — click for view-only' : 'View-only mode — click to allow interaction'}>

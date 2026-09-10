@@ -187,6 +187,11 @@ export interface Token {
   value: number;
   /** Where it starts in the source, so an error can point at it. */
   at: number;
+  /**
+   * Written as a symbol that already means "of what follows" — `√`. It takes
+   * its value without brackets, the way it does on paper.
+   */
+  bare?: boolean;
 }
 
 // The characters a tutor actually produces. `×` and `÷` come off the iPad
@@ -252,12 +257,19 @@ export function tokenize(src: string): Token[] {
 
     if (isLetter(ch)) {
       const start = i;
+      // A symbol standing in for a whole name — π, τ, √ — ends where it begins.
+      // Scanning on would read `√16` as one name, `sqrt16`, and answer a tutor's
+      // own handwriting with "I don't know what that is".
+      if (alias) {
+        i++;
+        tokens.push({ kind: 'name', text: alias, value: 0, at: start, bare: raw === '√' });
+        continue;
+      }
       // Digits are allowed after the first letter so that `log2` is one name.
       // Names are never split into letters either: `xy` is one unknown name and
       // is reported as one, because a rule that split it would also turn `ans`
       // into a × n × s and quietly answer a question nobody asked.
       let text = '';
-      if (alias) { text = alias; i++; }
       while (i < src.length && (isLetter(src[i]) || isDigit(src[i]))) { text += src[i]; i++; }
       tokens.push({ kind: 'name', text: text.toLowerCase(), value: 0, at: start });
       continue;
@@ -448,6 +460,11 @@ class Parser {
 
   private call(name: Token, spec: FnSpec): ExprNode {
     if (!this.isOp('(')) {
+      // `√16`. The radical sign already says "of what follows", so it takes a
+      // unary — which makes √16+9 thirteen and √-4 undefined, both of which are
+      // what the same marks mean written by hand. Every spelled-out function
+      // still needs its brackets, because `sin 2x` has no such agreed reading.
+      if (name.bare) return { t: 'call', name: name.text, args: [this.unary()] };
       throw new ExpressionError(`${name.text} needs brackets, like ${name.text}(30)`, name.at);
     }
     this.take();
@@ -593,7 +610,13 @@ export function freeVariables(ast: ExprNode): string[] {
 
 // `x2` is somebody reaching for x², and telling him so is the difference
 // between a calculator that helps and one that sulks.
+//
+// `1e3` gets its own sentence. `e` is Euler's number here and always, so the
+// digits after it become a name of their own — and a tutor who meant a thousand
+// needs to be told how to write a thousand, not offered e³.
 function unknownName(name: string): string {
+  const scientific = /^e(\d+)$/.exec(name);
+  if (scientific) return `I don't know what '${name}' is — e is 2.718…, so for scientific notation write 10^${scientific[1]}`;
   const squared = /^([a-z])(\d+)$/.exec(name);
   if (squared) return `I don't know what '${name}' is — did you mean ${squared[1]}^${squared[2]}?`;
   return `I don't know what '${name}' is`;

@@ -433,6 +433,45 @@ test.describe('the mirror', () => {
     await learner.close();
   });
 
+  test('the tutor can hand a calculator to the learner, and take it back', async ({ browser }) => {
+    // "different calculator options for the teacher and if he want for the
+    // students also." The "if he want" is the whole feature: a calculator that
+    // is simply there would be wrong in half of his lessons, because mental
+    // arithmetic is the thing being taught.
+    const code = room('calc');
+    const teacher = await (await browser.newContext()).newPage();
+    const learner = await (await browser.newContext()).newPage();
+
+    await teacher.goto(`${BASE}/room/${code}?name=Teacher`);
+    await learner.goto(`${BASE}/live/${code}?name=Learner`);
+    await expect(learner.getByText(/INTERACTIVE|FOLLOWING TEACHER/)).toBeVisible({ timeout: 20_000 });
+
+    // The tutor's own calculator opens for the tutor and NOT for the learner.
+    await teacher.getByTestId('calculator-button').click();
+    await expect(teacher.getByTestId('calculator-panel')).toBeVisible({ timeout: 10_000 });
+    await expect(learner.getByTestId('calculator-panel')).toBeHidden();
+
+    // Hand one over.
+    await teacher.getByTestId('student-calculator-toggle').click();
+    await expect(learner.getByTestId('calculator-panel'),
+      'the learner was given a calculator and never received it').toBeVisible({ timeout: 20_000 });
+
+    // It has to WORK on their side, not merely appear.
+    await learner.getByTestId('calculator-input').fill('12*12');
+    await expect.poll(async () => learner.getByTestId('calculator-result').textContent(), {
+      timeout: 10_000,
+      message: "the learner's calculator did not compute",
+    }).toContain('144');
+
+    // And taking it back must remove it, not just close it — otherwise a child
+    // reopens it during the mental-arithmetic drill it was taken away for.
+    await teacher.getByTestId('student-calculator-toggle').click();
+    await expect(learner.getByTestId('calculator-panel')).toBeHidden({ timeout: 20_000 });
+
+    await teacher.close();
+    await learner.close();
+  });
+
   test('a hostile lesson does not run on the learner', async ({ browser }) => {
     const code = room('b');
     const teacher = await (await browser.newContext()).newPage();
