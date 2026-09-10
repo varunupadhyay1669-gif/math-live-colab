@@ -472,6 +472,87 @@ test.describe('the mirror', () => {
     await learner.close();
   });
 
+  test('an SVG the lesson draws with script reaches the learner', async ({ browser }) => {
+    // Reported 10 Sep 2026 with two photographs: "the student cannot see the
+    // animation. He can see the slider but cannot see the animation."
+    //
+    // The lesson is a matchstick simulator whose <svg> is EMPTY in the uploaded
+    // file and filled entirely by script — createElementNS('…/svg', 'line') on
+    // every slider move. The learner runs no lesson script by design, so those
+    // elements can only ever arrive through the mirror. Everything else on that
+    // page — the slider, the stat cards, the styling — is in the source file,
+    // which is exactly why the rest looked perfect and only the drawing was
+    // missing.
+    const code = room('svg');
+    const teacher = await (await browser.newContext()).newPage();
+    const learner = await (await browser.newContext()).newPage();
+
+    await teacher.goto(`${BASE}/room/${code}?name=Teacher`);
+    await runLesson(teacher, `<!doctype html><html><body>
+      <style>
+        :root { --match-wood: #d97706; --match-head: #dc2626; }
+        .match-line { stroke: var(--match-wood); stroke-width: 5; stroke-linecap: round; }
+        .match-head { fill: var(--match-head); r: 4; }
+      </style>
+      <h1 id="t">Matchsticks</h1>
+      <div class="lab-stage">
+        <svg id="lab" width="300" height="90" viewBox="0 0 300 90"><!-- filled by script --></svg>
+      </div>
+      <p id="count">0</p>
+      <button id="more">more</button>
+      <script>
+        var svg = document.getElementById('lab');
+        function draw(n) {
+          svg.innerHTML = '';
+          for (var i = 0; i < n; i++) {
+            var g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+            var line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+            line.setAttribute('x1', 10 + i * 30); line.setAttribute('y1', 20);
+            line.setAttribute('x2', 10 + i * 30); line.setAttribute('y2', 70);
+            line.setAttribute('class', 'match-line');
+            g.appendChild(line);
+            svg.appendChild(g);
+          }
+          document.getElementById('count').textContent = String(n);
+        }
+        var n = 3; draw(n);
+        document.getElementById('more').onclick = function () { draw(++n); };
+      </script>
+    </body></html>`);
+    const src = await lessonFrame(teacher, 'Matchsticks');
+    expect(await src.locator('#lab line').count(), 'the lesson did not draw on the teacher').toBe(3);
+
+    await learner.goto(`${BASE}/live/${code}?name=Learner`);
+    const fol = await lessonFrame(learner, 'Matchsticks');
+
+    // The drawing itself, on the learner. This is the whole report.
+    await expect.poll(async () => fol.locator('#lab line').count(), {
+      timeout: 20_000,
+      message: 'the learner has the SVG box and none of the matchsticks in it',
+    }).toBe(3);
+
+    // And it must keep up when the teacher changes it, or the learner is left
+    // looking at a drawing from earlier in the lesson.
+    await src.locator('#more').click();
+    await expect.poll(async () => fol.locator('#lab line').count(), {
+      timeout: 20_000,
+      message: "the learner's drawing did not follow the teacher's",
+    }).toBe(4);
+
+    // Painted, not merely present: an SVG element in the wrong namespace sits
+    // in the DOM and renders nothing, which looks identical to this bug.
+    const painted = await fol.locator('#lab line').first().evaluate((el) => {
+      const r = el.getBoundingClientRect();
+      return { ns: el.namespaceURI, w: r.width, h: r.height };
+    });
+    expect(painted.ns, 'the line is in the HTML namespace, so it will never render')
+      .toBe('http://www.w3.org/2000/svg');
+    expect(painted.h, 'the line occupies no space on screen').toBeGreaterThan(0);
+
+    await teacher.close();
+    await learner.close();
+  });
+
   test('a hostile lesson does not run on the learner', async ({ browser }) => {
     const code = room('b');
     const teacher = await (await browser.newContext()).newPage();

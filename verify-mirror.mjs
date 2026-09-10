@@ -317,6 +317,46 @@ section('OFFLINE — a frame belongs to ONE canvas');
     'a repaint clears too');
 }
 
+section('OFFLINE — a learner with an empty screen keeps asking');
+{
+  // Reported 10 Sep 2026 with photographs: "the student cannot see the
+  // animation. He can see the slider but cannot see the animation." That lesson
+  // draws its matchsticks with script into an <svg> that is EMPTY in the
+  // uploaded file, so a learner who never receives a frame sees the entire page
+  // — nav, slider, stat cards — with one empty box where the teaching is.
+  //
+  // The mirror delivers that lesson correctly: reproduced end to end in
+  // Chromium and in WebKit, with a second viewer joining, and the learner
+  // received every matchstick. The learner in the report was simply never given
+  // a frame, and could not tell, because the only staleness check compares the
+  // teacher's fingerprint — which arrives down the very channel that can stick.
+  const followerJs = mirrorScriptFor('follower')
+    .replace(/^[\s\S]*?<script[^>]*>/i, '').replace(/<\/script>[\s\S]*$/i, '');
+  const dom = new JSDOM('<!doctype html><html><body><p>the shell</p></body></html>',
+    { runScripts: 'outside-only', pretendToBeVisual: true });
+  const { window } = dom;
+  const sent = [];
+  window.parent = { postMessage: (m) => sent.push(m && m.type) };
+  window.eval(followerJs);
+
+  assert(sent.includes('MIRROR_FOLLOWER_READY'), 'it announces itself once at boot');
+
+  // The upward channel is never gated on readiness, which is what makes this
+  // rescue possible at all — a follower being told nothing can still shout.
+  const src = readFileSync('src/lib/mirrorScript.ts', 'utf8');
+  const rescue = src.slice(src.indexOf('function askForSomethingToPaint'), src.indexOf('function askForSomethingToPaint') + 900);
+  assert(/if \(lastBody !== null\) return;/.test(rescue),
+    'it stops the moment anything is painted',
+    'a learner who can see the lesson must not keep asking for it');
+  assert(/MIRROR_FOLLOWER_READY/.test(rescue) && /MIRROR_STALE/.test(rescue),
+    'it asks for a frame AND re-announces',
+    'the announce is what makes the parent flush a queue it was holding — that was the 4 Sep freeze');
+  assert(/asksLeft-- <= 0/.test(rescue),
+    'it gives up eventually',
+    'a message every two seconds for the rest of a lesson is noise on top of a problem');
+  assert(/Math\.min\(askDelay \* 1\.5, 10000\)/.test(rescue), 'and backs off while it tries');
+}
+
 section('OFFLINE — a frame that did not paint is not recorded as painted');
 {
   // 4 Sep 2026, from a live class: the student sat on the previous page of the

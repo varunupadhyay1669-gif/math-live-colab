@@ -5293,6 +5293,52 @@ export default function Room() {
         />
       )}
 
+      {/* THE STUDENT'S SCREEN IS BEHIND, said where a tutor will see it.
+          
+          10 Sep 2026: a student sat looking at an empty box for a whole lesson
+          and the only way to find out was for him to say so out loud. The room
+          already knew — every learner acks the frame they painted and the
+          server forwards it — but the only place it was shown was inside the
+          participants dropdown, a panel nobody has open while teaching.
+          
+          Same failure as the beam before it had a status pill, and as healthz
+          before it could see the database: the information existed and nobody
+          was told. So it comes to the front, it names the child, and it offers
+          the repair that already existed rather than describing the problem. */}
+      {(() => {
+        const stuck = users
+          .filter(u => u.role === 'student')
+          .map(u => ({ u, s: syncStatus[u.id] }))
+          // 12s, comfortably past the ~2s ping and the 7s the participants list
+          // treats as merely quiet — this pill must never cry wolf mid-lesson.
+          .filter(x => x.s && (Date.now() - x.s.at > 12_000 || !x.s.ok));
+        if (stuck.length === 0) return null;
+        const names = stuck.map(x => x.u.name).join(', ');
+        const worst = Math.max(...stuck.map(x => Math.round((Date.now() - x.s!.at) / 1000)));
+        return (
+          <div className="fixed bottom-3 left-1/2 -translate-x-1/2 z-[68] select-none"
+            data-testid="sync-warning"
+            style={{
+              display: 'flex', alignItems: 'center', gap: 10, maxWidth: 460,
+              background: 'rgba(190,18,60,0.96)', color: '#fff', borderRadius: 12,
+              padding: '10px 14px', boxShadow: 'var(--shadow-lg)', fontSize: 13, fontWeight: 600,
+            }}>
+            <span style={{ fontSize: 15 }}>⚠️</span>
+            <div style={{ flex: 1, minWidth: 0, lineHeight: 1.4 }}>
+              {names} {stuck.length === 1 ? 'is' : 'are'} not seeing your screen
+              {worst > 12 ? ` — ${worst > 60 ? 'over a minute' : worst + ' seconds'} behind` : ''}.
+            </div>
+            <button
+              className="ml-admin-btn"
+              onClick={() => stuck.forEach(x => resyncStudent(x.u.id, x.u.name))}
+              style={{ background: 'rgba(255,255,255,0.18)', color: '#fff', border: 0,
+                       borderRadius: 8, padding: '5px 10px', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>
+              Resend
+            </button>
+          </div>
+        );
+      })()}
+
       {/* Rendered ALWAYS, not behind `calculatorOpen &&`. It returns null when
           closed, so mounting it once keeps the tape and the memory across a
           mid-lesson close — a tutor who shuts it to see the board and reopens

@@ -1552,6 +1552,54 @@ export const mirrorScript = `
     else document.addEventListener('DOMContentLoaded', function () { sanitizeInto(document.body); });
   } catch (e) {}
   post({ type: 'MIRROR_FOLLOWER_READY' });
+
+  // KEEP ASKING UNTIL SOMETHING ARRIVES.
+  //
+  // Reported 10 Sep 2026, with photographs: "the student cannot see the
+  // animation. He can see the slider but cannot see the animation." His lesson
+  // draws its matchsticks with script into an <svg> that is EMPTY in the
+  // uploaded file, so a learner who never receives a mirrored frame sees the
+  // whole page — nav, slider, stat cards, all of it in the source — with one
+  // empty box where the teaching is. Everything looked fine except the part
+  // that mattered.
+  //
+  // The mirror delivers that lesson correctly; it was reproduced end to end in
+  // Chromium AND WebKit, with a second viewer joining, and the learner got all
+  // of it. So the frames were not being dropped in transit — that learner was
+  // simply never given one.
+  //
+  // The trouble is that until now this agent could only NOTICE that by
+  // comparing the teacher's fingerprint against its own, and the fingerprint
+  // arrives down the same parent-to-iframe channel as everything else. If that
+  // channel is stuck — as it was on 4 Sep, when a queue nobody flushed held
+  // every frame — the follower is told nothing, detects nothing, and waits for
+  // ever, in silence, looking exactly like a working one.
+  //
+  // The channel UPWARD is never gated: window.parent.postMessage always
+  // arrives, and the relay forwards MIRROR_FOLLOWER_READY and MIRROR_STALE
+  // without consulting any readiness flag. So a follower that has never painted
+  // can still shout, and shouting does two useful things at once — it asks the
+  // teacher for a snapshot, and the READY message makes the parent mark this
+  // frame ready and flush whatever it was holding.
+  //
+  // Stops the moment anything is painted. Backs off from 2s to 10s and gives up
+  // after two minutes, because a learner who is still empty then has a problem
+  // this cannot fix and a message every two seconds for the rest of the lesson
+  // would only add noise to it.
+  var askDelay = 2000, asksLeft = 24;
+  function askForSomethingToPaint() {
+    if (lastBody !== null) return;             // painted: nothing to rescue
+    if (asksLeft-- <= 0) {
+      try { console.warn('[mirror] still nothing to paint after two minutes — giving up asking'); } catch (e) {}
+      return;
+    }
+    try { console.warn('[mirror] nothing painted yet — asking again'); } catch (e) {}
+    post({ type: 'MIRROR_FOLLOWER_READY' });
+    post({ type: 'MIRROR_STALE' });
+    askDelay = Math.min(askDelay * 1.5, 10000);
+    setTimeout(askForSomethingToPaint, askDelay);
+  }
+  setTimeout(askForSomethingToPaint, askDelay);
 })();
 </script>
 `;
