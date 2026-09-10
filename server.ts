@@ -3019,7 +3019,7 @@ Build a widget that teaches: ${safePrompt}`;
     // ─── WHITEBOARD: SHAPES ───
     socket.on('whiteboard_add_shape', ({ roomId, shape }: any) => {
       const room = rooms.get(roomId);
-      if (!requireTeacher(room, socket.id) || !shape || typeof shape.id !== 'string') return;
+      if (!requireTeacherOrInteractive(room, socket.id) || !shape || typeof shape.id !== 'string') return;
       // Avoid duplicates if the same shape arrives twice
       if (room.whiteboard.shapes.some((s: any) => s.id === shape.id)) return;
       upsertById(room.whiteboard.shapes, shape);
@@ -3030,14 +3030,14 @@ Build a widget that teaches: ${safePrompt}`;
 
     socket.on('whiteboard_update_shape', ({ roomId, shape }: any) => {
       const room = rooms.get(roomId);
-      if (!requireTeacher(room, socket.id) || !shape || typeof shape.id !== 'string') return;
+      if (!requireTeacherOrInteractive(room, socket.id) || !shape || typeof shape.id !== 'string') return;
       room.whiteboard.shapes = room.whiteboard.shapes.map((s: any) => s.id === shape.id ? shape : s);
       socket.to(roomId).emit('whiteboard_update_shape', { shape });
     });
 
     socket.on('whiteboard_remove_shape', ({ roomId, shapeId }: { roomId: string; shapeId: string }) => {
       const room = rooms.get(roomId);
-      if (!requireTeacher(room, socket.id) || typeof shapeId !== 'string') return;
+      if (!requireTeacherOrInteractive(room, socket.id) || typeof shapeId !== 'string') return;
       room.whiteboard.shapes = room.whiteboard.shapes.filter((s: any) => s.id !== shapeId);
       io.to(roomId).emit('whiteboard_remove_shape', { shapeId });
     });
@@ -3056,7 +3056,7 @@ Build a widget that teaches: ${safePrompt}`;
     // the board. Capped to a sane limit to prevent runaway growth.
     socket.on('whiteboard_add_instrument', ({ roomId, instrument }: any) => {
       const room = rooms.get(roomId);
-      if (!requireTeacher(room, socket.id) || !instrument || typeof instrument.id !== 'string') return;
+      if (!requireTeacherOrInteractive(room, socket.id) || !instrument || typeof instrument.id !== 'string') return;
       if (!Array.isArray(room.whiteboard.instruments)) room.whiteboard.instruments = [];
       if (room.whiteboard.instruments.some((i: any) => i.id === instrument.id)) return;
       upsertById(room.whiteboard.instruments, instrument);
@@ -3068,7 +3068,7 @@ Build a widget that teaches: ${safePrompt}`;
 
     socket.on('whiteboard_update_instrument', ({ roomId, instrument }: any) => {
       const room = rooms.get(roomId);
-      if (!requireTeacher(room, socket.id) || !instrument || typeof instrument.id !== 'string') return;
+      if (!requireTeacherOrInteractive(room, socket.id) || !instrument || typeof instrument.id !== 'string') return;
       if (!Array.isArray(room.whiteboard.instruments)) room.whiteboard.instruments = [];
       room.whiteboard.instruments = room.whiteboard.instruments.map((i: any) => i.id === instrument.id ? instrument : i);
       socket.to(roomId).emit('whiteboard_update_instrument', { instrument });
@@ -3076,7 +3076,7 @@ Build a widget that teaches: ${safePrompt}`;
 
     socket.on('whiteboard_remove_instrument', ({ roomId, instrumentId }: { roomId: string; instrumentId: string }) => {
       const room = rooms.get(roomId);
-      if (!requireTeacher(room, socket.id) || typeof instrumentId !== 'string') return;
+      if (!requireTeacherOrInteractive(room, socket.id) || typeof instrumentId !== 'string') return;
       if (!Array.isArray(room.whiteboard.instruments)) room.whiteboard.instruments = [];
       room.whiteboard.instruments = room.whiteboard.instruments.filter((i: any) => i.id !== instrumentId);
       io.to(roomId).emit('whiteboard_remove_instrument', { instrumentId });
@@ -3108,7 +3108,7 @@ Build a widget that teaches: ${safePrompt}`;
 
     socket.on('whiteboard_add_text', ({ roomId, text }: any) => {
       const room = rooms.get(roomId);
-      if (!requireTeacher(room, socket.id) || !text || typeof text.id !== 'string' || typeof text.text !== 'string') return;
+      if (!requireTeacherOrInteractive(room, socket.id) || !text || typeof text.id !== 'string' || typeof text.text !== 'string') return;
       if (!Array.isArray(room.whiteboard.texts)) room.whiteboard.texts = [];
       if (room.whiteboard.texts.some((t: any) => t.id === text.id)) return;
       // Cap individual text length so no single label can be megabytes.
@@ -3123,7 +3123,7 @@ Build a widget that teaches: ${safePrompt}`;
 
     socket.on('whiteboard_update_text', ({ roomId, text }: any) => {
       const room = rooms.get(roomId);
-      if (!requireTeacher(room, socket.id) || !text || typeof text.id !== 'string') return;
+      if (!requireTeacherOrInteractive(room, socket.id) || !text || typeof text.id !== 'string') return;
       if (!Array.isArray(room.whiteboard.texts)) room.whiteboard.texts = [];
       if (typeof text.text === 'string' && text.text.length > MAX_TEXT_LENGTH) {
         text.text = text.text.slice(0, MAX_TEXT_LENGTH);
@@ -3135,7 +3135,7 @@ Build a widget that teaches: ${safePrompt}`;
 
     socket.on('whiteboard_remove_text', ({ roomId, textId }: { roomId: string; textId: string }) => {
       const room = rooms.get(roomId);
-      if (!requireTeacher(room, socket.id) || typeof textId !== 'string') return;
+      if (!requireTeacherOrInteractive(room, socket.id) || typeof textId !== 'string') return;
       if (!Array.isArray(room.whiteboard.texts)) room.whiteboard.texts = [];
       room.whiteboard.texts = room.whiteboard.texts.filter((t: any) => t.id !== textId);
       io.to(roomId).emit('whiteboard_remove_text', { textId });

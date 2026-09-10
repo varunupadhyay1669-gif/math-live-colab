@@ -746,6 +746,57 @@ section('OFFLINE — a class keeps its last lesson, and nothing else for long');
     'behind the gate it would run once a day at 9am, or on a day the process restarted after that, never');
 }
 
+section('OFFLINE — a student handed the controls can construct, but not wipe');
+{
+  // 10 Sep 2026. The founder asked for "protractor and compass … and if he want
+  // for the students also", and the geometry tools turned out to exist already
+  // — verified by driving them in a browser: the compass draws a centre-out
+  // circle with a centre mark, the protractor drops with its degree scale.
+  //
+  // What did not exist was a learner being able to touch any of it. Images
+  // accepted a student whenever the tutor had turned interaction on; shapes,
+  // text and the instruments required a teacher on BOTH sides. So "now you
+  // construct the perpendicular bisector" was impossible, which is most of what
+  // a geometry lesson is.
+  const srv = readFileSync('server.ts', 'utf8');
+  const guardFor = (ev) => {
+    const i = srv.indexOf(`socket.on('${ev}'`);
+    if (i < 0) return 'MISSING';
+    const m = /requireTeacher[A-Za-z]*/.exec(srv.slice(i, i + 700));
+    return m ? m[0] : 'NONE';
+  };
+
+  // Handed over with the tutor's existing interaction toggle.
+  for (const ev of ['whiteboard_add_shape', 'whiteboard_update_shape', 'whiteboard_remove_shape',
+                    'whiteboard_add_text', 'whiteboard_add_instrument', 'whiteboard_update_instrument',
+                    'whiteboard_remove_instrument']) {
+    assert(guardFor(ev) === 'requireTeacherOrInteractive',
+      `${ev} follows the interaction toggle`,
+      `it is ${guardFor(ev)} — a learner cannot construct even when handed the controls`);
+  }
+
+  // Never handed over. These are not construction, they are destruction and
+  // room-wide settings, and a student reaching them would wipe a lesson.
+  for (const ev of ['whiteboard_clear', 'whiteboard_reset', 'whiteboard_set_grid_mode']) {
+    assert(guardFor(ev) === 'requireTeacher',
+      `${ev} stays with the teacher`,
+      `it is ${guardFor(ev)} — a student could clear everyone's board`);
+  }
+
+  // The two sides must agree, or the tools appear and then silently do nothing
+  // — which is worse than not showing them.
+  const wb = readFileSync('src/components/Whiteboard.tsx', 'utf8');
+  assert(/const canMutateBoard = isTeacher \|\| interactive;/.test(wb),
+    'the client uses one permission for the whole board');
+  assert(/visibleTools = \(isTeacher \|\| interactive\)/.test(wb),
+    'and shows the geometry tools to a student who may use them');
+  assert(!/isTeacher\) socket\.emit\('whiteboard_(add|update|remove)_(shape|text|instrument)'/.test(wb),
+    'no board mutation is still gated on isTeacher alone',
+    'the server would accept it and the client would never send it');
+  assert(/isTeacher\) socket\.emit\('whiteboard_clear'/.test(wb),
+    'clearing the board is still the teacher alone on the client too');
+}
+
 section('OFFLINE — nothing a room holds may grow without a ceiling');
 {
   // The generalisation of the crash week, written so the next one is caught by
@@ -1731,6 +1782,51 @@ if (!PORT) {
   const status = await statusP.catch(() => null);
   assert(status && status.ok === true, "a student's ack reaches the teacher as status",
     status ? JSON.stringify(status) : 'no mirror_status');
+
+  section('LIVE — a student may construct, and may not wipe');
+  {
+    // The permission half of "and if he want for the students also", asserted
+    // against the real server rather than against the source. A tool that
+    // appears on the learner's screen and is then silently refused is worse
+    // than one that never appeared.
+    const gRoom = 'gm' + Math.random().toString(36).slice(2, 8);
+    const t = connect();
+    await waitFor(t, 'connect');
+    t.emit('join_room', { roomId: gRoom, userName: 'T', role: 'teacher' });
+    await waitFor(t, 'session_state', { timeout: 4000 }).catch(() => null);
+
+    const stu = connect();
+    await waitFor(stu, 'connect');
+    stu.emit('join_room', { roomId: gRoom, userName: 'S', role: 'student' });
+    await waitFor(stu, 'session_state', { timeout: 4000 }).catch(() => null);
+
+    // The teacher puts something on the board first, so "the board was wiped"
+    // is distinguishable from "the board was always empty".
+    t.emit('whiteboard_add_shape', { roomId: gRoom, shape: { id: 'sh-teacher', kind: 'circle', x1: 0, y1: 0, x2: 5, y2: 5 } });
+    // Now the student constructs — a compass circle and a protractor.
+    stu.emit('whiteboard_add_shape', { roomId: gRoom, shape: { id: 'sh-student', kind: 'circle', x1: 1, y1: 1, x2: 4, y2: 4, centerMark: true } });
+    stu.emit('whiteboard_add_instrument', { roomId: gRoom, instrument: { id: 'in-student', kind: 'protractor', x: 10, y: 10, rotation: 0, radius: 240 } });
+    // And tries to wipe the room, which is not construction.
+    stu.emit('whiteboard_clear', { roomId: gRoom });
+    await new Promise(r => setTimeout(r, 500));
+
+    const j = connect();
+    await waitFor(j, 'connect');
+    j.emit('join_room', { roomId: gRoom, userName: 'S2', role: 'student' });
+    const st = await waitFor(j, 'session_state', { timeout: 4000 }).catch(() => null);
+    const wb = st && st.whiteboard ? st.whiteboard : {};
+
+    assert((wb.shapes || []).some(x => x && x.id === 'sh-student'),
+      "a student's compass circle reaches the room",
+      'the tool is on their screen; the server must accept what it draws');
+    assert((wb.instruments || []).some(x => x && x.id === 'in-student'),
+      "and so does a student's protractor");
+    assert((wb.shapes || []).some(x => x && x.id === 'sh-teacher'),
+      "the teacher's work is still there",
+      'the student asked the room to clear — that must have been refused');
+
+    [t, stu, j].forEach(x => x.close());
+  }
 
   section('LIVE — replaying a saved board does not double it');
   {

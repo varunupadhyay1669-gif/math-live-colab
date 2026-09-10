@@ -541,7 +541,14 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
     // Image content has a hard server-side size cap (6MB) added in the
     // autonomous improvement pass, so a misbehaving student can't spam
     // multi-MB blobs into canonical state.
-    const canMutateImages = isTeacher || interactive;
+    // May this person change the shared board at all — pictures, shapes, text,
+    // and the geometry instruments. The tutor always; a student when the tutor
+    // has turned interaction on. Named for the board rather than for images
+    // because as of 10 Sep 2026 it governs all of them: shapes, text and the
+    // compass/ruler/protractor used to be teacher-only on both sides, which
+    // left a learner unable to construct anything even when handed the
+    // controls.
+    const canMutateBoard = isTeacher || interactive;
 
     useEffect(() => {
       strokesRef.current = strokes;
@@ -654,7 +661,7 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
         setObjects(prev => prev.filter(o => !ids.has(o.id)));
         multiObjectIds.forEach(id => {
           imageCacheRef.current.delete(id);
-          if (socket && canMutateImages) socket.emit('whiteboard_remove_object', { roomId, objectId: id });
+          if (socket && canMutateBoard) socket.emit('whiteboard_remove_object', { roomId, objectId: id });
         });
       }
       if (multiShapeIds.length > 0) {
@@ -662,7 +669,7 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
         shapes.forEach(s => { if (ids.has(s.id)) removedShapes.push({ ...s }); });
         setShapes(prev => prev.filter(s => !ids.has(s.id)));
         multiShapeIds.forEach(id => {
-          if (socket && isTeacher) socket.emit('whiteboard_remove_shape', { roomId, shapeId: id });
+          if (socket && canMutateBoard) socket.emit('whiteboard_remove_shape', { roomId, shapeId: id });
         });
       }
       if (multiStrokeIndices.length > 0) {
@@ -685,7 +692,7 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
         textsRef.current.forEach(t => { if (ids.has(t.id)) removedTexts.push({ ...t }); });
         setTexts(prev => prev.filter(t => !ids.has(t.id)));
         multiTextIds.forEach(id => {
-          if (socket && isTeacher) socket.emit('whiteboard_remove_text', { roomId, textId: id });
+          if (socket && canMutateBoard) socket.emit('whiteboard_remove_text', { roomId, textId: id });
         });
       }
       clearMultiSelection();
@@ -702,7 +709,7 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
             // No explicit loadImage — the existing `objects` useEffect re-runs
             // when the array changes and calls loadImage for any new entry.
             removedObjects.forEach(o => {
-              if (socket && canMutateImages) socket.emit('whiteboard_add_image', { roomId, object: o });
+              if (socket && canMutateBoard) socket.emit('whiteboard_add_image', { roomId, object: o });
             });
           }
           if (removedShapes.length > 0) {
@@ -712,7 +719,7 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
               return [...prev, ...additions];
             });
             removedShapes.forEach(s => {
-              if (socket && isTeacher) socket.emit('whiteboard_add_shape', { roomId, shape: s });
+              if (socket && canMutateBoard) socket.emit('whiteboard_add_shape', { roomId, shape: s });
             });
           }
           if (removedStrokes.length > 0) {
@@ -732,7 +739,7 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
               return [...prev, ...additions];
             });
             removedTexts.forEach(t => {
-              if (socket && isTeacher) socket.emit('whiteboard_add_text', { roomId, text: t });
+              if (socket && canMutateBoard) socket.emit('whiteboard_add_text', { roomId, text: t });
             });
           }
         },
@@ -742,14 +749,14 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
             setObjects(prev => prev.filter(o => !ids.has(o.id)));
             removedObjects.forEach(o => {
               imageCacheRef.current.delete(o.id);
-              if (socket && canMutateImages) socket.emit('whiteboard_remove_object', { roomId, objectId: o.id });
+              if (socket && canMutateBoard) socket.emit('whiteboard_remove_object', { roomId, objectId: o.id });
             });
           }
           if (removedShapes.length > 0) {
             const ids = new Set(removedShapes.map(s => s.id));
             setShapes(prev => prev.filter(s => !ids.has(s.id)));
             removedShapes.forEach(s => {
-              if (socket && isTeacher) socket.emit('whiteboard_remove_shape', { roomId, shapeId: s.id });
+              if (socket && canMutateBoard) socket.emit('whiteboard_remove_shape', { roomId, shapeId: s.id });
             });
           }
           if (removedStrokes.length > 0) {
@@ -763,12 +770,12 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
             const ids = new Set(removedTexts.map(t => t.id));
             setTexts(prev => prev.filter(t => !ids.has(t.id)));
             removedTexts.forEach(t => {
-              if (socket && isTeacher) socket.emit('whiteboard_remove_text', { roomId, textId: t.id });
+              if (socket && canMutateBoard) socket.emit('whiteboard_remove_text', { roomId, textId: t.id });
             });
           }
         },
       });
-    }, [multiObjectIds, multiShapeIds, multiStrokeIndices, multiTextIds, objects, shapes, socket, isTeacher, canMutateImages, roomId, clearMultiSelection, recordAction]);
+    }, [multiObjectIds, multiShapeIds, multiStrokeIndices, multiTextIds, objects, shapes, socket, isTeacher, canMutateBoard, roomId, clearMultiSelection, recordAction]);
 
     const selectedShape = selectedShapeId ? shapes.find(s => s.id === selectedShapeId) : null;
 
@@ -783,10 +790,10 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
       const before: BoardShape = { ...sel };
       const after: BoardShape = { ...sel, ...patch };
       setShapes(prev => prev.map(s => (s.id === sel.id ? after : s)));
-      if (socket && isTeacher) socket.emit('whiteboard_update_shape', { roomId, shape: after });
+      if (socket && canMutateBoard) socket.emit('whiteboard_update_shape', { roomId, shape: after });
       recordAction({
-        undo: () => { setShapes(prev => prev.map(s => (s.id === before.id ? before : s))); if (socket && isTeacher) socket.emit('whiteboard_update_shape', { roomId, shape: before }); },
-        redo: () => { setShapes(prev => prev.map(s => (s.id === after.id ? after : s))); if (socket && isTeacher) socket.emit('whiteboard_update_shape', { roomId, shape: after }); },
+        undo: () => { setShapes(prev => prev.map(s => (s.id === before.id ? before : s))); if (socket && canMutateBoard) socket.emit('whiteboard_update_shape', { roomId, shape: before }); },
+        redo: () => { setShapes(prev => prev.map(s => (s.id === after.id ? after : s))); if (socket && canMutateBoard) socket.emit('whiteboard_update_shape', { roomId, shape: after }); },
       });
     }, [selectedShapeId, shapes, socket, isTeacher, roomId, recordAction]);
 
@@ -807,7 +814,7 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
         if (objClones.length) setObjects(prev => [...prev, ...objClones]);
         if (socket) {
           if (isTeacher) { shapeClones.forEach(s => socket.emit('whiteboard_add_shape', { roomId, shape: s })); textClones.forEach(t => socket.emit('whiteboard_add_text', { roomId, text: t })); }
-          if (canMutateImages) objClones.forEach(o => socket.emit('whiteboard_add_image', { roomId, object: o }));
+          if (canMutateBoard) objClones.forEach(o => socket.emit('whiteboard_add_image', { roomId, object: o }));
         }
       };
       const removeAll = () => {
@@ -817,7 +824,7 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
         if (objClones.length) setObjects(prev => prev.filter(o => !oId.has(o.id)));
         if (socket) {
           if (isTeacher) { shapeClones.forEach(s => socket.emit('whiteboard_remove_shape', { roomId, shapeId: s.id })); textClones.forEach(t => socket.emit('whiteboard_remove_text', { roomId, textId: t.id })); }
-          if (canMutateImages) objClones.forEach(o => socket.emit('whiteboard_remove_object', { roomId, objectId: o.id }));
+          if (canMutateBoard) objClones.forEach(o => socket.emit('whiteboard_remove_object', { roomId, objectId: o.id }));
         }
       };
       addAll();
@@ -827,7 +834,7 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
       setMultiTextIds(textClones.map(t => t.id));
       setMultiObjectIds(objClones.map(o => o.id));
       recordAction({ undo: removeAll, redo: addAll });
-    }, [socket, isTeacher, canMutateImages, roomId, recordAction, clearMultiSelection]);
+    }, [socket, isTeacher, canMutateBoard, roomId, recordAction, clearMultiSelection]);
 
     // ── Duplicate selection (Ctrl+D) — shapes / text / images ──
     const duplicateSelection = useCallback(() => {
@@ -882,12 +889,12 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
         if (ob.length) setObjects(prev => prev.map(o => ob.find(x => x.id === o.id) || o));
         if (socket) {
           if (isTeacher) { sh.forEach(s => socket.emit('whiteboard_update_shape', { roomId, shape: s })); tx.forEach(t => socket.emit('whiteboard_update_text', { roomId, text: t })); }
-          if (canMutateImages) ob.forEach(o => socket.emit('whiteboard_update_object', { roomId, object: o }));
+          if (canMutateBoard) ob.forEach(o => socket.emit('whiteboard_update_object', { roomId, object: o }));
         }
       };
       apply(afterShapes, afterTexts, afterObjs);
       recordAction({ undo: () => apply(beforeShapes, beforeTexts, beforeObjs), redo: () => apply(afterShapes, afterTexts, afterObjs) });
-    }, [shapes, texts, objects, getSelectedSets, socket, isTeacher, canMutateImages, roomId, recordAction]);
+    }, [shapes, texts, objects, getSelectedSets, socket, isTeacher, canMutateBoard, roomId, recordAction]);
 
     // ── Group / ungroup (Ctrl+G / Ctrl+Shift+G) ──
     // Stamps a shared `groupId` onto the selected shapes/text/images. Clicking
@@ -907,12 +914,12 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
         if (ob.length) setObjects(prev => prev.map(o => ob.find(x => x.id === o.id) || o));
         if (socket) {
           if (isTeacher) { sh.forEach(s => socket.emit('whiteboard_update_shape', { roomId, shape: s })); tx.forEach(t => socket.emit('whiteboard_update_text', { roomId, text: t })); }
-          if (canMutateImages) ob.forEach(o => socket.emit('whiteboard_update_object', { roomId, object: o }));
+          if (canMutateBoard) ob.forEach(o => socket.emit('whiteboard_update_object', { roomId, object: o }));
         }
       };
       apply(afterShapes, afterTexts, afterObjs);
       recordAction({ undo: () => apply(beforeShapes, beforeTexts, beforeObjs), redo: () => apply(afterShapes, afterTexts, afterObjs) });
-    }, [shapes, texts, objects, socket, isTeacher, canMutateImages, roomId, recordAction]);
+    }, [shapes, texts, objects, socket, isTeacher, canMutateBoard, roomId, recordAction]);
 
     const groupSelection = useCallback(() => {
       const { shapeIds, textIds, objIds } = getSelectedSets();
@@ -1003,15 +1010,15 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
       const shapeSnapshot: BoardShape = { ...snapshot };
       setShapes(prev => prev.filter(s => s.id !== id));
       setSelectedShapeId(null);
-      if (socket && isTeacher) socket.emit('whiteboard_remove_shape', { roomId, shapeId: id });
+      if (socket && canMutateBoard) socket.emit('whiteboard_remove_shape', { roomId, shapeId: id });
       recordAction({
         undo: () => {
           setShapes(prev => prev.some(s => s.id === shapeSnapshot.id) ? prev : [...prev, shapeSnapshot]);
-          if (socket && isTeacher) socket.emit('whiteboard_add_shape', { roomId, shape: shapeSnapshot });
+          if (socket && canMutateBoard) socket.emit('whiteboard_add_shape', { roomId, shape: shapeSnapshot });
         },
         redo: () => {
           setShapes(prev => prev.filter(s => s.id !== shapeSnapshot.id));
-          if (socket && isTeacher) socket.emit('whiteboard_remove_shape', { roomId, shapeId: shapeSnapshot.id });
+          if (socket && canMutateBoard) socket.emit('whiteboard_remove_shape', { roomId, shapeId: shapeSnapshot.id });
         },
       });
     }, [selectedShapeId, shapes, socket, isTeacher, roomId, recordAction]);
@@ -1077,12 +1084,12 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
     // ── Text mutators ──
     const addText = useCallback((t: BoardText) => {
       setTexts(prev => [...prev, t]);
-      if (socket && isTeacher) socket.emit('whiteboard_add_text', { roomId, text: t });
+      if (socket && canMutateBoard) socket.emit('whiteboard_add_text', { roomId, text: t });
     }, [socket, isTeacher, roomId]);
 
     const updateText = useCallback((t: BoardText, broadcast = true) => {
       setTexts(prev => prev.map(x => x.id === t.id ? t : x));
-      if (broadcast && socket && isTeacher) socket.emit('whiteboard_update_text', { roomId, text: t });
+      if (broadcast && socket && canMutateBoard) socket.emit('whiteboard_update_text', { roomId, text: t });
     }, [socket, isTeacher, roomId]);
 
     const removeSelectedText = useCallback(() => {
@@ -1093,15 +1100,15 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
       const textSnapshot: BoardText = { ...snapshot };
       setTexts(prev => prev.filter(t => t.id !== id));
       setSelectedTextId(null);
-      if (socket && isTeacher) socket.emit('whiteboard_remove_text', { roomId, textId: id });
+      if (socket && canMutateBoard) socket.emit('whiteboard_remove_text', { roomId, textId: id });
       recordAction({
         undo: () => {
           setTexts(prev => prev.some(t => t.id === textSnapshot.id) ? prev : [...prev, textSnapshot]);
-          if (socket && isTeacher) socket.emit('whiteboard_add_text', { roomId, text: textSnapshot });
+          if (socket && canMutateBoard) socket.emit('whiteboard_add_text', { roomId, text: textSnapshot });
         },
         redo: () => {
           setTexts(prev => prev.filter(t => t.id !== textSnapshot.id));
-          if (socket && isTeacher) socket.emit('whiteboard_remove_text', { roomId, textId: textSnapshot.id });
+          if (socket && canMutateBoard) socket.emit('whiteboard_remove_text', { roomId, textId: textSnapshot.id });
         },
       });
     }, [selectedTextId, socket, isTeacher, roomId, recordAction]);
@@ -1134,16 +1141,16 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
           const existing = textsRef.current.find(t => t.id === ed.id);
           if (existing) {
             setTexts(prev => prev.filter(t => t.id !== ed.id));
-            if (socket && isTeacher) socket.emit('whiteboard_remove_text', { roomId, textId: ed.id });
+            if (socket && canMutateBoard) socket.emit('whiteboard_remove_text', { roomId, textId: ed.id });
             const snap = { ...existing };
             recordAction({
               undo: () => {
                 setTexts(prev => prev.some(t => t.id === snap.id) ? prev : [...prev, snap]);
-                if (socket && isTeacher) socket.emit('whiteboard_add_text', { roomId, text: snap });
+                if (socket && canMutateBoard) socket.emit('whiteboard_add_text', { roomId, text: snap });
               },
               redo: () => {
                 setTexts(prev => prev.filter(t => t.id !== snap.id));
-                if (socket && isTeacher) socket.emit('whiteboard_remove_text', { roomId, textId: snap.id });
+                if (socket && canMutateBoard) socket.emit('whiteboard_remove_text', { roomId, textId: snap.id });
               },
             });
           }
@@ -1192,11 +1199,11 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
         recordAction({
           undo: () => {
             setTexts(prev => prev.filter(x => x.id !== t.id));
-            if (socket && isTeacher) socket.emit('whiteboard_remove_text', { roomId, textId: t.id });
+            if (socket && canMutateBoard) socket.emit('whiteboard_remove_text', { roomId, textId: t.id });
           },
           redo: () => {
             setTexts(prev => prev.some(x => x.id === t.id) ? prev : [...prev, t]);
-            if (socket && isTeacher) socket.emit('whiteboard_add_text', { roomId, text: t });
+            if (socket && canMutateBoard) socket.emit('whiteboard_add_text', { roomId, text: t });
           },
         });
       }
@@ -1261,17 +1268,17 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
 
     const addInstrument = useCallback((inst: BoardInstrument) => {
       setInstruments(prev => [...prev, inst]);
-      if (socket && isTeacher) socket.emit('whiteboard_add_instrument', { roomId, instrument: inst });
+      if (socket && canMutateBoard) socket.emit('whiteboard_add_instrument', { roomId, instrument: inst });
     }, [socket, isTeacher, roomId]);
 
     const updateInstrument = useCallback((inst: BoardInstrument, broadcast = true) => {
       setInstruments(prev => prev.map(i => i.id === inst.id ? inst : i));
-      if (broadcast && socket && isTeacher) socket.emit('whiteboard_update_instrument', { roomId, instrument: inst });
+      if (broadcast && socket && canMutateBoard) socket.emit('whiteboard_update_instrument', { roomId, instrument: inst });
     }, [socket, isTeacher, roomId]);
 
     const removeInstrument = useCallback((id: string) => {
       setInstruments(prev => prev.filter(i => i.id !== id));
-      if (socket && isTeacher) socket.emit('whiteboard_remove_instrument', { roomId, instrumentId: id });
+      if (socket && canMutateBoard) socket.emit('whiteboard_remove_instrument', { roomId, instrumentId: id });
     }, [socket, isTeacher, roomId]);
 
     // Toggle helper for the toolbar buttons. Click "Ruler" → if no ruler is
@@ -1422,20 +1429,20 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
       setSelectedStrokeIndex(null);
       setTool('select');
       loadImage(object);
-      if (socket && canMutateImages) socket.emit('whiteboard_add_image', { roomId, object });
+      if (socket && canMutateBoard) socket.emit('whiteboard_add_image', { roomId, object });
       recordAction({
         undo: () => {
           setObjects(prev => prev.filter(o => o.id !== object.id));
           imageCacheRef.current.delete(object.id);
-          if (socket && canMutateImages) socket.emit('whiteboard_remove_object', { roomId, objectId: object.id });
+          if (socket && canMutateBoard) socket.emit('whiteboard_remove_object', { roomId, objectId: object.id });
         },
         redo: () => {
           setObjects(prev => prev.some(o => o.id === object.id) ? prev : [...prev, object]);
           loadImage(object);
-          if (socket && canMutateImages) socket.emit('whiteboard_add_image', { roomId, object });
+          if (socket && canMutateBoard) socket.emit('whiteboard_add_image', { roomId, object });
         },
       });
-    }, [screenToBoard, loadImage, socket, canMutateImages, roomId, recordAction]);
+    }, [screenToBoard, loadImage, socket, canMutateBoard, roomId, recordAction]);
 
     // ── PDF worksheet import ──
     // Renders each page to an image and lays them out down the board as normal
@@ -1536,7 +1543,7 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
           created.push(object);
           setObjects(prev => [...prev, object]);
           loadImage(object);
-          if (socket && canMutateImages) socket.emit('whiteboard_add_image', { roomId, object });
+          if (socket && canMutateBoard) socket.emit('whiteboard_add_image', { roomId, object });
           // Yield so the board stays responsive while a long PDF imports.
           await new Promise(r => setTimeout(r, 0));
         }
@@ -1548,14 +1555,14 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
               setObjects(prev => prev.filter(o => !created.some(c => c.id === o.id)));
               created.forEach(c => {
                 imageCacheRef.current.delete(c.id);
-                if (socket && canMutateImages) socket.emit('whiteboard_remove_object', { roomId, objectId: c.id });
+                if (socket && canMutateBoard) socket.emit('whiteboard_remove_object', { roomId, objectId: c.id });
               });
             },
             redo: () => {
               setObjects(prev => [...prev, ...created.filter(c => !prev.some(o => o.id === c.id))]);
               created.forEach(c => {
                 loadImage(c);
-                if (socket && canMutateImages) socket.emit('whiteboard_add_image', { roomId, object: c });
+                if (socket && canMutateBoard) socket.emit('whiteboard_add_image', { roomId, object: c });
               });
             },
           });
@@ -1570,12 +1577,12 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
         setPdfBusy(`Could not read that PDF — ${(err as Error)?.message || 'unknown error'}`);
         setTimeout(() => setPdfBusy(null), 5000);
       }
-    }, [screenToBoard, loadImage, socket, canMutateImages, roomId, recordAction]);
+    }, [screenToBoard, loadImage, socket, canMutateBoard, roomId, recordAction]);
 
     const updateObject = useCallback((object: BoardImageObject, broadcast = true) => {
       setObjects(prev => prev.map(obj => obj.id === object.id ? object : obj));
-      if (broadcast && socket && canMutateImages) socket.emit('whiteboard_update_object', { roomId, object });
-    }, [socket, canMutateImages, roomId]);
+      if (broadcast && socket && canMutateBoard) socket.emit('whiteboard_update_object', { roomId, object });
+    }, [socket, canMutateBoard, roomId]);
 
     const removeSelectedObject = useCallback(() => {
       if (!selectedObjectId) return;
@@ -1584,21 +1591,21 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
       const snapshot: BoardImageObject = { ...target };
       setObjects(prev => prev.filter(obj => obj.id !== selectedObjectId));
       imageCacheRef.current.delete(selectedObjectId);
-      if (socket && canMutateImages) socket.emit('whiteboard_remove_object', { roomId, objectId: selectedObjectId });
+      if (socket && canMutateBoard) socket.emit('whiteboard_remove_object', { roomId, objectId: selectedObjectId });
       setSelectedObjectId(null);
       recordAction({
         undo: () => {
           setObjects(prev => prev.some(o => o.id === snapshot.id) ? prev : [...prev, snapshot]);
           loadImage(snapshot);
-          if (socket && canMutateImages) socket.emit('whiteboard_add_image', { roomId, object: snapshot });
+          if (socket && canMutateBoard) socket.emit('whiteboard_add_image', { roomId, object: snapshot });
         },
         redo: () => {
           setObjects(prev => prev.filter(o => o.id !== snapshot.id));
           imageCacheRef.current.delete(snapshot.id);
-          if (socket && canMutateImages) socket.emit('whiteboard_remove_object', { roomId, objectId: snapshot.id });
+          if (socket && canMutateBoard) socket.emit('whiteboard_remove_object', { roomId, objectId: snapshot.id });
         },
       });
-    }, [selectedObjectId, objects, socket, canMutateImages, roomId, recordAction, loadImage]);
+    }, [selectedObjectId, objects, socket, canMutateBoard, roomId, recordAction, loadImage]);
 
     // Where the resize / rotate handles sit in WORLD space — i.e. with the
     // image's rotation already applied around its centre. Hit-tests and the
@@ -3455,11 +3462,11 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
           recordAction({
             undo: () => {
               setObjects(prev => prev.map(o => o.id === before.id ? before : o));
-              if (socket && canMutateImages) socket.emit('whiteboard_update_object', { roomId, object: before });
+              if (socket && canMutateBoard) socket.emit('whiteboard_update_object', { roomId, object: before });
             },
             redo: () => {
               setObjects(prev => prev.map(o => o.id === after.id ? after : o));
-              if (socket && canMutateImages) socket.emit('whiteboard_update_object', { roomId, object: after });
+              if (socket && canMutateBoard) socket.emit('whiteboard_update_object', { roomId, object: after });
             },
           });
         }
@@ -3473,11 +3480,11 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
           recordAction({
             undo: () => {
               setObjects(prev => prev.map(o => o.id === before.id ? before : o));
-              if (socket && canMutateImages) socket.emit('whiteboard_update_object', { roomId, object: before });
+              if (socket && canMutateBoard) socket.emit('whiteboard_update_object', { roomId, object: before });
             },
             redo: () => {
               setObjects(prev => prev.map(o => o.id === after.id ? after : o));
-              if (socket && canMutateImages) socket.emit('whiteboard_update_object', { roomId, object: after });
+              if (socket && canMutateBoard) socket.emit('whiteboard_update_object', { roomId, object: after });
             },
           });
         }
@@ -3490,17 +3497,17 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
         const dy = Math.abs(finished.y2 - finished.y1);
         if (dx > minDelta || dy > minDelta) {
           setShapes(prev => [...prev, finished]);
-          if (socket && isTeacher) socket.emit('whiteboard_add_shape', { roomId, shape: finished });
+          if (socket && canMutateBoard) socket.emit('whiteboard_add_shape', { roomId, shape: finished });
           setSelectedShapeId(finished.id);
           setTool('select');
           recordAction({
             undo: () => {
               setShapes(prev => prev.filter(s => s.id !== finished.id));
-              if (socket && isTeacher) socket.emit('whiteboard_remove_shape', { roomId, shapeId: finished.id });
+              if (socket && canMutateBoard) socket.emit('whiteboard_remove_shape', { roomId, shapeId: finished.id });
             },
             redo: () => {
               setShapes(prev => prev.some(s => s.id === finished.id) ? prev : [...prev, finished]);
-              if (socket && isTeacher) socket.emit('whiteboard_add_shape', { roomId, shape: finished });
+              if (socket && canMutateBoard) socket.emit('whiteboard_add_shape', { roomId, shape: finished });
             },
           });
         }
@@ -3515,11 +3522,11 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
           recordAction({
             undo: () => {
               setShapes(prev => prev.map(s => s.id === before.id ? before : s));
-              if (socket && isTeacher) socket.emit('whiteboard_update_shape', { roomId, shape: before });
+              if (socket && canMutateBoard) socket.emit('whiteboard_update_shape', { roomId, shape: before });
             },
             redo: () => {
               setShapes(prev => prev.map(s => s.id === after.id ? after : s));
-              if (socket && isTeacher) socket.emit('whiteboard_update_shape', { roomId, shape: after });
+              if (socket && canMutateBoard) socket.emit('whiteboard_update_shape', { roomId, shape: after });
             },
           });
         }
@@ -3556,7 +3563,7 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
               sp.forEach(o => { const full = shapesRef.current.find(s => s.id === o.id); if (full) socket.emit('whiteboard_update_shape', { roomId, shape: { ...full, x1: o.x1, y1: o.y1, x2: o.x2, y2: o.y2 } }); });
               tp.forEach(o => { const full = textsRef.current.find(t => t.id === o.id); if (full) socket.emit('whiteboard_update_text', { roomId, text: { ...full, x: o.x, y: o.y } }); });
             }
-            if (canMutateImages) op.forEach(o => { const full = objects.find(ob => ob.id === o.id); if (full) socket.emit('whiteboard_update_object', { roomId, object: { ...full, x: o.x, y: o.y } }); });
+            if (canMutateBoard) op.forEach(o => { const full = objects.find(ob => ob.id === o.id); if (full) socket.emit('whiteboard_update_object', { roomId, object: { ...full, x: o.x, y: o.y } }); });
           }
         };
         applyPos(sAfter, tAfter, oAfter);
@@ -3984,7 +3991,7 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
     // but the upload BUTTON in the rail was open to them. The asymmetry
     // meant a student could upload a homework photo from disk but not
     // paste the same photo from clipboard. The mutation gate is the
-    // canonical permission (canMutateImages); use it here too.
+    // canonical permission (canMutateBoard); use it here too.
     // Single router for Ctrl/Cmd+V — everything goes through the NATIVE paste
     // event (never intercepted at keydown, so the OS clipboard is always
     // readable). Priority:
@@ -3995,7 +4002,7 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
     // which silently killed OS-image pasting whenever the internal clipboard
     // had ever been used.
     useEffect(() => {
-      if (!isActive || !canMutateImages) return;
+      if (!isActive || !canMutateBoard) return;
       const handlePaste = (e: ClipboardEvent) => {
         const item = Array.from(e.clipboardData?.items || []).find(i => i.type.startsWith('image/'));
         const blob = item?.getAsFile();
@@ -4018,8 +4025,8 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
           const t: BoardText = { id: newId('text'), x: p.x, y: p.y, text: pasted.slice(0, 4000), fontSize: textFontSize, color, createdAt: now, updatedAt: now };
           addText(t);
           recordAction({
-            undo: () => { setTexts(prev => prev.filter(x => x.id !== t.id)); if (socket && isTeacher) socket.emit('whiteboard_remove_text', { roomId, textId: t.id }); },
-            redo: () => { setTexts(prev => prev.some(x => x.id === t.id) ? prev : [...prev, t]); if (socket && isTeacher) socket.emit('whiteboard_add_text', { roomId, text: t }); },
+            undo: () => { setTexts(prev => prev.filter(x => x.id !== t.id)); if (socket && canMutateBoard) socket.emit('whiteboard_remove_text', { roomId, textId: t.id }); },
+            redo: () => { setTexts(prev => prev.some(x => x.id === t.id) ? prev : [...prev, t]); if (socket && canMutateBoard) socket.emit('whiteboard_add_text', { roomId, text: t }); },
           });
           return;
         }
@@ -4028,7 +4035,7 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
       };
       window.addEventListener('paste', handlePaste);
       return () => window.removeEventListener('paste', handlePaste);
-    }, [isActive, canMutateImages, ingestImageBlob, isTeacher, screenToBoard, textFontSize, color, addText, recordAction, pasteClipboard, socket, roomId]);
+    }, [isActive, canMutateBoard, ingestImageBlob, isTeacher, screenToBoard, textFontSize, color, addText, recordAction, pasteClipboard, socket, roomId]);
 
     // AUTONOMOUS: Drag-and-drop image support on the whiteboard.
     //
@@ -4048,7 +4055,7 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
     // otherwise navigate to the file URL).
     const [dragOverActive, setDragOverActive] = useState(false);
     useEffect(() => {
-      if (!isActive || !canMutateImages) return;
+      if (!isActive || !canMutateBoard) return;
       const wrap = containerRef.current;
       if (!wrap) return;
       // hasImageFiles: only show the overlay (and call preventDefault)
@@ -4110,7 +4117,7 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
         wrap.removeEventListener('dragleave', onDragLeave);
         wrap.removeEventListener('drop', onDrop);
       };
-    }, [isActive, canMutateImages, ingestImageBlob]);
+    }, [isActive, canMutateBoard, ingestImageBlob]);
 
     const clearInk = () => {
       setStrokes([]);
@@ -4183,7 +4190,7 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
         const dy = Math.abs(finished.y2 - finished.y1);
         if (dx > minDelta || dy > minDelta) {
           setShapes(prev => [...prev, finished]);
-          if (socket && isTeacher) socket.emit('whiteboard_add_shape', { roomId, shape: finished });
+          if (socket && canMutateBoard) socket.emit('whiteboard_add_shape', { roomId, shape: finished });
         }
         setDraftShape(null);
       }
@@ -4243,8 +4250,22 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
     // by the next hydration. Hide them from non-teachers — interactive students
     // keep the tools that actually sync (pen, eraser, highlighter, pan, select,
     // image), matching the server permission model.
+    // Hidden from a VIEW-ONLY student, not from every student.
+    //
+    // These were teacher-only because the server required a teacher for shapes,
+    // text and instruments — while images already accepted a student whenever
+    // the tutor had turned interaction on. The asymmetry made the compass, the
+    // ruler and the protractor unreachable for a learner even when the tutor
+    // had explicitly handed over the controls, so "now you construct the
+    // perpendicular bisector" could not happen. That is most of what a
+    // geometry lesson is.
+    //
+    // The server guards moved to requireTeacherOrInteractive in the same
+    // change, so this and the server now agree: the tutor's existing
+    // interaction toggle is the permission, and turning it off takes the tools
+    // away again.
     const TEACHER_ONLY_TOOLS = new Set<BoardTool>(['text', 'compass', 'ruler', 'protractor', ...SHAPE_CATALOG.map(c => c.id)]);
-    const visibleTools = isTeacher ? tools : tools.filter(t => !TEACHER_ONLY_TOOLS.has(t.id));
+    const visibleTools = (isTeacher || interactive) ? tools : tools.filter(t => !TEACHER_ONLY_TOOLS.has(t.id));
 
     const toolChip =
       tool === 'eraser' ? (eraserMode === 'pixel' ? 'Erase pixels — drag across content' : 'Erase whole stroke — click on a stroke') :

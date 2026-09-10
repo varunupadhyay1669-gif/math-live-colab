@@ -400,6 +400,39 @@ test.describe('the mirror', () => {
     await learner.close();
   });
 
+  test('a learner handed the controls is offered the geometry tools', async ({ browser }) => {
+    // "Pls protractor and compass feature to mathslive … and if he want for the
+    // students also." The tools already existed — verified by driving them in a
+    // browser — but they were teacher-only on BOTH sides, so a learner could
+    // watch a construction and never make one.
+    //
+    // This covers the half a browser must answer: are they on the learner's
+    // screen. Whether the server accepts what they draw is asserted against the
+    // real protocol in verify-mirror's LIVE section, because a tool that
+    // appears and is then silently refused is worse than one that never
+    // appeared.
+    const code = room('geom');
+    const teacher = await (await browser.newContext()).newPage();
+    const learner = await (await browser.newContext()).newPage();
+
+    await teacher.goto(`${BASE}/room/${code}?name=Teacher`);
+    await learner.goto(`${BASE}/live/${code}?name=Learner`);
+    // A fresh room already allows interaction — the state a class starts in,
+    // and the permission these tools now follow.
+    await expect(learner.getByText('INTERACTIVE')).toBeVisible({ timeout: 20_000 });
+
+    // Onto the shared board. The teacher's toggle takes the learner with them.
+    await teacher.locator('[data-tip="Open the shared whiteboard"]').first().click();
+
+    for (const name of ['Compass', 'Ruler', 'Protractor']) {
+      await expect(learner.getByRole('button', { name }).first(),
+        `${name} is missing from the learner's rail`).toBeVisible({ timeout: 25_000 });
+    }
+
+    await teacher.close();
+    await learner.close();
+  });
+
   test('a hostile lesson does not run on the learner', async ({ browser }) => {
     const code = room('b');
     const teacher = await (await browser.newContext()).newPage();
