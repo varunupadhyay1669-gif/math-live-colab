@@ -12,7 +12,7 @@ import type { Request, Response } from 'express';
 import { randomBytes } from 'crypto';
 import type { Pool } from 'pg';
 import { userFromRequest, type SessionUser } from './identity';
-import { accessForTeacher, accessFrom } from './billing';
+import { accessForTeacher, standingOf, LIVE_GRANT_JOIN } from './billing';
 
 function id(prefix: string): string {
   return `${prefix}_${randomBytes(9).toString('base64').replace(/[^a-zA-Z0-9]/g, '').slice(0, 12)}`;
@@ -379,17 +379,28 @@ export function mountRecordRoutes(app: any, pool: Pool, opts: { secret: string }
                (SELECT max(s.started_at) FROM teaching_sessions s WHERE s.teacher_id = u.id) AS last_lesson,
                (SELECT sum(s.taught_seconds) FROM teaching_sessions s WHERE s.teacher_id = u.id)::int AS taught_seconds,
                u.trial_started_at, u.paid_until,
-               EXISTS (SELECT 1 FROM platform_admins p WHERE p.email = u.email) AS is_admin
+               EXISTS (SELECT 1 FROM platform_admins p WHERE p.email = u.email) AS is_admin,
+               g.id IS NOT NULL AS grant_active,
+               g.until          AS grant_until
           FROM users u
+          ${LIVE_GRANT_JOIN}
       ORDER BY u.created_at DESC`);
       // Entitlement is decided in ONE place. The admin screen showing a
       // different answer from the socket gate would be worse than showing
-      // nothing, so both go through accessFrom().
+      // nothing, so both go through accessFrom(). Until the grant was joined
+      // above, this table called both teachers on free access "lapsed".
+      //
+      // 'free' is not an entitlement state (to the gate a grant is 'active',
+      // exactly like a payment), but this table has to show the difference or
+      // a comp reads as a paying customer.
       const tutors = r.rows.map(t => ({
         ...t,
         billing: t.is_admin
           ? { state: 'admin' as const, until: null, daysLeft: null }
-          : (() => { const a = accessFrom(t); return { state: a.state, until: a.until, daysLeft: a.daysLeft }; })(),
+          : (() => {
+              const { standing, access: a } = standingOf(t);
+              return { state: standing === 'free' ? 'free' as const : a.state, until: a.until, daysLeft: a.daysLeft };
+            })(),
       }));
       res.json({ tutors });
     } catch (err) { fail(res, err, 'read tutor usage'); }

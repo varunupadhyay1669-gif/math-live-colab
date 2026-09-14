@@ -22,7 +22,7 @@ import type { Request, Response } from 'express';
 import type { Pool } from 'pg';
 import { randomBytes } from 'crypto';
 import { actorFrom, can, audit, auditContext, permissionsOf, type Actor } from './authz';
-import { accessFrom } from './billing';
+import { accessFrom, LIVE_GRANT_JOIN } from './billing';
 
 function id(prefix: string): string {
   return `${prefix}_${randomBytes(9).toString('base64').replace(/[^a-zA-Z0-9]/g, '').slice(0, 12)}`;
@@ -76,12 +76,7 @@ export function mountPeopleRoutes(app: any, pool: Pool, opts: { secret: string }
                 g.until AS grant_until,
                 g.reason AS grant_reason
            FROM users u
-           LEFT JOIN LATERAL (
-             SELECT id, until, reason FROM plan_grants
-              WHERE user_id = u.id AND revoked_at IS NULL
-                AND (until IS NULL OR until > now())
-              ORDER BY until DESC NULLS FIRST LIMIT 1
-           ) g ON true
+           ${LIVE_GRANT_JOIN}
           WHERE ($1 = '' OR lower(u.email) LIKE '%' || $1 || '%')
           ORDER BY u.last_login_at DESC NULLS LAST, u.created_at DESC
           LIMIT 200`,

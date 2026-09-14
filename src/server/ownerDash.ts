@@ -19,7 +19,10 @@
 import type { Request, Response } from 'express';
 import type { Pool } from 'pg';
 import { userFromRequest, type SessionUser } from './identity';
-import { TRIAL_DAYS, PRICE_RUPEES, GRACE_DAYS } from './billing';
+import {
+  TRIAL_DAYS, PRICE_RUPEES, GRACE_DAYS,
+  BILLABLE_TEACHERS_SQL, LIVE_GRANT_JOIN, businessFigures, standingOf, type BillableTeacher,
+} from './billing';
 
 /** One room, as the admin screen sees it. Built from the live rooms map. */
 export interface LiveRoom {
@@ -77,74 +80,41 @@ export function mountOwnerDashRoutes(app: any, pool: Pool, opts: OwnerDashOption
     res.status(500).json({ error: `Could not ${what}.` });
   };
 
-  // A teacher counts as "paying" only on paid_until. Admins are excluded from
-  // every commercial number here — counting the owner as a customer would
-  // inflate the one figure the whole plan is steered by.
+  // Admins are excluded from every commercial number here — counting the
+  // owner as a customer would inflate the one figure the whole plan is
+  // steered by.
   const NOT_ADMIN = `NOT EXISTS (SELECT 1 FROM platform_admins p WHERE p.email = u.email)`;
 
   // ── The numbers ──────────────────────────────────────────────────────────
   app.get('/api/admin/overview', async (req: Request, res: Response) => {
     if (!await gate(req, res)) return;
     try {
-      const r = await pool.query(
-        `SELECT
-           (SELECT count(*) FROM users u
-             WHERE ${NOT_ADMIN} AND u.paid_until > now())::int                          AS paying,
-           (SELECT count(*) FROM users u
-             WHERE ${NOT_ADMIN} AND (u.paid_until IS NULL OR u.paid_until <= now())
-               AND u.trial_started_at + ($1::int * INTERVAL '1 day') > now())::int      AS trialing,
-           (SELECT count(*) FROM users u
-             WHERE ${NOT_ADMIN} AND (u.paid_until IS NULL OR u.paid_until <= now())
-               AND (u.trial_started_at IS NULL
-                    OR u.trial_started_at + (($1::int + $2::int) * INTERVAL '1 day') <= now()))::int AS expired,
-           -- Past the end but still teaching on grace. Counting these as
-           -- "lapsed" would overstate the damage and hide the ones who can
-           -- still be saved with a phone call today.
-           (SELECT count(*) FROM users u
-             WHERE ${NOT_ADMIN} AND (u.paid_until IS NULL OR u.paid_until <= now())
-               AND u.trial_started_at + ($1::int * INTERVAL '1 day') <= now()
-               AND u.trial_started_at + (($1::int + $2::int) * INTERVAL '1 day') > now())::int AS in_grace,
-           (SELECT count(*) FROM users u
-             WHERE ${NOT_ADMIN} AND u.paid_until > now()
-               AND u.paid_until < now() + INTERVAL '7 days')::int                       AS expiring_7d,
-           (SELECT count(*) FROM users u
-             WHERE ${NOT_ADMIN} AND (u.paid_until IS NULL OR u.paid_until <= now())
-               AND u.trial_started_at + ($1::int * INTERVAL '1 day') > now()
-               AND u.trial_started_at + ($1::int * INTERVAL '1 day')
-                   < now() + INTERVAL '3 days')::int                                    AS trials_ending_3d,
-           (SELECT count(*) FROM payment_claims
-             WHERE confirmed_at IS NULL AND rejected_at IS NULL)::int                   AS claims_pending,
-           (SELECT COALESCE(sum(amount_rupees), 0) FROM payment_claims
-             WHERE confirmed_at IS NOT NULL)::int                                       AS collected_total,
-           (SELECT COALESCE(sum(amount_rupees), 0) FROM payment_claims
-             WHERE confirmed_at >= date_trunc('month', now()))::int                     AS collected_month,
-           (SELECT count(*) FROM classes)::int                                          AS students,
-           (SELECT count(*) FROM teaching_sessions
-             WHERE started_at >= current_date)::int                                     AS lessons_today,
-           (SELECT count(*) FROM teaching_sessions
-             WHERE started_at > now() - INTERVAL '7 days')::int                         AS lessons_7d,
-           (SELECT count(DISTINCT teacher_id) FROM teaching_sessions
-             WHERE started_at > now() - INTERVAL '7 days')::int                         AS teachers_active_7d,
-           -- Real monthly run-rate. A teacher on the yearly plan bills ₹400 a
-           -- month, not ₹500, so counting everyone at list price would
-           -- overstate the single number this whole plan is steered by. Taken
-           -- from each teacher's most recent confirmed payment; teachers given
-           -- access by hand, with no payment, count at list.
-           (SELECT COALESCE(sum(
-              COALESCE(
-                (SELECT pc.amount_rupees::numeric / NULLIF(pc.months, 0)
-                   FROM payment_claims pc
-                  WHERE pc.teacher_id = u.id AND pc.confirmed_at IS NOT NULL
-                  ORDER BY pc.confirmed_at DESC LIMIT 1),
-                $3::numeric)
-            ), 0)::int
-              FROM users u
-             WHERE ${NOT_ADMIN} AND u.paid_until > now())::int                          AS mrr`,
-        [TRIAL_DAYS, GRACE_DAYS, PRICE_RUPEES],
-      );
-      const o = r.rows[0];
+      // Paying, on trial, free, in grace and lapsed are counted by
+      // businessFigures(), through the same accessFrom() the teacher seat
+      // uses. Until 14 Sep 2026 they were counted here in SQL from the dates
+      // alone, and both teachers on free access sat on this strip as "Lapsed".
+      const [teachers, r] = await Promise.all([
+        pool.query<BillableTeacher>(BILLABLE_TEACHERS_SQL),
+        pool.query(
+          `SELECT
+             (SELECT count(*) FROM payment_claims
+               WHERE confirmed_at IS NULL AND rejected_at IS NULL)::int                   AS claims_pending,
+             (SELECT COALESCE(sum(amount_rupees), 0) FROM payment_claims
+               WHERE confirmed_at IS NOT NULL)::int                                       AS collected_total,
+             (SELECT COALESCE(sum(amount_rupees), 0) FROM payment_claims
+               WHERE confirmed_at >= date_trunc('month', now()))::int                     AS collected_month,
+             (SELECT count(*) FROM classes)::int                                          AS students,
+             (SELECT count(*) FROM teaching_sessions
+               WHERE started_at >= current_date)::int                                     AS lessons_today,
+             (SELECT count(*) FROM teaching_sessions
+               WHERE started_at > now() - INTERVAL '7 days')::int                         AS lessons_7d,
+             (SELECT count(DISTINCT teacher_id) FROM teaching_sessions
+               WHERE started_at > now() - INTERVAL '7 days')::int                         AS teachers_active_7d`,
+        ),
+      ]);
       res.json({
-        ...o,
+        ...r.rows[0],
+        ...businessFigures(teachers.rows),
         priceRupees: PRICE_RUPEES,
         trialDays: TRIAL_DAYS,
         graceDays: GRACE_DAYS,
@@ -155,20 +125,19 @@ export function mountOwnerDashRoutes(app: any, pool: Pool, opts: OwnerDashOption
 
   // ── The collections calendar ─────────────────────────────────────────────
   //
-  // One row per teacher with a date attached: when their trial runs out, or
-  // when their subscription does. Sorted by that date, which is the order the
-  // owner should actually work through them in.
+  // One row per teacher with a date attached: when their trial runs out, when
+  // their subscription does, or when a dated grant does. Sorted by that date,
+  // which is the order the owner should actually work through them in. The
+  // date is the one the teacher seat enforces, so a free-forever teacher has
+  // none and sits at the bottom instead of heading the list of people to chase.
   app.get('/api/admin/renewals', async (req: Request, res: Response) => {
     if (!await gate(req, res)) return;
     try {
       const r = await pool.query(
         `SELECT u.id, u.email,
                 u.paid_until, u.trial_started_at,
-                CASE WHEN u.paid_until > now() THEN 'paid' ELSE 'trial' END AS kind,
-                COALESCE(
-                  CASE WHEN u.paid_until > now() THEN u.paid_until END,
-                  u.trial_started_at + ($1::int * INTERVAL '1 day')
-                ) AS ends_at,
+                g.id IS NOT NULL AS grant_active,
+                g.until          AS grant_until,
                 (SELECT count(*) FROM classes c WHERE c.teacher_id = u.id)::int AS students,
                 (SELECT max(s.started_at) FROM teaching_sessions s
                   WHERE s.teacher_id = u.id) AS last_lesson,
@@ -178,11 +147,23 @@ export function mountOwnerDashRoutes(app: any, pool: Pool, opts: OwnerDashOption
                   WHERE pc.teacher_id = u.id AND pc.confirmed_at IS NULL
                     AND pc.rejected_at IS NULL) AS claim_pending
            FROM users u
-          WHERE ${NOT_ADMIN}
-          ORDER BY ends_at ASC NULLS LAST`,
-        [TRIAL_DAYS],
+           ${LIVE_GRANT_JOIN}
+          WHERE ${NOT_ADMIN}`,
       );
-      res.json({ renewals: r.rows, trialDays: TRIAL_DAYS, graceDays: GRACE_DAYS });
+      const now = new Date();
+      const endsAt = (iso: string | null) => (iso ? Date.parse(iso) : Number.POSITIVE_INFINITY);
+      const renewals = r.rows
+        .map(row => {
+          const { standing, access } = standingOf(row, now);
+          const kind = standing === 'free' ? 'free'
+            : standing === 'paying' ? 'paid'
+            : standing === 'trial' ? 'trial'
+            // Past the end: say what ran out. The page works out grace from the date.
+            : row.paid_until ? 'paid' : 'trial';
+          return { ...row, kind, ends_at: access.until };
+        })
+        .sort((a, b) => (endsAt(a.ends_at) - endsAt(b.ends_at)) || 0);
+      res.json({ renewals, trialDays: TRIAL_DAYS, graceDays: GRACE_DAYS });
     } catch (err) { fail(res, err, 'read the renewals calendar'); }
   });
 

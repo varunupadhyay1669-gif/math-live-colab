@@ -26,7 +26,8 @@ export interface TutorUsage {
   taught_seconds: number | null;
   /** Decided by the server, never recomputed here — one answer, one place. */
   billing: {
-    state: 'trial' | 'active' | 'grace' | 'expired' | 'admin';
+    /** 'free' is a live grant: teaching, and paying nothing. */
+    state: 'trial' | 'active' | 'grace' | 'expired' | 'admin' | 'free';
     until: string | null;
     daysLeft: number | null;
   };
@@ -36,6 +37,8 @@ export interface TutorUsage {
 export interface Overview {
   paying: number;
   trialing: number;
+  /** Teachers on a live grant. Never in paying, trialing or the revenue. */
+  free: number;
   expired: number;
   in_grace: number;
   expiring_7d: number;
@@ -58,7 +61,7 @@ export interface Overview {
 export interface Renewal {
   id: string;
   email: string;
-  kind: 'paid' | 'trial';
+  kind: 'paid' | 'trial' | 'free';
   ends_at: string | null;
   paid_until: string | null;
   trial_started_at: string | null;

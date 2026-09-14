@@ -209,6 +209,148 @@ export function accessFrom(row: BillingRow | null | undefined, now = new Date())
   };
 }
 
+/** Whether this row carries a grant in force right now, by accessFrom()'s own rule. */
+export function hasLiveGrant(row: BillingRow | null | undefined, now = new Date()): boolean {
+  if (!row?.grant_active) return false;
+  if (!row.grant_until) return true;
+  const until = new Date(row.grant_until).getTime();
+  return !Number.isFinite(until) || until > now.getTime();
+}
+
+/** Where a teacher stands commercially. */
+export type Standing = 'paying' | 'free' | 'trial' | 'grace' | 'lapsed';
+
+/**
+ * Where a teacher stands, for every count and list the owner reads.
+ *
+ * accessFrom() answers "may they teach?", and a grant and a payment both say
+ * yes, so its answer alone cannot tell them apart. The owner's numbers must:
+ * a free-forever teacher counted as paying inflates the revenue, and one
+ * counted as a lapsed trial goes to the top of the list of people to chase.
+ */
+export function standingOf(row: BillingRow | null | undefined, now = new Date()): { standing: Standing; access: Access } {
+  const access = accessFrom(row, now);
+  if (hasLiveGrant(row, now)) return { standing: 'free', access };
+  const standing: Standing =
+    access.state === 'active' ? 'paying'
+    : access.state === 'trial' ? 'trial'
+    : access.state === 'grace' ? 'grace'
+    : 'lapsed';
+  return { standing, access };
+}
+
+/**
+ * The live grant that runs longest, for any query over `users u`.
+ *
+ * Select `g.id IS NOT NULL AS grant_active, g.until AS grant_until` beside it
+ * and accessFrom() honours the grant. Leave it out and the row looks like any
+ * other trial that ran out, and nothing complains.
+ *
+ * That is not hypothetical. Until 14 Sep 2026 only the teacher seat and the
+ * People panel joined it. The expiry emails and every other figure on /admin
+ * read the dates alone, so Vani, free forever since 3 Sep, was emailed eight
+ * times between 5 and 10 Sep to say the access was ending and then that it
+ * had ended, and /admin counted the account as lapsed. One definition now, and
+ * verify-mirror fails any file that hands rows to accessFrom() without it.
+ *
+ * LIMIT 1 with NULLS FIRST puts "forever" on top, so a second grant can only
+ * ever extend the first.
+ */
+export const LIVE_GRANT_JOIN = `
+  LEFT JOIN LATERAL (
+    SELECT id, until, reason FROM plan_grants
+     WHERE user_id = u.id AND revoked_at IS NULL
+       AND (until IS NULL OR until > now())
+     ORDER BY until DESC NULLS FIRST
+     LIMIT 1
+  ) g ON true`;
+
+/**
+ * Every billable teacher, with what the expiry emails and the owner's figures
+ * need. Admins are never billed, so they are never counted or warned.
+ *
+ * monthly_rupees is the run-rate of their latest confirmed payment, because a
+ * teacher on the yearly plan bills ₹400 a month, not ₹500.
+ */
+export const BILLABLE_TEACHERS_SQL = `
+  SELECT u.id, u.email, u.trial_started_at, u.paid_until,
+         g.id IS NOT NULL AS grant_active,
+         g.until          AS grant_until,
+         (SELECT pc.amount_rupees::numeric / NULLIF(pc.months, 0)
+            FROM payment_claims pc
+           WHERE pc.teacher_id = u.id AND pc.confirmed_at IS NOT NULL
+           ORDER BY pc.confirmed_at DESC LIMIT 1) AS monthly_rupees,
+         (SELECT max(s.started_at) FROM teaching_sessions s
+           WHERE s.teacher_id = u.id) AS last_lesson
+    FROM users u
+    ${LIVE_GRANT_JOIN}
+   WHERE NOT EXISTS (SELECT 1 FROM platform_admins p WHERE p.email = u.email)`;
+
+export interface BillableTeacher extends BillingRow {
+  id: string;
+  email: string;
+  /** Null when they have never paid. pg hands numeric back as a string. */
+  monthly_rupees: string | number | null;
+  last_lesson: Date | string | null;
+}
+
+/** The teacher half of the /admin strip and the morning digest. */
+export interface BusinessFigures {
+  paying: number;
+  trialing: number;
+  /** Teaching on a live grant, paying nothing. */
+  free: number;
+  in_grace: number;
+  expired: number;
+  /** Paid time, or a dated grant, running out within a week. */
+  expiring_7d: number;
+  trials_ending_3d: number;
+  mrr: number;
+}
+
+/**
+ * Count the teachers.
+ *
+ * In code rather than SQL so that every number the owner reads goes through
+ * accessFrom(), the function that decides whether a teacher may take the seat.
+ * /admin and the digest each used to recount it in SQL from the dates, and
+ * those copies are the ones that never learned about grants. Hundreds of
+ * teachers is still one small query.
+ */
+export function businessFigures(rows: BillableTeacher[], now = new Date()): BusinessFigures {
+  const f: BusinessFigures = {
+    paying: 0, trialing: 0, free: 0, in_grace: 0, expired: 0,
+    expiring_7d: 0, trials_ending_3d: 0, mrr: 0,
+  };
+  let mrr = 0;
+  for (const row of rows) {
+    const { standing, access } = standingOf(row, now);
+    const daysLeft = access.until
+      ? (new Date(access.until).getTime() - now.getTime()) / DAY_MS
+      : Infinity;
+    if (standing === 'paying') {
+      f.paying++;
+      // Given time by hand with no payment behind it: counted at list price.
+      const monthly = row.monthly_rupees == null ? NaN : Number(row.monthly_rupees);
+      mrr += Number.isFinite(monthly) ? monthly : PRICE_RUPEES;
+      if (daysLeft < 7) f.expiring_7d++;
+    } else if (standing === 'free') {
+      f.free++;
+      // A dated grant running out is the same conversation as a renewal.
+      if (daysLeft < 7) f.expiring_7d++;
+    } else if (standing === 'trial') {
+      f.trialing++;
+      if (daysLeft < 3) f.trials_ending_3d++;
+    } else if (standing === 'grace') {
+      f.in_grace++;
+    } else {
+      f.expired++;
+    }
+  }
+  f.mrr = Math.round(mrr);
+  return f;
+}
+
 /**
  * Read one teacher's entitlement straight from the database.
  *
@@ -224,15 +366,7 @@ export async function accessForTeacher(pool: Pool, teacherId: string): Promise<A
             g.id IS NOT NULL AS grant_active,
             g.until       AS grant_until
        FROM users u
-       -- The live grant that runs longest, so a second grant can only ever
-       -- extend the first. LIMIT 1 with NULLS FIRST puts "forever" on top.
-       LEFT JOIN LATERAL (
-         SELECT id, until FROM plan_grants
-          WHERE user_id = u.id AND revoked_at IS NULL
-            AND (until IS NULL OR until > now())
-          ORDER BY until DESC NULLS FIRST
-          LIMIT 1
-       ) g ON true
+       ${LIVE_GRANT_JOIN}
       WHERE u.id = $1`,
     [teacherId],
   );

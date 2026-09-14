@@ -19,8 +19,10 @@ import { JSDOM } from 'jsdom';
 import { mirrorScriptFor, stripLessonScripts } from './src/lib/mirrorScript.ts';
 import { checkLesson } from './src/lib/lessonCheck.ts';
 import { parseDataUrl, externaliseBoardImages } from './src/server/boardImages.ts';
-import { accessFrom, TRIAL_DAYS, PRICE_RUPEES, GRACE_DAYS, PLANS, priceFor, perMonth } from './src/server/billing.ts';
-import { _warningFor } from './src/server/scheduler.ts';
+import {
+  accessFrom, standingOf, businessFigures, TRIAL_DAYS, PRICE_RUPEES, GRACE_DAYS, PLANS, priceFor, perMonth,
+} from './src/server/billing.ts';
+import { _warningFor, _warningsDue, _warningMail, _digestLines } from './src/server/scheduler.ts';
 import { SEED_LESSONS } from './src/lib/seedLessons.ts';
 import { makeLimiter } from './src/server/rateLimit.ts';
 import { listMigrationFiles } from './src/server/migrate.ts';
@@ -1194,7 +1196,7 @@ section('OFFLINE — one engine');
 // Phase 3c removed the replay engine from the live path. Nothing should quietly
 // put it back: it journaled every click, snapshotted the whole document on a
 // timer, and cancelled forwarded input at capture phase.
-import { readFileSync } from 'fs';
+import { readFileSync, readdirSync } from 'fs';
 for (const file of ['src/pages/Room.tsx', 'src/pages/StudentView.tsx']) {
   const code = readFileSync(file, 'utf8').replace(/\/\/[^\n]*/g, '').replace(/\/\*[\s\S]*?\*\//g, '');
   assert(!/seededSyncScript\s*\(/.test(code),
@@ -1307,6 +1309,109 @@ assert(_warningFor('active', 2) === 'warn_2', 'paying teachers are warned before
 assert(_warningFor('grace', 2) === 'grace', 'a teacher on grace is told they are on grace');
 assert(_warningFor('expired', 0) === null,
   'an already-expired teacher is not emailed daily forever');
+
+section('OFFLINE — free access is not a trial that ran out');
+{
+  // 14 Sep 2026. The teacher seat honoured grants from the day they shipped.
+  // Nothing else that reads billing did: the expiry emails and the figures on
+  // /admin read the dates alone, where a free-forever teacher looks exactly
+  // like a trial that ended. So Vani, free forever since 3 Sep, was emailed
+  // eight times between 5 and 10 Sep that the access was ending and then that
+  // it had ended, and /admin counted both teachers on free access as lapsed.
+  const IST = (s) => new Date(`${s}+05:30`);
+  const counts = { claims_pending: 0, collected_month: 0, lessons_yesterday: 0, new_signups: 0 };
+  const teacher = (over) => ({
+    id: 'u', email: 'x@y', trial_started_at: null, paid_until: null,
+    grant_active: false, grant_until: null, monthly_rupees: null, last_lesson: null, ...over,
+  });
+
+  // That account, as it stood: a trial from 31 Aug, and a grant with no end.
+  const vani = teacher({ id: 'u_v', email: 'v@x', trial_started_at: IST('2026-08-31T09:00:00'),
+    grant_active: true });
+  const datesOnly = { ...vani, grant_active: false };
+  for (const at of ['2026-09-06T08:04:00', '2026-09-08T08:12:00', '2026-09-10T08:12:47']) {
+    assert(_warningsDue([datesOnly], IST(at)).length === 1,
+      `read from the dates alone, it was owed a warning at ${at}`,
+      'the control: without it the next check proves nothing');
+    assert(_warningsDue([vani], IST(at)).length === 0,
+      `with its grant, it is owed nothing at ${at}`,
+      'these are the emails that went out');
+  }
+  const trialDue = _warningsDue([datesOnly], IST('2026-09-06T08:04:00'))[0];
+  const trialMail = trialDue && _warningMail(trialDue.kind, trialDue.access, trialDue.standing);
+  assert(trialMail && /free trial ends in 2 days/.test(trialMail.body) && /days of grace/.test(trialMail.body),
+    'a trial is still called a trial, and still promised its grace', trialMail && trialMail.body);
+
+  // A dated grant ends like anything else and is warned about like anything
+  // else, but in words that fit: it was never a trial or a subscription.
+  const rachel = teacher({ id: 'u_r', email: 'r@x', trial_started_at: IST('2026-09-02T16:00:00'),
+    grant_active: true, grant_until: IST('2027-09-13T15:29:46') });
+  assert(_warningsDue([rachel], IST('2026-09-14T11:00:00')).length === 0,
+    'a year of free access earns no warning today');
+  const due = _warningsDue([rachel], IST('2027-09-11T16:00:00'));
+  assert(due.length === 1 && due[0].kind === 'warn_2', 'two days before a dated grant ends, it is warned',
+    JSON.stringify(due.map(d => d.kind)));
+  const mail = due[0] && _warningMail(due[0].kind, due[0].access, due[0].standing);
+  assert(mail && /free access ends in 2 days/.test(mail.body) && !/subscription|free trial/.test(mail.body),
+    'and the email calls it free access', mail && mail.body);
+  assert(mail && !/grace/.test(mail.body),
+    'and promises no grace days',
+    'grace follows paid and trial time; when a grant ends the seat goes by the dates underneath');
+
+  // The owner's numbers.
+  const now = IST('2026-09-14T11:00:00');
+  const payer = teacher({ id: 'u_p', email: 'p@x', trial_started_at: IST('2026-07-01T10:00:00'),
+    paid_until: IST('2026-09-18T10:00:00'), monthly_rupees: '400.0000000000000000',
+    last_lesson: IST('2026-08-01T10:00:00') });
+  const lapsed = teacher({ id: 'u_l', email: 'l@x', trial_started_at: IST('2026-08-01T10:00:00') });
+  const trying = teacher({ id: 'u_t', email: 't@x', trial_started_at: IST('2026-09-13T10:00:00') });
+  const everyone = [vani, rachel, payer, lapsed, trying];
+
+  assert(standingOf(vani, now).standing === 'free' && standingOf(vani, now).access.state === 'active',
+    'to the gate a grant is active; to the owner it is free access');
+  assert(standingOf({ ...rachel, grant_until: IST('2026-09-13T00:00:00') }, now).standing === 'lapsed',
+    'a grant that has ended is not free access');
+
+  const f = businessFigures(everyone, now);
+  const shown = JSON.stringify(f);
+  assert(f.free === 2, 'both grants count as free access', shown);
+  assert(f.expired === 1 && f.in_grace === 0, 'only the teacher who really lapsed counts as lapsed', shown);
+  assert(f.paying === 1 && f.mrr === 400, 'a grant adds nothing to paying or to the revenue', shown);
+  assert(f.trialing === 1, 'or to the trials', shown);
+  assert(f.expiring_7d === 1 && f.trials_ending_3d === 0,
+    'a renewal on the 18th is expiring; a grant ending next September is not', shown);
+
+  const text = _digestLines(everyone, counts, now).lines.join('\n');
+  assert(/Paying 1\s+·\s+on trial 1\s+·\s+free access 2\s+·\s+₹400\/month/.test(text),
+    'the morning digest counts the same way', text);
+  assert(!/v@x|r@x/.test(text), 'and lists neither grant as running out or gone quiet', text);
+  assert(/Running out within 7 days:\n\s+· p@x/.test(text), 'while the real renewal still heads the list', text);
+  assert(/no lesson in 14 days[^\n]*\n\s+· p@x/.test(text), 'and a quiet payer is still flagged', text);
+
+  const ending = { ...rachel, grant_until: IST('2026-09-17T10:00:00') };
+  const soonText = _digestLines([ending], counts, now).lines.join('\n');
+  assert(/r@x — .+\(free access\)/.test(soonText),
+    'a dated grant about to end is listed, and says what is ending', soonText);
+
+  // The class of bug, not only this instance. A query that hands rows to
+  // accessFrom() without the grant compiles, passes every other check here,
+  // and quietly turns free access into a lapsed trial.
+  for (const file of readdirSync('src/server').filter(n => n.endsWith('.ts') && n !== 'billing.ts')) {
+    const code = readFileSync(`src/server/${file}`, 'utf8');
+    if (/\b(accessFrom|standingOf|businessFigures)\((?!\))/.test(code)) {
+      assert(/LIVE_GRANT_JOIN|BILLABLE_TEACHERS_SQL/.test(code),
+        `${file} reads billing with grants joined`,
+        'without them a free-forever teacher reads as a trial that ran out');
+    }
+    assert(!/JOIN LATERAL[\s\S]{0,200}plan_grants/.test(code),
+      `${file} keeps no private copy of the grant join`,
+      'a copy is how the emails and /admin fell out of step with the gate');
+  }
+  assert(!/AS (paying|trialing|expired|in_grace|mrr)\b/.test(readFileSync('src/server/ownerDash.ts', 'utf8')),
+    'the /admin strip does not recount teachers in SQL', 'that copy is the one that forgot grants');
+  assert(!/AS (paying|trialing|mrr)\b/.test(readFileSync('src/server/scheduler.ts', 'utf8')),
+    'nor does the digest');
+}
 
 section('OFFLINE — the demo has a clock, real lessons do not');
 

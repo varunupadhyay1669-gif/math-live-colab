@@ -4251,6 +4251,7 @@ html, body, #root { background: var(--bg-primary); }
 .ml-bill-pill.b-grace   { background: rgba(245, 158, 11, 0.16); color: #FCD34D; }
 .ml-bill-pill.b-expired { background: rgba(239, 68, 68, 0.16);  color: #FCA5A5; }
 .ml-bill-pill.b-admin   { background: rgba(148, 163, 184, 0.16); color: #CBD5E1; }
+.ml-bill-pill.b-free    { background: rgba(168, 85, 247, 0.16); color: #D8B4FE; }
 .ml-bill-pill.b-pending { background: rgba(245, 158, 11, 0.16); color: #FCD34D; }
 
 /* A row that needs acting on today. */

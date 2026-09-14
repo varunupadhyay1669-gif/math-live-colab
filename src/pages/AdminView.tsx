@@ -235,6 +235,7 @@ export default function AdminView() {
         <Stat label="Monthly revenue" value={overview ? `₹${overview.mrr.toLocaleString('en-IN')}` : '—'} tone="money" />
         <Stat label="Paying" value={overview ? String(overview.paying) : '—'} tone="money" />
         <Stat label="On trial" value={overview ? String(overview.trialing) : '—'} />
+        <Stat label="Free access" value={overview ? String(overview.free) : '—'} />
         <Stat label="Expiring ≤7d" value={overview ? String(overview.expiring_7d + overview.trials_ending_3d) : '—'}
               tone={overview && (overview.expiring_7d + overview.trials_ending_3d) > 0 ? 'warn' : undefined} />
         <Stat label="Awaiting confirm" value={overview ? String(overview.claims_pending) : '—'}
@@ -293,6 +294,7 @@ export default function AdminView() {
                     <td className="ml-admin-strong">{t.email}</td>
                     <td><span className={`ml-bill-pill b-${t.billing.state}`}>
                       {t.billing.state === 'active' ? 'paid'
+                        : t.billing.state === 'free' ? (t.billing.until ? 'free' : 'free forever')
                         : t.billing.state === 'admin' ? 'admin'
                         : t.billing.state === 'trial' ? `trial · ${t.billing.daysLeft}d`
                         : t.billing.state === 'grace' ? `grace · ${t.billing.daysLeft}d` : 'lapsed'}
@@ -361,8 +363,8 @@ export default function AdminView() {
                 return (
                   <tr key={r.id} className={u.urgent ? 'ml-row-urgent' : ''}>
                     <td className="ml-admin-strong">{r.email}</td>
-                    <td><span className={`ml-bill-pill b-${lapsed ? 'expired' : inGrace ? 'grace' : r.kind === 'paid' ? 'active' : 'trial'}`}>
-                      {lapsed ? 'lapsed' : inGrace ? 'grace' : r.kind === 'paid' ? 'paid' : 'trial'}
+                    <td><span className={`ml-bill-pill b-${lapsed ? 'expired' : inGrace ? 'grace' : r.kind === 'paid' ? 'active' : r.kind === 'free' ? 'free' : 'trial'}`}>
+                      {lapsed ? 'lapsed' : inGrace ? 'grace' : r.kind === 'paid' ? 'paid' : r.kind === 'free' ? 'free' : 'trial'}
                     </span></td>
                     <td className="ml-admin-mono">
                       {r.ends_at ? new Date(r.ends_at).toLocaleDateString(undefined, { day: 'numeric', month: 'short' }) : '—'}
