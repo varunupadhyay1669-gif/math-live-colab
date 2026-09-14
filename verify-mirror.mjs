@@ -22,7 +22,7 @@ import { parseDataUrl, externaliseBoardImages } from './src/server/boardImages.t
 import {
   accessFrom, standingOf, businessFigures, TRIAL_DAYS, PRICE_RUPEES, GRACE_DAYS, PLANS, priceFor, perMonth,
 } from './src/server/billing.ts';
-import { _warningFor, _warningsDue, _warningMail, _digestLines } from './src/server/scheduler.ts';
+import { _warningFor, _warningsDue, _warningMail, _digestLines, _warningClaim, _sendDailyMail } from './src/server/scheduler.ts';
 import { SEED_LESSONS } from './src/lib/seedLessons.ts';
 import { makeLimiter } from './src/server/rateLimit.ts';
 import { listMigrationFiles } from './src/server/migrate.ts';
@@ -1411,6 +1411,200 @@ section('OFFLINE — free access is not a trial that ran out');
     'the /admin strip does not recount teachers in SQL', 'that copy is the one that forgot grants');
   assert(!/AS (paying|trialing|mrr)\b/.test(readFileSync('src/server/scheduler.ts', 'utf8')),
     'nor does the digest');
+}
+
+section('OFFLINE — an expiry email goes out once, not on consecutive days');
+{
+  // 14 Sep 2026, from production mail_log: every teacher whose access ended was
+  // told "ends in 2 days" twice, "ends tomorrow" twice, and "your access ended"
+  // on every day of grace. Rachel's ended at 16:18 IST, and she was sent warn_2
+  // on 7 and 8 Sep, warn_1 on 8 and 9 Sep, and grace on 9, 10, 11 and 12 Sep.
+  // Each was claimed under the day it went out, and "two days left" is true on
+  // two dates whenever access ends after the 8am run.
+  //
+  // So the real mail run is put through a run every 15 minutes from 08:00 IST,
+  // for days on end, against a mail_log that keeps its primary key the way
+  // Postgres does, and what arrives in each inbox is read back.
+  const IST = (s) => new Date(`${s}+05:30`);
+  const DAY = 86_400_000, QUARTER = 15 * 60_000, IST_OFFSET = 5.5 * 3_600_000;
+  const inIST = (t) => new Date(new Date(t).getTime() + IST_OFFSET).toISOString().slice(0, 16).replace('T', ' ');
+  // Every quarter hour, plus any restarts, behind the tick's own gate: nothing
+  // before 8am in India.
+  const runsBetween = (from, until, extra = []) => {
+    const at = extra.map(d => d.getTime());
+    for (let t = from.getTime(); t < until.getTime(); t += QUARTER) at.push(t);
+    return at.filter(t => new Date(t + IST_OFFSET).getUTCHours() >= 8).sort((a, b) => a - b);
+  };
+  const kindOf = (subject) => /ends in 2 days/.test(subject) ? 'warn_2'
+    : /ends tomorrow/.test(subject) ? 'warn_1'
+    : /grace left/.test(subject) ? 'grace'
+    : /paying/.test(subject) ? 'digest'
+    : `unknown: ${subject}`;
+  const teacher = (id, ends, over = {}) => ({
+    id, email: `${id}@x`, trial_started_at: new Date(ends.getTime() - TRIAL_DAYS * DAY), paid_until: null,
+    grant_active: false, grant_until: null, monthly_rupees: null, last_lesson: null, ...over,
+  });
+
+  // A pretend Postgres and a pretend Resend, kept across every run in a world.
+  const world = (teachers, legacyRows = []) => {
+    const log = legacyRows.map(r => ({ ...r }));
+    const inbox = [];
+    let now = null, failFor = null;
+    const pool = { async query(sql, params = []) {
+      const [kind, target, day] = params;
+      const same = (r) => r.kind === kind && r.target === target && r.day === day;
+      if (/^\s*INSERT INTO mail_log/.test(sql)) {
+        if (log.some(same)) return { rows: [], rowCount: 0 };
+        log.push({ kind, target, day, sent_at: now });
+        return { rows: [{}], rowCount: 1 };
+      }
+      if (/^\s*DELETE FROM mail_log/.test(sql)) {
+        const i = log.findIndex(same);
+        if (i >= 0) log.splice(i, 1);
+        return { rows: [], rowCount: i >= 0 ? 1 : 0 };
+      }
+      // Every row, whatever the WHERE says. Nothing here can run that SQL, so
+      // the decision has to come out right without leaning on its filter.
+      if (/FROM mail_log/.test(sql)) return { rows: log.map(r => ({ ...r })), rowCount: log.length };
+      if (/claims_pending/.test(sql)) {
+        return { rows: [{ claims_pending: 0, collected_month: 0, lessons_yesterday: 0, new_signups: 0 }], rowCount: 1 };
+      }
+      if (/plan_grants/.test(sql)) return { rows: teachers.map(t => ({ ...t })), rowCount: teachers.length };
+      throw new Error(`the pretend database did not expect: ${sql.trim().slice(0, 60)}`);
+    } };
+    const send = async (to, subject) => {
+      if (failFor && to.includes(failFor)) { failFor = null; return { ok: false, reason: 'Resend is down' }; }
+      inbox.push({ to: to.join(','), line: `${kindOf(subject)} ${inIST(now)}` });
+      return { ok: true };
+    };
+    return {
+      log,
+      failOnce: (email) => { failFor = email; },
+      to: (email) => inbox.filter(m => m.to === email).map(m => m.line),
+      async run(from, until, extra) {
+        const loud = [console.log, console.error];
+        console.log = console.error = () => {};
+        try {
+          for (const t of runsBetween(from, until, extra)) {
+            now = new Date(t);
+            await _sendDailyMail(pool, now, send);
+          }
+        } finally {
+          [console.log, console.error] = loud;
+        }
+      },
+    };
+  };
+
+  const ownerWas = process.env.OWNER_EMAIL;
+  process.env.OWNER_EMAIL = 'owner@x';
+
+  // Her shape: a trial ending at 16:18 IST, from three days out to past the end
+  // of grace, with restarts at the moments the old key sent the second copy.
+  const END = IST('2026-09-09T16:18:00');
+  const rachel = teacher('rachel', END);
+  // The same dates under a grant with no end. From the dates alone this account
+  // is owed every one of those emails.
+  const vani = teacher('vani', END, { grant_active: true, grant_until: null });
+
+  // The control: the same runs, claimed under the day each one ran, send what
+  // production sent. Without it the counts below would prove nothing.
+  const byDay = { warn_2: new Set(), warn_1: new Set(), grace: new Set() };
+  for (const t of runsBetween(IST('2026-09-06T00:00:00'), IST('2026-09-14T00:00:00'))) {
+    const due = _warningsDue([rachel], new Date(t))[0];
+    if (due) byDay[due.kind].add(inIST(t).slice(5, 10));
+  }
+  const oldKey = Object.entries(byDay).map(([k, days]) => `${k}: ${[...days].join(' ')}`).join('; ');
+  assert(oldKey === 'warn_2: 09-07 09-08; warn_1: 09-08 09-09; grace: 09-09 09-10 09-11 09-12',
+    'claimed under the day it ran, the same runs send what production sent', oldKey);
+
+  const w = world([rachel, vani]);
+  await w.run(IST('2026-09-06T00:00:00'), IST('2026-09-14T00:00:00'),
+    [IST('2026-09-08T08:01:00'), IST('2026-09-09T08:01:00'), IST('2026-09-10T08:01:00')]);
+  const got = w.to('rachel@x');
+  assert(JSON.stringify(got) === JSON.stringify(['warn_2 2026-09-07 16:30', 'warn_1 2026-09-08 16:30', 'grace 2026-09-09 16:30']),
+    'each warning goes out once, at the first run after it falls due', JSON.stringify(got));
+  const keys = w.log.filter(r => r.target === 'rachel').map(r => `${r.kind} ${r.day}`);
+  assert(JSON.stringify(keys) === JSON.stringify(['warn_2 2026-09-09', 'warn_1 2026-09-09', 'grace 2026-09-09']),
+    'each is claimed under the date the access ends, not the date it went out', JSON.stringify(keys));
+  assert(w.to('vani@x').length === 0, 'free forever is sent none of it', JSON.stringify(w.to('vani@x')));
+  const forever = _warningClaim('warn_2', accessFrom(vani, IST('2026-09-08T09:00:00')), []);
+  assert(!forever.send && forever.day === null, 'and has no end to claim a warning under', JSON.stringify(forever));
+  const digests = w.to('owner@x');
+  assert(digests.length === 8 && digests.every((line, i) => line === `digest 2026-09-${String(6 + i).padStart(2, '0')} 08:00`),
+    'the owner digest still goes once a day, at eight', JSON.stringify(digests));
+
+  // A payment moves the end. Rachel's shape again, paying on the morning of the
+  // 8th, between "ends in 2 days" and "ends tomorrow". confirmPayment() extends
+  // from the end of the trial, so the end moves a month, and the new one earns
+  // every warning the first one would have.
+  {
+    const payer = teacher('payer', END);
+    const p = world([payer]);
+    await p.run(IST('2026-09-06T00:00:00'), IST('2026-09-08T10:00:00'));
+    payer.paid_until = IST('2026-10-09T16:18:00');
+    await p.run(IST('2026-09-08T10:00:00'), IST('2026-10-14T00:00:00'));
+    const paid = p.to('payer@x');
+    assert(JSON.stringify(paid) === JSON.stringify([
+      'warn_2 2026-09-07 16:30',
+      'warn_2 2026-10-07 16:30', 'warn_1 2026-10-08 16:30', 'grace 2026-10-09 16:30',
+    ]), 'a payment that moves the end earns a fresh set of warnings before the new one', JSON.stringify(paid));
+
+    // A grant moves it the same way, and the warn_2 the trial left behind does
+    // not stand in for the grant's own.
+    const trialRows = [{ kind: 'warn_2', day: '2026-09-09', sent_at: IST('2026-09-07T16:30:00') }];
+    const granted = accessFrom(teacher('g', END, { grant_active: true, grant_until: IST('2026-09-30T12:00:00') }),
+      IST('2026-09-28T12:00:00'));
+    const fresh = _warningClaim('warn_2', granted, trialRows);
+    assert(fresh.send && fresh.day === '2026-09-30', 'so does a grant that moves it', JSON.stringify(fresh));
+    const again = _warningClaim('warn_2', granted,
+      [...trialRows, { kind: 'warn_2', day: '2026-09-30', sent_at: IST('2026-09-28T12:00:00') }]);
+    assert(!again.send, "and the grant's own warning, once sent, is not sent again", again.reason);
+  }
+
+  // The deploy. Rows the old key wrote carry the day they went out, which the
+  // new key (the day the access ends, 16 Sep here) never matches, so they must
+  // be recognised another way or the deploy sends one last duplicate. Each is an
+  // email the old code sent before the deploy and would have sent again after.
+  const ENDS = IST('2026-09-16T16:18:00');
+  const deploys = [
+    { kind: 'warn_2', sent: '2026-09-15T08:00:00', deploy: '2026-09-15T09:00:00',
+      what: 'a warn_2 from earlier the same morning', after: ['warn_1 2026-09-15 16:30', 'grace 2026-09-16 16:30'] },
+    { kind: 'warn_2', sent: '2026-09-14T16:30:00', deploy: '2026-09-15T07:30:00',
+      what: 'a warn_2 from the afternoon before', after: ['warn_1 2026-09-15 16:30', 'grace 2026-09-16 16:30'] },
+    { kind: 'warn_1', sent: '2026-09-15T16:30:00', deploy: '2026-09-16T07:30:00',
+      what: 'a warn_1 from the afternoon before', after: ['grace 2026-09-16 16:30'] },
+    { kind: 'grace', sent: '2026-09-17T08:00:00', deploy: '2026-09-17T09:00:00',
+      what: 'a grace email from earlier the same morning', after: [] },
+  ];
+  for (const { kind, sent, deploy, what, after } of deploys) {
+    const control = world([teacher('old', ENDS)]);
+    await control.run(IST(deploy), IST('2026-09-21T00:00:00'));
+    assert(control.to('old@x').filter(line => line.startsWith(`${kind} `)).length === 1,
+      `without ${what}, the deploy would send ${kind}`, JSON.stringify(control.to('old@x')));
+    const legacy = [{ kind, target: 'old', day: sent.slice(0, 10), sent_at: IST(sent) }];
+    const deployed = world([teacher('old', ENDS)], legacy);
+    await deployed.run(IST(deploy), IST('2026-09-21T00:00:00'));
+    assert(JSON.stringify(deployed.to('old@x')) === JSON.stringify(after),
+      `${what} stops the deploy sending it again, and loses nothing after it`, JSON.stringify(deployed.to('old@x')));
+  }
+
+  // Resend has a bad minute. The claim is handed back, so the next run sends it
+  // after all, and it still goes only once.
+  {
+    const f = world([teacher('flaky', END)]);
+    await f.run(IST('2026-09-06T00:00:00'), IST('2026-09-07T16:30:00'));
+    f.failOnce('flaky@x');
+    await f.run(IST('2026-09-07T16:30:00'), IST('2026-09-07T16:45:00'));
+    assert(f.to('flaky@x').length === 0 && !f.log.some(r => r.target === 'flaky'),
+      'a send that fails leaves no claim behind', JSON.stringify(f.log));
+    await f.run(IST('2026-09-07T16:45:00'), IST('2026-09-14T00:00:00'));
+    const retried = f.to('flaky@x');
+    assert(JSON.stringify(retried) === JSON.stringify(['warn_2 2026-09-07 16:45', 'warn_1 2026-09-08 16:30', 'grace 2026-09-09 16:30']),
+      'and the next run sends it, once', JSON.stringify(retried));
+  }
+
+  if (ownerWas === undefined) delete process.env.OWNER_EMAIL; else process.env.OWNER_EMAIL = ownerWas;
 }
 
 section('OFFLINE — the demo has a clock, real lessons do not');
