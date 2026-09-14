@@ -19,6 +19,12 @@
 // every learner link, so the two are kept in different tables and only one of
 // them appears below. There is no code path here that can reach `classes`.
 //
+// A teacher's LIBRARY is neither, and is never cleared either: `lessons`
+// (0004) and `board_templates` (0005) are what he teaches FROM, not what a
+// class produced. The one place they meet this file is pictures — a template
+// keeps its pictures in board_images like any board — so a picture a saved
+// template uses counts as in use, exactly like one on a board that stays.
+//
 // Why an endpoint rather than a note saying "ask an engineer": the alternative
 // is somebody typing DELETE into a production database at speed, which is how
 // the wrong thing gets deleted. This is the same operation with a preview, a
@@ -50,6 +56,63 @@ export function cutoffFrom(raw: unknown): Date | null {
 }
 
 /**
+ * Who is asking which rooms are still standing after a clear.
+ *
+ * The delete asks once the doomed rooms are already gone, so every room left
+ * in the table is standing. The preview asks before anything has gone, so it
+ * has to name them: the rooms the delete's `updated_at < $1` does not match —
+ * `updated_at >= $1`, since the column is NOT NULL — and none at all when
+ * everything is going.
+ */
+export type ClearStep = 'preview' | 'delete';
+
+function standingRoom(before: Date | null, step: ClearStep): string {
+  if (step === 'delete') return 'true';
+  return before ? 'r.updated_at >= $1' : 'false';
+}
+
+/**
+ * The one definition of a picture nobody needs.
+ *
+ * The preview counts with it and the delete deletes with it, so the number in
+ * the confirmation is the number that goes. Until 14 Sep 2026 they did not
+ * share one: the preview counted pictures by age while the delete chose them by
+ * reference, so the dialog could promise a number the delete never matched.
+ *
+ * A picture goes only when all three hold:
+ *
+ *   - It is older than the cutoff, when there is one. New to the delete on
+ *     14 Sep 2026, and the safe direction: a picture pasted after the cutoff may
+ *     be on a live board that has not been saved since, and "clear before this
+ *     date" never meant anything newer.
+ *   - No standing board mentions it.
+ *   - No saved template mentions it, on its board or as its thumbnail. Added
+ *     with board templates (PLAN.md task 2.5): clearing a term of class data
+ *     must not punch holes in the boards a teacher starts next term from. The
+ *     scan is bounded — templates.ts refuses a snapshot over 2MB — unlike the
+ *     room scan, which is why only rooms need the size guard below.
+ */
+export function unusedPictureWhere(before: Date | null, step: ClearStep): string {
+  return [
+    before ? 'bi.created_at < $1' : 'true',
+    `NOT EXISTS (SELECT 1 FROM rooms r WHERE ${standingRoom(before, step)} AND position(bi.id in r.data::text) > 0)`,
+    'NOT EXISTS (SELECT 1 FROM board_templates t WHERE t.preview_image_id = bi.id OR position(bi.id in t.snapshot::text) > 0)',
+  ].join('\n       AND ');
+}
+
+/** Standing boards too large to scan safely; any at all and no picture goes. */
+export function largeStandingRoomsSql(before: Date | null, step: ClearStep): string {
+  // 8MB: comfortably above a normal board and far below the size at which
+  // casting jsonb to text has actually taken this database down.
+  return `SELECT count(*) FROM rooms r WHERE ${standingRoom(before, step)} AND pg_column_size(data) > 8388608`;
+}
+
+/** Exactly the parameters a statement uses — Postgres refuses a bind with one to spare. */
+function paramsFor(sql: string, before: Date | null): Date[] {
+  return before && /\$1(?!\d)/.test(sql) ? [before] : [];
+}
+
+/**
  * How many rows a clear would touch.
  *
  * Counted with exactly the same predicate the delete uses, so the number shown
@@ -57,23 +120,31 @@ export function cutoffFrom(raw: unknown): Date | null {
  * confirmation dialog that lies.
  */
 export async function previewClear(pool: Pool, before: Date | null): Promise<ClearCounts> {
-  const [rooms, images, sessions] = await Promise.all([
+  const bigSql = largeStandingRoomsSql(before, 'preview');
+  const [rooms, sessions, big] = await Promise.all([
     pool.query(
       before ? 'SELECT count(*) FROM rooms WHERE updated_at < $1' : 'SELECT count(*) FROM rooms',
-      before ? [before] : [],
-    ),
-    pool.query(
-      before ? 'SELECT count(*) FROM board_images WHERE created_at < $1' : 'SELECT count(*) FROM board_images',
       before ? [before] : [],
     ),
     pool.query(
       before ? 'SELECT count(*) FROM teaching_sessions WHERE started_at < $1' : 'SELECT count(*) FROM teaching_sessions',
       before ? [before] : [],
     ),
+    pool.query(bigSql, paramsFor(bigSql, before)),
   ]);
+
+  // The delete skips pictures entirely while a standing board is too big to
+  // scan, so in that case none will go and none are counted.
+  let boardImages = 0;
+  if (Number(big.rows[0].count) === 0) {
+    const imagesSql = `SELECT count(*) FROM board_images bi WHERE ${unusedPictureWhere(before, 'preview')}`;
+    const images = await pool.query(imagesSql, paramsFor(imagesSql, before));
+    boardImages = Number(images.rows[0].count);
+  }
+
   return {
     rooms: Number(rooms.rows[0].count),
-    boardImages: Number(images.rows[0].count),
+    boardImages,
     sessions: Number(sessions.rows[0].count),
   };
 }
@@ -87,12 +158,12 @@ export async function previewClear(pool: Pool, before: Date | null): Promise<Cle
  * would leave a hole in a board somebody is still teaching from.
  *
  * So the rooms go first, and then the images are collected by REFERENCE rather
- * than by age: an image is deleted only when no surviving room mentions it.
- * That scan casts room JSON to text, which this codebase has learned to be
- * careful about — a 128MB board once killed Postgres twice when cast — so it is
- * skipped entirely if any surviving room is still large, and skipping is the
- * safe direction: it keeps a picture that could have gone, rather than deleting
- * one that is still in use.
+ * than by age alone: an image is deleted only when no surviving room and no
+ * saved template mentions it (unusedPictureWhere). That scan casts room JSON to
+ * text, which this codebase has learned to be careful about — a 128MB board
+ * once killed Postgres twice when cast — so it is skipped entirely if any
+ * surviving room is still large, and skipping is the safe direction: it keeps a
+ * picture that could have gone, rather than deleting one that is still in use.
  */
 export async function clearClassData(pool: Pool, before: Date | null): Promise<ClearCounts> {
   const client = await pool.connect();
@@ -109,18 +180,11 @@ export async function clearClassData(pool: Pool, before: Date | null): Promise<C
     );
 
     let boardImages = 0;
-    // 8MB: comfortably above a normal board and far below the size at which
-    // casting jsonb to text has actually taken this database down.
-    const big = await client.query(
-      'SELECT count(*) FROM rooms WHERE pg_column_size(data) > 8388608',
-    );
+    const bigSql = largeStandingRoomsSql(before, 'delete');
+    const big = await client.query(bigSql, paramsFor(bigSql, before));
     if (Number(big.rows[0].count) === 0) {
-      const imgs = await client.query(
-        `DELETE FROM board_images bi
-          WHERE NOT EXISTS (
-            SELECT 1 FROM rooms r WHERE position(bi.id in r.data::text) > 0
-          )`,
-      );
+      const imagesSql = `DELETE FROM board_images bi WHERE ${unusedPictureWhere(before, 'delete')}`;
+      const imgs = await client.query(imagesSql, paramsFor(imagesSql, before));
       boardImages = imgs.rowCount ?? 0;
     }
 

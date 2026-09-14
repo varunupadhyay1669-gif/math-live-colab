@@ -9,7 +9,8 @@ import { DEMO_LESSON_HTML, DEMO_LESSON_NAME } from "../lib/demoLesson";
 import { cleanDisplayName } from "../lib/displayName";
 import { sessionRecorder } from "../lib/sessionRecorder";
 import { sounds } from "../lib/sounds";
-import { savedBoards, templates } from "../lib/prefs";
+import { savedBoards } from "../lib/prefs";
+import { getTemplate } from "../lib/templatesApi";
 import { LESSON_IFRAME_SANDBOX, LESSON_IFRAME_SANDBOX_VIEW_ONLY, LESSON_IFRAME_ALLOW } from "../lib/iframeAttrs";
 import RoomStatusStrip from "../components/RoomStatusStrip";
 
@@ -1503,7 +1504,12 @@ export default function Room() {
   //      still present), do NOT re-apply. Just strip the param.
   //   3) URL param is cleared after applying so any future refresh of
   //      this tab is a no-op.
+  // The board as of the latest room_state, for the template load below. That
+  // load now waits on the account, so "does this board already have work on
+  // it?" must be asked of the board when the answer arrives, not when it asked.
+  const templateBoardRef = useRef<any>(null);
   useEffect(() => {
+    templateBoardRef.current = whiteboardState;
     if (!socket || !connected || !roomId || !templateId) return;
     if (templateAppliedRef.current) return;
     // Wait until we've received at least one room_state (lastSyncTime is
@@ -1523,52 +1529,52 @@ export default function Room() {
       } catch { /* tolerate non-browser env */ }
     };
 
-    const tpl = templates.get(templateId);
-    if (!tpl) {
-      // Template not found in this browser's localStorage — perhaps the
-      // user followed a link from another device. Nothing to apply.
-      stripTemplateParam();
-      return;
-    }
+    // From the account first, so a template saved on the laptop opens on the
+    // iPad (PLAN.md task 2.5), and from this browser's copy when signed out
+    // or offline. Fire-and-forget on purpose: the room and the whiteboard are
+    // fully usable while it loads, and a template that cannot be found costs
+    // a notice, never the lesson.
+    showNotif('📐 Loading template…');
+    void (async () => {
+      try {
+        const { template: tpl, problem } = await getTemplate(templateId);
+        if (!tpl) {
+          showNotif(`⚠️ ${problem || 'That template could not be found.'}`);
+          return;
+        }
 
-    // If the room already has any whiteboard content, don't pile the
-    // template on top. The user either refreshed or someone else
-    // already populated the room — treat as no-op.
-    const wb: any = whiteboardState || {};
-    const hasContent =
-      (wb.objects?.length ?? 0) > 0 ||
-      (wb.strokes?.length ?? 0) > 0 ||
-      (wb.shapes?.length ?? 0) > 0 ||
-      (wb.texts?.length ?? 0) > 0 ||
-      (wb.instruments?.length ?? 0) > 0;
-    if (hasContent) {
-      stripTemplateParam();
-      return;
-    }
+        // If the room already has any whiteboard content, don't pile the
+        // template on top. The user either refreshed or someone else
+        // already populated the room.
+        if (boardHasContent(templateBoardRef.current)) {
+          showNotif('📐 Template not added — this board already has work on it');
+          return;
+        }
 
-    // Apply the template by replaying each item as an add-event. The
-    // server validates and persists each one, then broadcasts to all
-    // members of the room — including ourselves. So our local
-    // whiteboardState catches up via the normal Whiteboard component
-    // listeners, no double-render needed.
-    const snap: any = tpl.whiteboard || {};
-    try {
-      if (snap.gridMode) socket.emit('whiteboard_set_grid_mode', { roomId, gridMode: snap.gridMode });
-      for (const shape of (snap.shapes || [])) socket.emit('whiteboard_add_shape', { roomId, shape });
-      for (const text of (snap.texts || [])) socket.emit('whiteboard_add_text', { roomId, text });
-      for (const inst of (snap.instruments || [])) socket.emit('whiteboard_add_instrument', { roomId, instrument: inst });
-      for (const obj of (snap.objects || [])) socket.emit('whiteboard_add_image', { roomId, object: obj });
-      for (const stroke of (snap.strokes || [])) socket.emit('whiteboard_draw', { roomId, stroke });
-      // Flip into whiteboard mode so the teacher sees the result. The
-      // server broadcasts whiteboard_mode_changed back to us; if we're
-      // already on whiteboard this is a no-op.
-      socket.emit('whiteboard_mode_toggle', { roomId, active: true });
-      showNotif(`📐 Loaded template: ${tpl.name}`);
-    } catch (err) {
-      console.warn('[template] failed to apply', err);
-    } finally {
-      stripTemplateParam();
-    }
+        // Apply the template by replaying each item as an add-event. The
+        // server validates and persists each one, then broadcasts to all
+        // members of the room — including ourselves. So our local
+        // whiteboardState catches up via the normal Whiteboard component
+        // listeners, no double-render needed.
+        const snap: any = tpl.whiteboard || {};
+        if (snap.gridMode) socket.emit('whiteboard_set_grid_mode', { roomId, gridMode: snap.gridMode });
+        for (const shape of (snap.shapes || [])) socket.emit('whiteboard_add_shape', { roomId, shape });
+        for (const text of (snap.texts || [])) socket.emit('whiteboard_add_text', { roomId, text });
+        for (const inst of (snap.instruments || [])) socket.emit('whiteboard_add_instrument', { roomId, instrument: inst });
+        for (const obj of (snap.objects || [])) socket.emit('whiteboard_add_image', { roomId, object: obj });
+        for (const stroke of (snap.strokes || [])) socket.emit('whiteboard_draw', { roomId, stroke });
+        // Flip into whiteboard mode so the teacher sees the result. The
+        // server broadcasts whiteboard_mode_changed back to us; if we're
+        // already on whiteboard this is a no-op.
+        socket.emit('whiteboard_mode_toggle', { roomId, active: true });
+        showNotif(`📐 Loaded template: ${tpl.name}`);
+      } catch (err) {
+        console.warn('[template] failed to apply', err);
+        showNotif('⚠️ Could not load that template');
+      } finally {
+        stripTemplateParam();
+      }
+    })();
   }, [socket, connected, roomId, templateId, whiteboardState, lastSyncTime]);
 
   // ── Reopen a saved session (?session=ID) — Stage 4 ──

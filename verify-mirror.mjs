@@ -26,6 +26,13 @@ import { _warningFor, _warningsDue, _warningMail, _digestLines } from './src/ser
 import { SEED_LESSONS } from './src/lib/seedLessons.ts';
 import { makeLimiter } from './src/server/rateLimit.ts';
 import { listMigrationFiles } from './src/server/migrate.ts';
+import * as tplServer from './src/server/templates.ts';
+import * as tplClient from './src/lib/templatesApi.ts';
+import * as tplPrefs from './src/lib/prefs.ts';
+import * as tplClassData from './src/server/classData.ts';
+import tplExpress from 'express';
+import { createHmac as tplHmac } from 'node:crypto';
+import { readdirSync as tplReaddir } from 'node:fs';
 import { PRODUCT, subjectFor } from './src/lib/product.ts';
 import { can, permissionsOf } from './src/server/authz.ts';
 import { LESSON_HISTORY_KEEP, LESSON_TTL_HOURS } from './src/server/records.ts';
@@ -987,6 +994,418 @@ section('OFFLINE — a lesson outlives the room that ran it');
     'a tutor signed out, offline or in a demo room still has their library');
   assert(/if \(item\.html\) \{ onLoad/.test(lib),
     'a lesson already in hand opens without a round trip');
+}
+
+section('OFFLINE — a board template follows the teacher to the iPad');
+{
+  // 14 Sep 2026, PLAN.md task 2.5. The founder teaches from a laptop and an
+  // iPad. The lesson library moved into the account on 9 Sep; board templates
+  // were still localStorage, so a template saved on the laptop did not exist on
+  // the iPad. They live in the account now: migration 0005 and templates.ts.
+  const mig = readFileSync('src/server/migrations/0005_board_templates.sql', 'utf8').replace(/--[^\n]*/g, '');
+  const src = readFileSync('src/server/templates.ts', 'utf8');
+
+  assert(/CREATE TABLE IF NOT EXISTS board_templates/.test(mig), 'templates have a table of their own');
+  const migStatements = mig.split(';').map(s => s.trim()).filter(Boolean);
+  assert(migStatements.length >= 2 && migStatements.every(s => /IF NOT EXISTS/.test(s)),
+    '0005 only creates what is missing, so applying it twice changes nothing',
+    String(migStatements.find(s => !/IF NOT EXISTS/.test(s)) || '').slice(0, 120));
+  assert(/PRIMARY KEY \(owner_user_id, id\)/.test(mig),
+    'a template id is unique per teacher, not across every teacher',
+    "ids were minted in separate browsers; a global key would let one teacher's import collide with, and reveal, another's");
+  assert(/owner_user_id\s+text NOT NULL REFERENCES users\(id\) ON DELETE CASCADE/.test(mig),
+    'every template belongs to a teacher');
+  assert(mig.includes("CHECK (id ~ '^[a-z0-9]{6}$')"), 'the table itself refuses an id a link cannot carry');
+
+  // Every statement names the owner. Read from the source, so a query added
+  // later without one fails here rather than in somebody else's account.
+  const statements = [...src.matchAll(/pool\.query\(\s*(`[^`]*`|'[^']*')/g)].map(m => m[1]);
+  assert(statements.length === 6, `all of the template SQL is found (${statements.length} statements)`);
+  assert(statements.every(q => /owner_user_id = \$1|owner_user_id, workspace_id/.test(q)),
+    'every statement in templates.ts is scoped by owner',
+    String(statements.find(q => !/owner_user_id/.test(q)) || ''));
+
+  // The routes themselves, against a database that records what it is asked.
+  const SECRET = 'template-test-secret';
+  const b64url = (buf) => buf.toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  const cookieFor = (uid) => {
+    const payload = b64url(Buffer.from(JSON.stringify({ uid, em: `${uid}@example.com`, exp: Date.now() + 600_000 })));
+    return `ml_session=${payload}.${b64url(tplHmac('sha256', SECRET).update(payload).digest())}`;
+  };
+  const PNG = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+  const db = { calls: [], have: { n: 0, same: 0 }, imagesDown: false, collide: 0 };
+  const pool = {
+    async query(sql, params = []) {
+      db.calls.push({ sql, params });
+      if (/INSERT INTO board_images/.test(sql)) {
+        if (db.imagesDown) throw new Error('the image store is down');
+        return { rows: [], rowCount: 1 };
+      }
+      if (/count\(\*\)::int AS n/.test(sql)) return { rows: [db.have], rowCount: 1 };
+      if (/INSERT INTO board_templates/.test(sql)) {
+        if (/DO NOTHING/.test(sql) && db.collide > 0) { db.collide--; return { rows: [], rowCount: 0 }; }
+        return { rows: [{ id: params[0], name: params[2], bytes: params[4], saved_at: params[5] }], rowCount: 1 };
+      }
+      if (/^SELECT id, name, bytes/.test(sql.trim())) {
+        return { rows: [{ id: 'abc234', name: 'Pythagoras', bytes: 12, saved_at: new Date() }], rowCount: 1 };
+      }
+      return { rows: [], rowCount: 0 };
+    },
+  };
+  const routes = {};
+  const app = {};
+  for (const verb of ['get', 'post', 'delete']) {
+    app[verb] = (path, ...handlers) => { routes[`${verb.toUpperCase()} ${path}`] = handlers; };
+  }
+  tplServer.mountTemplateRoutes(app, pool, { secret: SECRET });
+  const reply = () => ({ statusCode: 200, body: null, status(c) { this.statusCode = c; return this; }, json(b) { this.body = b; return this; } });
+  const hit = async (route, { as, params = {}, body } = {}) => {
+    db.calls = [];
+    const res = reply();
+    await routes[route].find(h => h.length === 2)({ headers: { cookie: as ? cookieFor(as) : undefined }, params, body }, res);
+    return res;
+  };
+  const templateWrites = () => db.calls.filter(c => /INSERT INTO board_templates/.test(c.sql));
+
+  for (const route of ['GET /api/templates', 'GET /api/templates/:id', 'POST /api/templates', 'DELETE /api/templates/:id']) {
+    const r = await hit(route, { params: { id: 'abc234' }, body: { snapshot: {} } });
+    assert(r.statusCode === 401 && db.calls.length === 0,
+      `${route} needs a signed-in teacher, and asks the database nothing without one`);
+  }
+
+  let r = await hit('GET /api/templates', { as: 'u_anna' });
+  assert(r.statusCode === 200 && r.body.templates.length === 1, 'a teacher lists their templates');
+  assert(db.calls[0].params.length === 1 && db.calls[0].params[0] === 'u_anna',
+    'the list is read for the signed-in teacher only');
+  assert(!/snapshot/.test(db.calls[0].sql), 'and never carries the boards themselves',
+    'forty templates should not mean downloading forty boards to read their names on an iPad');
+
+  r = await hit('GET /api/templates/:id', { as: 'u_anna', params: { id: 'abc234' } });
+  assert(r.statusCode === 404 && db.calls[0].params[0] === 'u_anna' && db.calls[0].params[1] === 'abc234',
+    "a template that is not this teacher's is simply not found",
+    'the lookup is by owner AND id, so a guessed id opens nothing');
+
+  r = await hit('POST /api/templates', { as: 'u_anna', body: {
+    name: 'Pythagoras', snapshot: { shapes: [{ id: 's1' }] },
+    owner_user_id: 'u_bob', ownerUserId: 'u_bob', teacher_id: 'u_bob', userId: 'u_bob',
+  } });
+  assert(r.statusCode === 200 && tplServer.isTemplateId(r.body.template.id),
+    'a new template is saved with an id a link can carry');
+  assert(db.calls.length > 0 && db.calls.every(c => c.params.includes('u_anna') && !c.params.includes('u_bob')),
+    'the owner comes from the session cookie, never from the body',
+    'a body naming another teacher changed whose template this is');
+  assert(/DO NOTHING/.test(templateWrites()[0].sql),
+    'a template saved without an id can never overwrite one');
+  db.collide = 1;
+  r = await hit('POST /api/templates', { as: 'u_anna', body: { name: 'Again', snapshot: {} } });
+  const drawn = templateWrites().map(c => c.params[0]);
+  assert(r.statusCode === 200 && drawn.length === 2 && drawn[0] !== drawn[1] && r.body.template.id === drawn[1],
+    'a fresh id that collides draws another instead of replacing a template', drawn.join(' then '));
+
+  const legacyId = tplPrefs.newTemplateId();
+  r = await hit('POST /api/templates', { as: 'u_anna', body: {
+    id: legacyId, name: 'From June', savedAt: Date.UTC(2025, 5, 1), snapshot: { texts: [] },
+  } });
+  const kept = templateWrites()[0];
+  assert(r.statusCode === 200 && kept && kept.params[0] === legacyId && /DO UPDATE/.test(kept.sql),
+    'an imported template keeps its browser id, so old ?template= links still open', legacyId);
+  assert(kept && kept.params[5] instanceof Date && kept.params[5].getTime() === Date.UTC(2025, 5, 1),
+    'and keeps the day it was saved');
+  r = await hit('POST /api/templates', { as: 'u_anna', body: { id: 'ABC-12', name: 'x', snapshot: {} } });
+  assert(r.statusCode === 400 && templateWrites().length === 0, 'an id no link can carry is refused');
+
+  // No inline pictures, ever: they are what made one room 128MB.
+  r = await hit('POST /api/templates', { as: 'u_anna', body: { name: 'Photo', snapshot: { objects: [{ id: 'i1', src: PNG }] } } });
+  const stored = String(templateWrites()[0]?.params[3] || '');
+  assert(r.statusCode === 200 && r.body.picturesMoved === 1 && /\/api\/board-image\/[0-9a-f]{32}/.test(stored),
+    'a pasted picture is moved to the image store on the way in', `status ${r.statusCode}`);
+  assert(stored.length > 0 && !/data:/.test(stored), 'and no inline data: URL is stored',
+    'inline pictures made one room 128MB and crash-looped the server on 3-4 Sep 2026');
+  r = await hit('POST /api/templates', { as: 'u_anna', body: {
+    name: 'Vector', snapshot: { objects: [{ id: 'i1', src: 'data:image/svg+xml;base64,PHN2Zz48L3N2Zz4=' }] },
+  } });
+  assert(r.statusCode === 422 && templateWrites().length === 0,
+    'a picture that cannot be moved out is refused rather than stored inline', r.body && r.body.error);
+  r = await hit('POST /api/templates', { as: 'u_anna', body: { name: 'Hidden', snapshot: { shapes: [{ id: 's', fill: `url(${PNG})` }] } } });
+  assert(r.statusCode === 422 && templateWrites().length === 0,
+    'an inline picture anywhere on the board is caught, not only on image objects');
+  db.imagesDown = true;
+  r = await hit('POST /api/templates', { as: 'u_anna', body: { name: 'Photo', snapshot: { objects: [{ id: 'i1', src: PNG }] } } });
+  db.imagesDown = false;
+  assert(r.statusCode === 503 && templateWrites().length === 0,
+    'with the image store down, the save is "try again" and nothing is stored inline');
+  r = await hit('POST /api/templates', { as: 'u_anna', body: { name: 'Stats', snapshot: { texts: [{ id: 't', text: 'data: 3, 5, 8' }] } } });
+  assert(r.statusCode === 200, 'a teacher writing "data: 3, 5, 8" on the board is not mistaken for a picture');
+  assert(tplServer.findInlineDataUrls({ a: [{ b: PNG }] })[0]?.path === 'a[0].b',
+    'an inline picture is reported with where it is');
+
+  // Caps, each with a sentence that says what to do next.
+  r = await hit('POST /api/templates', { as: 'u_anna', body: {
+    name: 'Huge', snapshot: { strokes: [{ id: 'k', points: 'x'.repeat(tplServer.MAX_TEMPLATE_BYTES) }] },
+  } });
+  assert(r.statusCode === 413 && templateWrites().length === 0 && typeof r.body.error === 'string',
+    `a board over ${tplServer.MAX_TEMPLATE_BYTES / 1048576}MB is refused with a reason`);
+  db.have = { n: tplServer.MAX_TEMPLATES_PER_TEACHER, same: 0 };
+  r = await hit('POST /api/templates', { as: 'u_anna', body: { name: 'One more', snapshot: {} } });
+  assert(r.statusCode === 409 && templateWrites().length === 0 && /delete one/.test(r.body.error),
+    `an account holds at most ${tplServer.MAX_TEMPLATES_PER_TEACHER} templates, and says what to do about it`);
+  db.have = { n: tplServer.MAX_TEMPLATES_PER_TEACHER, same: 1 };
+  r = await hit('POST /api/templates', { as: 'u_anna', body: { id: legacyId, name: 'Replaced', snapshot: {} } });
+  assert(r.statusCode === 200, 'but replacing a template the teacher already has never counts against the cap');
+  db.have = { n: 0, same: 0 };
+
+  r = await hit('DELETE /api/templates/:id', { as: 'u_anna', params: { id: legacyId } });
+  assert(db.calls.length === 1 && /DELETE FROM board_templates WHERE owner_user_id = \$1 AND id = \$2/.test(db.calls[0].sql)
+    && db.calls[0].params[0] === 'u_anna', 'a teacher can delete only their own template');
+
+  // server.ts parses JSON at 100kB before these routes exist, and a board with
+  // a few hundred strokes passes that. A template body must be one that parser
+  // leaves alone, and the route must parse that type itself.
+  const globalParser = tplExpress.json();
+  const parsedReq = { headers: { 'content-type': tplServer.TEMPLATE_MEDIA_TYPE, 'content-length': '4' } };
+  let passedOn = false;
+  globalParser(parsedReq, {}, (err) => { passedOn = !err; });
+  assert(passedOn && !parsedReq._body, "server.ts's 100kB JSON parser leaves a template body to the template route");
+  assert(/express\.json\(\{ type: TEMPLATE_MEDIA_TYPE/.test(src) && tplServer.TEMPLATE_MEDIA_TYPE === tplClient.TEMPLATE_MEDIA_TYPE,
+    'which parses that type itself, and the browser sends exactly that type');
+  const tooBig = reply();
+  routes['POST /api/templates'].find(h => h.length === 4)({ type: 'entity.too.large', status: 413 }, {}, tooBig, () => {});
+  assert(tooBig.statusCode === 413 && typeof tooBig.body?.error === 'string',
+    'an oversize body gets a sentence back, not an HTML error page the client cannot read');
+
+  const server = readFileSync('server.ts', 'utf8');
+  const lessonsAt = server.indexOf('mountLessonRoutes(app, appPool');
+  assert(lessonsAt > 0 && /mountTemplateRoutes\(app, appPool, \{ secret: sessionSecret \}\)/.test(server.slice(lessonsAt, lessonsAt + 300)),
+    'the template routes are mounted beside the lesson library');
+  assert(server.indexOf('mountTemplateRoutes') < server.indexOf("app.get('*'"),
+    'before the page fallback, which would otherwise answer /api/templates with index.html');
+
+  // Clearing class data must spare a template's pictures. A template keeps its
+  // pictures in board_images like any board, and the clear (classData.ts)
+  // deletes the pictures nothing references — where "nothing" used to mean no
+  // room. Clearing last term would have punched holes in the boards next term
+  // starts from. And the preview must count exactly what the delete deletes.
+  const clearRecorder = (largeRooms = 0) => {
+    const calls = [];
+    const answer = async (sql, params = []) => {
+      calls.push({ sql, params });
+      if (/pg_column_size/.test(sql)) return { rows: [{ count: String(largeRooms) }], rowCount: 1 };
+      if (/^\s*SELECT count/.test(sql)) return { rows: [{ count: '0' }], rowCount: 1 };
+      return { rows: [], rowCount: 0 };
+    };
+    return { calls, query: answer, connect: async () => ({ query: answer, release() {} }) };
+  };
+  const TEMPLATE_CLAUSE = 'NOT EXISTS (SELECT 1 FROM board_templates t WHERE t.preview_image_id = bi.id OR position(bi.id in t.snapshot::text) > 0)';
+  const whereOf = (sql) => sql.slice(sql.indexOf(' WHERE ') + ' WHERE '.length);
+  const standingAs = (w) => w.replace(/FROM rooms r WHERE (r\.updated_at >= \$1|false|true) AND/, 'FROM rooms r WHERE <standing> AND');
+  for (const before of [null, new Date('2026-09-01T00:00:00Z')]) {
+    const label = before ? 'with a date' : 'for everything';
+    const previewDb = clearRecorder();
+    await tplClassData.previewClear(previewDb, before);
+    const clearDb = clearRecorder();
+    await tplClassData.clearClassData(clearDb, before);
+    const counted = previewDb.calls.find(c => /FROM board_images/.test(c.sql));
+    const deleted = clearDb.calls.find(c => /DELETE FROM board_images/.test(c.sql));
+    assert(!!counted && counted.sql.includes(TEMPLATE_CLAUSE),
+      `the clear's preview (${label}) counts a picture a saved template uses as in use`);
+    assert(!!deleted && deleted.sql.includes(TEMPLATE_CLAUSE),
+      `the clear itself (${label}) spares a picture a saved template uses`,
+      'clearing a term of class data would punch holes in the boards next term starts from');
+    assert(!!counted && !!deleted
+      && whereOf(counted.sql) === tplClassData.unusedPictureWhere(before, 'preview')
+      && whereOf(deleted.sql) === tplClassData.unusedPictureWhere(before, 'delete'),
+      `the preview and the delete (${label}) are built from the one definition of an unused picture`,
+      'a confirmation that counts differently from the delete is a confirmation that lies');
+    assert(standingAs(tplClassData.unusedPictureWhere(before, 'preview')) === standingAs(tplClassData.unusedPictureWhere(before, 'delete')),
+      `and differ (${label}) only in which rooms are still standing when they ask`);
+    assert([...previewDb.calls, ...clearDb.calls].every(c => (/\$1(?!\d)/.test(c.sql) ? 1 : 0) === c.params.length),
+      `every clear statement (${label}) binds exactly the parameters it uses`,
+      'Postgres refuses a bind with one to spare, which would fail the whole clear');
+  }
+  assert(tplClassData.unusedPictureWhere(new Date(), 'delete').startsWith('bi.created_at < $1'),
+    'with a date, a picture newer than it is kept even when no saved board mentions it yet',
+    'it may be on a live board that has not been saved since — keeping it is the safe direction');
+  const bigPreview = clearRecorder(1);
+  const bigCounts = await tplClassData.previewClear(bigPreview, null);
+  const bigClear = clearRecorder(1);
+  await tplClassData.clearClassData(bigClear, null);
+  assert(bigCounts.boardImages === 0
+    && !bigPreview.calls.some(c => /FROM board_images/.test(c.sql))
+    && !bigClear.calls.some(c => /FROM board_images/.test(c.sql)),
+    'while a standing board is too big to scan, neither the preview nor the delete touches pictures');
+
+  // Anything else that ever deletes pictures would have to know about
+  // templates too, so for now there must not be anything else.
+  const scanned = [
+    'server.ts',
+    ...tplReaddir('src/server').filter(f => f.endsWith('.ts')).map(f => `src/server/${f}`),
+    ...listMigrationFiles().map(f => `src/server/migrations/${f}`),
+    ...tplReaddir('scripts').filter(f => /\.(mjs|js|ts|sh|sql)$/.test(f)).map(f => `scripts/${f}`),
+    ...tplReaddir('deploy').filter(f => /\.(sh|sql|mjs|js)$/.test(f)).map(f => `deploy/${f}`),
+  ];
+  const deleters = scanned.filter(f => /(DELETE\s+FROM|TRUNCATE(\s+TABLE)?)\s+board_images/i.test(readFileSync(f, 'utf8')));
+  assert(deleters.length === 1 && deleters[0] === 'src/server/classData.ts',
+    'the class-data clear is the only code anywhere that deletes pictures', deleters.join(', '));
+
+  // The browser's side: one list from two, and a move into the account that
+  // happens once and deletes nothing.
+  const acct = (id, savedAt, name = `account ${id}`) => ({ id, name, savedAt, source: 'account' });
+  const dev = (id, savedAt, name = `device ${id}`) => ({ id, name, savedAt, source: 'device' });
+  const merged = tplClient.mergeTemplateLists(
+    [acct('aaaaaa', 100, 'Pythagoras (account)')],
+    [dev('aaaaaa', 900, 'Pythagoras (old copy)'), dev('bbbbbb', 500), dev('bbbbbb', 400, 'duplicate')],
+  );
+  assert(merged.length === 2 && merged.filter(t => t.id === 'aaaaaa').length === 1 && merged.filter(t => t.id === 'bbbbbb').length === 1,
+    'the account and browser lists merge to one entry per id', merged.map(t => t.id).join(', '));
+  assert(merged.find(t => t.id === 'aaaaaa')?.name === 'Pythagoras (account)' && merged.find(t => t.id === 'aaaaaa')?.source === 'account',
+    'where both hold a template, the account copy wins',
+    'it is the one every device sees, and its pictures are out of line');
+  assert(merged.find(t => t.id === 'bbbbbb')?.source === 'device' && merged.find(t => t.id === 'bbbbbb')?.savedAt === 500,
+    'a template only this browser has is kept, marked as this device only');
+  assert(merged[0].id === 'bbbbbb', 'newest first, as the browser list always was');
+  assert(tplClient.mergeTemplateLists([], [dev('cccccc', 1)], ['cccccc']).length === 0,
+    'a template this browser moved to the account and was then deleted there does not come back from the local copy',
+    'deleting it on the iPad must not leave it on the laptop');
+
+  const importWb = { shapes: [] };
+  const plan = tplClient.planTemplateImport([
+    { id: 'aaaaaa', name: 'in the account', savedAt: 1, whiteboard: importWb },
+    { id: 'dddddd', name: 'sent before', savedAt: 1, whiteboard: importWb },
+    { id: 'eeeeee', name: 'refused before', savedAt: 1, whiteboard: importWb },
+    { id: 'NOT-OK', name: 'odd id', savedAt: 1, whiteboard: importWb },
+    { id: 'ffffff', name: 'no board', savedAt: 1 },
+    { id: 'gggggg', name: 'to move', savedAt: 1, whiteboard: importWb },
+  ], ['aaaaaa'], tplClient.readImportRecord({ imported: ['dddddd'], refused: ['eeeeee'], noticeShown: false }));
+  assert(plan.length === 1 && plan[0].id === 'gggggg',
+    'only browser copies the account has not got, been sent or refused are offered to it', plan.map(t => t.id).join(', '));
+  assert(tplClient.readImportRecord('garbage').imported.length === 0, 'a corrupt import record reads as a fresh one');
+
+  // Ids stay link-compatible: /room/X?template=abc234 made before today opens.
+  assert(tplPrefs.TEMPLATE_ID_ALPHABET === tplServer.TEMPLATE_ID_ALPHABET,
+    'the browser and the server mint template ids from the same alphabet');
+  const minted = [
+    ...Array.from({ length: 300 }, () => tplPrefs.newTemplateId()),
+    ...Array.from({ length: 300 }, () => tplServer.newTemplateId()),
+  ];
+  assert(minted.every(id => tplServer.isTemplateId(id) && tplClient.isLinkableTemplateId(id)),
+    'every id either side mints is one the server accepts', String(minted.find(id => !tplServer.isTemplateId(id))));
+  assert(minted.every(id => encodeURIComponent(id) === id
+    && new URL(`https://mathslive.test/room/r1?name=T&template=${id}`).searchParams.get('template') === id),
+    'and passes through a ?template= link unchanged');
+  assert(['abc23', 'abc2345', 'abc 23', '../etc', 'ABC123'].every(id => !tplServer.isTemplateId(id)),
+    'anything else is not a template id');
+
+  // The move itself, end to end, against a browser and a server made of Maps.
+  const kv = new Map();
+  const fakeStorage = {
+    getItem: (k) => (kv.has(k) ? kv.get(k) : null),
+    setItem: (k, v) => { kv.set(k, String(v)); },
+    removeItem: (k) => { kv.delete(k); },
+  };
+  const realGlobals = {
+    window: Object.getOwnPropertyDescriptor(globalThis, 'window'),
+    localStorage: Object.getOwnPropertyDescriptor(globalThis, 'localStorage'),
+    fetch: globalThis.fetch,
+  };
+  const inAccount = new Map();
+  const sentRequests = [];
+  let offline = false;
+  let signedIn = true;
+  const answer = (status, body) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
+  Object.defineProperty(globalThis, 'window', { value: { localStorage: fakeStorage, dispatchEvent: () => true }, configurable: true, writable: true });
+  Object.defineProperty(globalThis, 'localStorage', { value: fakeStorage, configurable: true, writable: true });
+  globalThis.fetch = async (url, init = {}) => {
+    const method = init.method || 'GET';
+    sentRequests.push({ url: String(url), method, type: init.headers?.['Content-Type'], body: init.body });
+    if (offline) throw new TypeError('Failed to fetch');
+    if (!signedIn) return answer(401, { error: 'Sign in to save templates to your account.' });
+    const one = /^\/api\/templates\/([a-z0-9]{6})$/.exec(String(url));
+    if (String(url) === '/api/templates' && method === 'GET') {
+      return answer(200, { templates: [...inAccount.values()].map(({ id, name, saved_at }) => ({ id, name, bytes: 1, saved_at })) });
+    }
+    if (String(url) === '/api/templates' && method === 'POST') {
+      const b = JSON.parse(init.body);
+      const id = b.id || tplServer.newTemplateId();
+      inAccount.set(id, { id, name: b.name, saved_at: new Date(b.savedAt || Date.now()).toISOString(), snapshot: b.snapshot });
+      return answer(200, { template: { id, name: b.name, bytes: 1, saved_at: inAccount.get(id).saved_at } });
+    }
+    if (one && method === 'GET') {
+      return inAccount.has(one[1]) ? answer(200, { template: inAccount.get(one[1]) }) : answer(404, { error: 'No such template.' });
+    }
+    if (one && method === 'DELETE') { inAccount.delete(one[1]); return answer(200, { ok: true, deleted: 1 }); }
+    return answer(404, { error: 'unexpected request' });
+  };
+  try {
+    const june = Date.UTC(2026, 5, 1);
+    kv.set('mathlive:templates', JSON.stringify([
+      { id: 'abc234', name: 'Pythagoras starter', savedAt: june, whiteboard: { shapes: [{ id: 's1' }] } },
+      { id: 'xyz789', name: 'Number line', savedAt: june + 1000, whiteboard: { texts: [{ id: 't1', text: '0 1 2' }] } },
+    ]));
+
+    const signedOutList = await tplClient.loadTemplateList(null);
+    assert(signedOutList.from === 'device' && signedOutList.templates.length === 2 && sentRequests.length === 0,
+      "signed out, the list is this browser's templates and nothing is asked of the server");
+
+    const firstLoad = await tplClient.loadTemplateList('u_anna');
+    const firstPosts = sentRequests.filter(q => q.method === 'POST');
+    assert(firstPosts.length === 2 && firstPosts.every(q => q.type === tplClient.TEMPLATE_MEDIA_TYPE),
+      "the first signed-in load moves each of this browser's templates into the account", `${firstPosts.length} sent`);
+    assert(inAccount.has('abc234') && inAccount.has('xyz789') && firstLoad.templates.every(t => t.source === 'account'),
+      'keeping their ids, so ?template= links made before today still open');
+    assert(inAccount.get('abc234')?.saved_at === new Date(june).toISOString(), 'and the day each one was saved');
+    assert(firstLoad.notice === 'Your board templates are now saved to your account' && firstLoad.notice === tplClient.IMPORT_NOTICE,
+      'and says so: "Your board templates are now saved to your account"');
+    assert(JSON.parse(kv.get('mathlive:templates')).length === 2,
+      'every local copy is still there afterwards', 'this release deletes nothing a teacher saved in the browser');
+
+    tplClient.markImportNoticeShown('u_anna');
+    sentRequests.length = 0;
+    const secondLoad = await tplClient.loadTemplateList('u_anna');
+    assert(sentRequests.filter(q => q.method === 'POST').length === 0 && secondLoad.notice === null && secondLoad.templates.length === 2,
+      'the next load sends nothing again, and the notice is not shown twice');
+
+    inAccount.delete('abc234');
+    const thirdLoad = await tplClient.loadTemplateList('u_anna');
+    assert(thirdLoad.templates.map(t => t.id).join() === 'xyz789' && JSON.parse(kv.get('mathlive:templates')).length === 2,
+      'a template deleted on another device stays gone here, and its local copy is left alone');
+
+    const opened = await tplClient.getTemplate('xyz789');
+    assert(opened.from === 'account' && opened.template?.whiteboard?.texts?.[0]?.text === '0 1 2',
+      'a template link opens from the account');
+
+    offline = true;
+    const offlineList = await tplClient.loadTemplateList('u_anna');
+    assert(offlineList.from === 'unreachable' && offlineList.templates.length === 2 && typeof offlineList.problem === 'string',
+      "with the server out of reach the list falls back to this browser's copies, and says so");
+    const openedOffline = await tplClient.getTemplate('abc234');
+    assert(openedOffline.from === 'device' && openedOffline.template?.name === 'Pythagoras starter',
+      "and a template link still opens from this browser's copy");
+    const offlineSave = await tplClient.saveTemplate('Fractions wall', { shapes: [] });
+    assert(offlineSave.ok && offlineSave.saved?.source === 'device' && /could not be reached/.test(offlineSave.message),
+      'a save the account cannot receive is kept on this device, and the toast says so', offlineSave.message);
+    offline = false;
+
+    signedIn = false;
+    const signedOutSave = await tplClient.saveTemplate('Angles', { shapes: [] });
+    assert(signedOutSave.ok && signedOutSave.saved?.source === 'device' && /^✓ Saved on this device/.test(signedOutSave.message),
+      'signed out, a save lands on this device as it always did');
+    signedIn = true;
+
+    const onlineSave = await tplClient.saveTemplate('Circles', { shapes: [] });
+    assert(onlineSave.ok && onlineSave.saved?.source === 'account' && inAccount.has(onlineSave.saved.id),
+      'signed in, a save lands in the account');
+
+    sentRequests.length = 0;
+    const fourthLoad = await tplClient.loadTemplateList('u_anna');
+    const movedLater = sentRequests.filter(q => q.method === 'POST').map(q => JSON.parse(q.body).name).sort();
+    assert(movedLater.join() === 'Angles,Fractions wall',
+      'templates saved on this device while the account was out of reach move there on the next load', movedLater.join());
+    assert(fourthLoad.notice === null, 'without showing the notice again');
+  } finally {
+    if (realGlobals.window) Object.defineProperty(globalThis, 'window', realGlobals.window); else delete globalThis.window;
+    if (realGlobals.localStorage) Object.defineProperty(globalThis, 'localStorage', realGlobals.localStorage); else delete globalThis.localStorage;
+    globalThis.fetch = realGlobals.fetch;
+  }
 }
 
 section('OFFLINE — clearing a class does not clear the student');
