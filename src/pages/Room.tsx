@@ -1412,6 +1412,15 @@ export default function Room() {
     // A (re)joining student asked for a fresh full snapshot.
     newSocket.on("mirror_request", () => {
       postToIframe({ type: 'MIRROR_REQUEST' });
+      // And where the tutor is on the page. A student's copy takes the scroll in
+      // a snapshot only on its first paint, and a copy still laying out clamps
+      // it to the top. On 15 Sep 2026 that left a student at the top of a
+      // reopened explanation while the tutor was halfway down it: "the student
+      // somewhere else, I'm somewhere else". Said twice, so a copy that paints
+      // late still lands in the right place.
+      for (const delay of [400, 1500]) {
+        setTimeout(() => iframeRef.current?.contentWindow?.postMessage({ type: 'EMIT_CURRENT_SCROLL' }, '*'), delay);
+      }
     });
 
     // ── Control handoff ──
@@ -1860,6 +1869,31 @@ export default function Room() {
   // lands after the teacher has closed it cannot take over the lesson plumbing.
   const explainerOnScreenKeyRef = useRef<string | null>(null);
   explainerOnScreenKeyRef.current = showTempContent ? activeExplainerKey : null;
+
+  // Bringing a kept explanation back fires no load event, so nothing else tells
+  // the class what that document looks like now or where the tutor left it. Say
+  // it: a full snapshot straight away, then the scroll once the students' copies
+  // have had time to paint. On 15 Sep 2026, the day explanations started being
+  // kept, a tutor was halfway down a reopened one while the student sat at the
+  // top. A document shown for the first time announces itself when it loads, so
+  // this only speaks for one that was already there.
+  useEffect(() => {
+    if (!showTempContent || whiteboardMode || !activeExplainerKey) return;
+    const frame = explainerFramesRef.current.get(activeExplainerKey);
+    let loaded = false;
+    try {
+      const doc = frame?.contentDocument;
+      loaded = doc?.readyState === 'complete' && (doc.body?.childElementCount ?? 0) > 0;
+    } catch { loaded = false; }
+    if (!frame || !loaded) return;
+    const post = (msg: object) => { try { frame.contentWindow?.postMessage(msg, '*'); } catch { /* gone */ } };
+    const timers = [
+      setTimeout(() => post({ type: 'MIRROR_REQUEST' }), 150),
+      setTimeout(() => post({ type: 'EMIT_CURRENT_SCROLL' }), 900),
+      setTimeout(() => post({ type: 'EMIT_CURRENT_SCROLL' }), 2500),
+    ];
+    return () => timers.forEach(clearTimeout);
+  }, [showTempContent, whiteboardMode, activeExplainerKey]);
 
   // ── Mirror iframe onLoad: behave like a passive student view ──
   const handleMirrorLoad = useCallback(() => {

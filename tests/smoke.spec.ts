@@ -689,4 +689,54 @@ test.describe('the mirror', () => {
     await teacher.close();
     await learner.close();
   });
+
+  test('reopening an explanation puts the learner where the tutor left it', async ({ browser }) => {
+    // 15 Sep 2026, the afternoon after kept explanations shipped: a reopened
+    // explanation came back where the tutor had left it, but the learner's copy
+    // started at the top. The founder, mid-class: "the student somewhere else,
+    // I'm somewhere else."
+    const code = room('y');
+    const teacher = await (await browser.newContext()).newPage();
+    const learner = await (await browser.newContext()).newPage();
+    const tall = (label: string) => `<!doctype html><html><head><title>${label}</title></head><body style="margin:0">
+      <h1>${label} top</h1><div style="height:3000px"></div><h2>${label} bottom</h2><div style="height:800px"></div>
+    </body></html>`;
+    const addExplanation = async (name: string, html: string) => {
+      const another = teacher.getByTitle('Add another explanation');
+      if (await another.count()) await another.first().click();
+      else await teacher.getByTitle('Upload an HTML explainer or paste HTML code to overlay on top of the current example').click();
+      await teacher.getByPlaceholder('Title (optional, e.g. Step-by-step quadratic)').fill(name);
+      await teacher.getByPlaceholder('Paste your HTML code here...').fill(html);
+      await teacher.getByRole('button', { name: /Show explainer/ }).click();
+    };
+
+    await teacher.goto(`${BASE}/room/${code}?name=Teacher`);
+    await runLesson(teacher, '<!doctype html><html><body><h1>Main lesson</h1></body></html>');
+    await lessonFrame(teacher, 'Main lesson');
+    await addExplanation('Alpha', tall('Alpha'));
+    const alpha = await lessonFrame(teacher, 'Alpha top');
+    await learner.goto(`${BASE}/live/${code}?name=Learner`);
+    await lessonFrame(learner, 'Alpha top');
+
+    await alpha.evaluate(() => window.scrollTo(0, 2000));
+    await addExplanation('Beta', tall('Beta'));
+    await lessonFrame(learner, 'Beta top');
+
+    // Back to Alpha, which the tutor left 2000px down.
+    await teacher.getByTitle('Show Alpha again').click();
+    expect(await alpha.evaluate(() => Math.round(window.scrollY))).toBe(2000);
+    await expect.poll(async () => {
+      let best = 0;
+      for (const f of learner.frames()) {
+        if (f === learner.mainFrame()) continue;
+        try {
+          if ((await f.content()).includes('Alpha top')) best = Math.max(best, Math.round(await f.evaluate(() => window.scrollY)));
+        } catch { /* navigating */ }
+      }
+      return best;
+    }, { timeout: 15_000, message: 'the learner was left at the top of the reopened explanation' }).toBe(2000);
+
+    await teacher.close();
+    await learner.close();
+  });
 });

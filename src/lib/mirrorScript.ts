@@ -733,6 +733,16 @@ export const mirrorScript = `
       // still would otherwise receive nothing at all and sit on a blank frame
       // until something moved. force=true bypasses the dedup for exactly this.
       else if (d.type === 'MIRROR_REQUEST') { sendSnapshot(true); canvasTick(true); }
+      // Where the tutor is on the page, on request, as the same message a real
+      // scroll sends. The app asks when a student copy has just reloaded and when
+      // a kept explanation comes back, because a reopened document is wherever
+      // the tutor left it and nothing else would say so. The engine the mirror
+      // replaced used to answer this; the mirror never did, so those requests
+      // went nowhere (found 15 Sep 2026). A mirrorOnly request is the dual-view
+      // pane's own pulse and must not move every student, so it is left alone.
+      else if (d.type === 'EMIT_CURRENT_SCROLL' && !d.mirrorOnly) {
+        post({ type: 'SYNC_MIRROR_SCROLL', scrollX: window.scrollX || 0, scrollY: window.scrollY || 0 });
+      }
       // Put this lesson back where the class was. Sent once, after a reload,
       // and only when the room's stored state belongs to THIS lesson.
       else if (d.type === 'MIRROR_RESTORE_STATE' && typeof d.state === 'string') {
@@ -758,6 +768,8 @@ export const mirrorScript = `
 
   // ═══════════════════════ FOLLOWER (dumb mirror) ═══════════════════════
   var applyingDom = false, lastBody = null, allow = false, lastCanvasList = null;
+  // Set once a frame carrying the tutor's scroll has painted: see applySnapshot.
+  var scrollAligned = false;
   var lastAttrs = null, lastHead = null, appliedHash = null, staleTicks = 0;
 
   // Re-apply <body>'s own attributes (class/style/data-*). Without this a lesson
@@ -1145,7 +1157,14 @@ export const mirrorScript = `
       if (d.h) appliedHash = d.h; staleTicks = 0;
       return;
     }
-    var firstPaint = (lastBody === null);
+    // Line up with the tutor's scroll on the first frame that says where they
+    // are, not merely the first frame that paints. The server answers a
+    // (re)joining copy with its cached frame first, and that frame carries no
+    // scroll: it used to count as the first paint, so the tutor's own snapshot a
+    // moment later was treated as a live update and the student stayed at the
+    // top. On 15 Sep 2026 that was a student at the top of a reopened explanation
+    // while the tutor was halfway down it.
+    var alignScroll = !scrollAligned && (typeof d.scrollX === 'number' || typeof d.scrollY === 'number');
     // Replacing body.innerHTML resets scroll, focus, the text caret, and the
     // scroll position of every inner scrollable panel. On a LIVE update (the
     // student acts → the teacher's lesson changes → a snapshot comes back) that
@@ -1181,8 +1200,9 @@ export const mirrorScript = `
     var attrsOk = applyBodyAttrs(d.attrs);
     var headOk = applyHead(d.head);
     try {
-      if (firstPaint && (typeof d.scrollX === 'number' || typeof d.scrollY === 'number')) {
+      if (alignScroll) {
         window.scrollTo(d.scrollX || 0, d.scrollY || 0);
+        if (painted) scrollAligned = true;
       } else {
         window.scrollTo(keepX, keepY);
       }

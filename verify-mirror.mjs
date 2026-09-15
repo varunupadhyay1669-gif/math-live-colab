@@ -367,6 +367,29 @@ section('OFFLINE — a learner with an empty screen keeps asking');
   assert(/Math\.min\(askDelay \* 1\.5, 10000\)/.test(rescue), 'and backs off while it tries');
 }
 
+section('OFFLINE — a student copy lines up with where the tutor is on the page');
+{
+  // 15 Sep 2026, mid-class: a reopened explanation came back where the tutor had
+  // left it, but the student's copy sat at the top. Two holes, both needed for it:
+  // the server answers a (re)joining copy with its cached frame first, which
+  // carries no scroll and used to use up the copy's one chance to align; and the
+  // app's request for the tutor's scroll position was one the mirror never
+  // answered. The walk itself is a smoke test ('reopening an explanation puts the
+  // learner where the tutor left it').
+  const engine = readFileSync('src/lib/mirrorScript.ts', 'utf8');
+  assert(/d\.type === 'EMIT_CURRENT_SCROLL' && !d\.mirrorOnly\)\s*\{\s*post\(\{ type: 'SYNC_MIRROR_SCROLL'/.test(engine),
+    'the source answers a request for where the tutor is scrolled, with the message a real scroll sends');
+  assert(/var alignScroll = !scrollAligned && \(typeof d\.scrollX === 'number'/.test(engine)
+    && /if \(painted\) scrollAligned = true;/.test(engine)
+    && !/var firstPaint = \(lastBody === null\)/.test(engine),
+    'a student copy aligns on the first frame that says where the tutor is, not merely the first frame to paint',
+    'the cached frame served on (re)join carries no scroll');
+  const roomSrc = readFileSync('src/pages/Room.tsx', 'utf8');
+  const onRequest = roomSrc.slice(roomSrc.indexOf('newSocket.on("mirror_request"'), roomSrc.indexOf('newSocket.on("mirror_request"') + 900);
+  assert(/EMIT_CURRENT_SCROLL/.test(onRequest),
+    "answering a student's resync also re-announces where the tutor is scrolled");
+}
+
 section('OFFLINE — a frame that did not paint is not recorded as painted');
 {
   // 4 Sep 2026, from a live class: the student sat on the previous page of the
