@@ -95,9 +95,33 @@ function standingRoom(before: Date | null, step: ClearStep): string {
 export function unusedPictureWhere(before: Date | null, step: ClearStep): string {
   return [
     before ? 'bi.created_at < $1' : 'true',
-    `NOT EXISTS (SELECT 1 FROM rooms r WHERE ${standingRoom(before, step)} AND position(bi.id in r.data::text) > 0)`,
-    'NOT EXISTS (SELECT 1 FROM board_templates t WHERE t.preview_image_id = bi.id OR position(bi.id in t.snapshot::text) > 0)',
+    `bi.id NOT IN (${mentionedPicturesSql(before, step)})`,
   ].join('\n       AND ');
+}
+
+/**
+ * Every picture id a standing board or a saved template mentions, gathered once.
+ *
+ * The first version asked, for EACH picture, whether any standing room's text
+ * contained it: pictures × rooms × size, on the Postgres that serves live
+ * classes, and the admin panel asks again on every change of date (found in
+ * review, 15 Sep 2026). This reads each standing room and each template once and
+ * collects every token that could be a picture id, so the cost is the size of
+ * the boards rather than that times the number of pictures. NOT IN over a
+ * subquery that never correlates is hashed once.
+ *
+ * A picture id is 32 lower-case hex characters (boardImages.ts). Any standalone
+ * run of exactly that counts as a mention, whatever surrounds it: a superset of
+ * the real links, so a coincidence can only keep a picture that could have gone,
+ * never delete one still in use. No branch yields NULL, which NOT IN needs.
+ */
+function mentionedPicturesSql(before: Date | null, step: ClearStep): string {
+  const token = `'(?:^|[^0-9a-f])([0-9a-f]{32})(?![0-9a-f])'`;
+  return [
+    `SELECT m[1] FROM rooms r, regexp_matches(r.data::text, ${token}, 'g') AS m WHERE ${standingRoom(before, step)}`,
+    `SELECT m[1] FROM board_templates t, regexp_matches(t.snapshot::text, ${token}, 'g') AS m`,
+    'SELECT t.preview_image_id FROM board_templates t WHERE t.preview_image_id IS NOT NULL',
+  ].join('\n         UNION ');
 }
 
 /** Standing boards too large to scan safely; any at all and no picture goes. */

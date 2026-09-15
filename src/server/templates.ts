@@ -84,13 +84,18 @@ export function newTemplateId(): string {
 }
 
 /**
- * An inline picture inside a string: `data:<type>/<subtype>` then `;` or `,`.
+ * An inline picture inside a string: `data:`, an optional media type and
+ * parameters, then the comma where the data starts.
  *
  * Not anchored to the start, because a picture inside a style string is still a
- * picture in the table. Narrow enough that a teacher writing "data: 3, 5, 8" on
- * the board is not mistaken for one — that has a space where the type goes.
+ * picture in the table. The media type is optional because it is optional in a
+ * data URL: `data:;base64,iVBOR…` is a PNG to every browser, and the first
+ * version of this pattern, which required the type, let exactly that through
+ * and stored it inline (found in review, 15 Sep 2026). Still narrow enough that
+ * a teacher writing "data: 3, 5, 8" on the board is not mistaken for one: that
+ * has a space where the type or the comma would be.
  */
-const INLINE_DATA_URL = /\bdata:[a-z]+\/[a-z0-9.+-]+[;,]/i;
+const INLINE_DATA_URL = /\bdata:(?:[a-z]+\/[a-z0-9.+-]+)?(?:;[a-z0-9=.+-]+)*,/i;
 
 export interface InlinePicture { path: string; value: string; }
 
@@ -201,12 +206,22 @@ export function mountTemplateRoutes(app: any, pool: Pool, opts: { secret: string
   });
 
   // Ahead of the body parser, so a flood is refused before 8MB of it is read.
-  // Forty a minute is past a whole browser's worth of templates (25) being
-  // imported at once, which is the most a real teacher will ever send.
+  // Twenty a minute: the same as the 8MB saved-lesson route in server.ts, which
+  // calls 8MB at an unbounded rate a memory attack on a 1 GB box. A browser's
+  // worth of templates (25) moves over two visits instead of one; the client
+  // stops at the first refusal and tries the rest next time.
   const writeLimit = rateLimit({
     name: 'template-write', windowMs: 60_000,
-    max: Number(process.env.TEMPLATE_WRITES_PER_MIN) || 40,
+    max: Number(process.env.TEMPLATE_WRITES_PER_MIN) || 20,
   });
+  // And nobody's 8MB is read before we know whose it is. The session is a
+  // cookie, so asking costs nothing, and a caller with no account never reaches
+  // the parser. The first version parsed first and asked after (found in review,
+  // 15 Sep 2026).
+  const signedInFirst = (req: Request, res: Response, next: () => void) => {
+    if (who(req)) return next();
+    res.status(401).json({ error: 'Sign in to save templates to your account.' });
+  };
   const templateBody = express.json({ type: TEMPLATE_MEDIA_TYPE, limit: TEMPLATE_BODY_LIMIT });
   // Express's own answer to a parser failure is an HTML page the client cannot
   // read, which is how a save turns into a silent nothing.
@@ -220,7 +235,7 @@ export function mountTemplateRoutes(app: any, pool: Pool, opts: { secret: string
     });
   };
 
-  app.post('/api/templates', writeLimit, templateBody, async (req: Request, res: Response) => {
+  app.post('/api/templates', writeLimit, signedInFirst, templateBody, async (req: Request, res: Response) => {
     const user = who(req);
     if (!user) return res.status(401).json({ error: 'Sign in to save templates to your account.' });
     const body = (req.body || {}) as { id?: unknown; name?: unknown; snapshot?: unknown; savedAt?: unknown };
@@ -251,6 +266,31 @@ export function mountTemplateRoutes(app: any, pool: Pool, opts: { secret: string
         return res.status(409).json({
           error: `Your account holds ${MAX_TEMPLATES_PER_TEACHER} templates — delete one to save another.`,
           code: 'template_limit',
+        });
+      }
+
+      // Refused before anything is stored. A save that was going to fail used to
+      // move its pictures into board_images first and leave them there with
+      // nothing using them (found in review, 15 Sep 2026). So a picture nobody
+      // could move out is refused now, and the board is measured as it will be
+      // stored, each inline picture counted at the length of the link that
+      // will replace it.
+      const unkeepable = findInlineDataUrls(snapshot, 1000)
+        .some(p => !(MOVABLE_PICTURE.test(p.path) && parseDataUrl(p.value) !== null));
+      if (unkeepable) {
+        return res.status(422).json({
+          error: 'This board has a picture a template cannot keep — only PNG, JPEG, WebP or GIF pictures under 6MB. Remove it and save again.',
+          code: 'inline_picture',
+        });
+      }
+      const PICTURE_LINK = '/api/board-image/00000000000000000000000000000000';
+      const expected = Buffer.byteLength(
+        JSON.stringify(snapshot, (_key, v) => (typeof v === 'string' && INLINE_DATA_URL.test(v) ? PICTURE_LINK : v)),
+        'utf8',
+      );
+      if (expected > MAX_TEMPLATE_BYTES) {
+        return res.status(413).json({
+          error: 'That board is too large to save as a template (2MB limit). Clearing some ink usually brings it under.',
         });
       }
 

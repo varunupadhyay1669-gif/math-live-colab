@@ -111,16 +111,18 @@ export function readImportRecord(raw: unknown): ImportRecord {
 /**
  * The browser copies still to offer the account.
  *
- * Not already there, not already sent, not already refused — and only ones a
- * link can reach and that actually hold a board. Everything else stays exactly
- * where it is, on this device.
+ * Not already there, not already sent, not already refused, not already moved
+ * into a DIFFERENT account from this browser — and only ones a link can reach
+ * and that actually hold a board. Everything else stays exactly where it is, on
+ * this device.
  */
 export function planTemplateImport(
   device: LessonTemplate[],
   accountIds: Iterable<string>,
   record: ImportRecord,
+  importedByOthers: Iterable<string> = [],
 ): LessonTemplate[] {
-  const skip = new Set<string>([...accountIds, ...record.imported, ...record.refused]);
+  const skip = new Set<string>([...accountIds, ...record.imported, ...record.refused, ...importedByOthers]);
   return device.filter(t =>
     !!t && isLinkableTemplateId(t.id) && !skip.has(t.id)
     && !!t.whiteboard && typeof t.whiteboard === 'object' && !Array.isArray(t.whiteboard));
@@ -210,6 +212,32 @@ function writeImportRecord(userId: string, record: ImportRecord): void {
   });
 }
 
+/**
+ * Which account each template in this browser was moved into.
+ *
+ * Browser-wide on purpose. The import record above is per account, so on a
+ * laptop two teachers share, the second to sign in found nothing recorded and
+ * copied every template in the browser, the first teacher's included, into
+ * their own account for good (found in review, 15 Sep 2026). A template moved
+ * into one account is now offered to no other.
+ */
+const OWNERS_KEY = 'templatesImportOwners';
+
+export function readImportOwners(raw: unknown): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+    for (const [id, uid] of Object.entries(raw as Record<string, unknown>)) {
+      if (typeof uid === 'string' && uid) out[id] = uid;
+    }
+  }
+  return out;
+}
+
+/** Template ids this browser has already moved into an account other than this one. */
+export function importedByOtherAccounts(owners: Record<string, string>, userId: string): string[] {
+  return Object.keys(owners).filter(id => owners[id] !== userId);
+}
+
 // ── What the screens call ────────────────────────────────────────────────────
 
 /** This browser's templates, straight away — what a list shows before the account answers. */
@@ -269,11 +297,14 @@ async function loadForAccount(userId: string): Promise<TemplateListResult> {
     .map(fromServerRow)
     .filter((t): t is TemplateSummary => t !== null);
   const record = readImportRecord(prefs.getJson(importKey(userId), null));
-  const todo = planTemplateImport(deviceStore.list(), account.map(t => t.id), record);
+  const owners = readImportOwners(prefs.getJson(OWNERS_KEY, null));
+  const todo = planTemplateImport(deviceStore.list(), account.map(t => t.id), record,
+    importedByOtherAccounts(owners, userId));
 
   // One at a time, oldest problem first: a full account or a dropped connection
   // stops the run rather than failing the same way twenty-four more times.
   let retryLater = false;
+  let accountFull = false;
   const refusedNow: string[] = [];
   for (const tpl of todo) {
     const sent = await call<{ template?: unknown }>('/api/templates', {
@@ -284,21 +315,33 @@ async function loadForAccount(userId: string): Promise<TemplateListResult> {
     });
     if (sent.ok) {
       record.imported.push(tpl.id);
+      owners[tpl.id] = userId;
       const row = fromServerRow(sent.body.template);
       if (row) account = [row, ...account.filter(t => t.id !== row.id)];
-    } else if (failure(sent)?.kind === 'refused') {
+    } else if (failure(sent)?.kind === 'refused' && failure(sent)!.status !== 409) {
+      // Refused for good: too large, a picture it cannot keep, unreadable.
       record.refused.push(tpl.id);
       refusedNow.push(`"${tpl.name}": ${failure(sent)!.message}`);
     } else {
+      // A full account (409) is not this template's fault, and neither is a
+      // dropped connection: stop, record nothing against the template, and try
+      // the rest next time. The first version marked every remaining template
+      // refused for ever on a full account (found in review, 15 Sep 2026).
+      if (failure(sent)?.status === 409) accountFull = true;
       retryLater = true;
       break;
     }
   }
-  if (todo.length > 0) writeImportRecord(userId, record);
+  if (todo.length > 0) {
+    writeImportRecord(userId, record);
+    prefs.setJson(OWNERS_KEY, owners);
+  }
 
   let problem: string | null = null;
   if (refusedNow.length > 0) {
     problem = `${refusedNow.length === 1 ? 'A template' : `${refusedNow.length} templates`} could not move to your account and ${refusedNow.length === 1 ? 'stays' : 'stay'} on this device only — ${refusedNow[0]}`;
+  } else if (accountFull) {
+    problem = 'Your account is full, so some templates on this device have not moved to it. Delete one you no longer use and the rest move next time.';
   } else if (retryLater) {
     problem = 'Some templates on this device have not moved to your account yet. They will be tried again next time.';
   }
@@ -435,8 +478,16 @@ export async function removeTemplate(
   if (userId && template.source === 'account' && isLinkableTemplateId(template.id)) {
     const r = await call<{ ok?: boolean }>(`/api/templates/${encodeURIComponent(template.id)}`, { method: 'DELETE' });
     const failed = failure(r);
-    if (failed && failed.kind !== 'signed-out') {
-      return { ok: false, problem: 'Could not remove that template from your account. Check the connection and try again.' };
+    // Signed out is a failure too. Treating it as success removed the copy here
+    // and left the account's, which came back on the next load and never left
+    // the iPad (found in review, 15 Sep 2026).
+    if (failed) {
+      return {
+        ok: false,
+        problem: failed.kind === 'signed-out'
+          ? 'Sign in again to remove that template from your account.'
+          : 'Could not remove that template from your account. Check the connection and try again.',
+      };
     }
   }
   deviceStore.remove(template.id);
