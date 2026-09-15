@@ -123,10 +123,17 @@ export const savedBoards = {
 // the Pythagorean theorem 50 times a year — save the diagram once,
 // load it in every new class.
 //
-// Storage: localStorage. Templates are local to the browser; cross-
-// device portability needs real auth (out of scope for now). Each
-// template has a 6-digit slug id so it can be referenced via URL
-// (/room/X?template=ABC123).
+// Storage: localStorage — and since 14 Sep 2026 this is only the BROWSER'S
+// copy. A signed-in teacher's templates live in the account (board_templates,
+// src/server/templates.ts, PLAN.md task 2.5), because a template saved on the
+// laptop never existed on the iPad. Screens go through src/lib/templatesApi.ts,
+// which reads this store when signed out or when the server cannot be reached,
+// and imports what is here into the account once. That import deletes nothing
+// here: this release keeps every local copy, so no template saved before today
+// can be lost to a migration that did not arrive.
+//
+// Each template has a 6-character slug id so it can be referenced via URL
+// (/room/X?template=abc234). The account keeps those ids, so old links open.
 export interface LessonTemplate {
   id: string;            // short slug
   name: string;          // human-readable title
@@ -137,9 +144,11 @@ export interface LessonTemplate {
   whiteboard: any;
 }
 
-const TEMPLATE_MAX = 25;             // cap to keep localStorage from bloating
-const TEMPLATE_ID_ALPHABET = 'abcdefghjkmnpqrstuvwxyz23456789';
-function newTemplateId(): string {
+export const TEMPLATE_MAX = 25;      // cap to keep localStorage from bloating
+// Exported so verify-mirror can check the server accepts every id this has
+// ever minted — an import that refused them would break every old link.
+export const TEMPLATE_ID_ALPHABET = 'abcdefghjkmnpqrstuvwxyz23456789';
+export function newTemplateId(): string {
   let s = '';
   for (let i = 0; i < 6; i++) s += TEMPLATE_ID_ALPHABET[Math.floor(Math.random() * TEMPLATE_ID_ALPHABET.length)];
   return s;

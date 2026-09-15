@@ -1,7 +1,10 @@
 import React, { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { v4 as uuidv4 } from "uuid";
-import { savedBoards, templates, type SavedBoard, type LessonTemplate } from "../lib/prefs";
+import { savedBoards, type SavedBoard } from "../lib/prefs";
+import {
+  deviceTemplateList, loadTemplateList, markImportNoticeShown, removeTemplate, type TemplateSummary,
+} from "../lib/templatesApi";
 import { useAuth } from "../lib/auth";
 import { apiFetch } from "../lib/passcode";
 import { PRODUCT } from '../lib/product';
@@ -198,8 +201,38 @@ export default function Home() {
   const [boards, setBoards] = useState<SavedBoard[]>(() => savedBoards.list());
   // AUTONOMOUS: Lesson templates — saved whiteboard snapshots that the
   // teacher can re-instantiate as a fresh room. Each "Use" opens a new
-  // room and hydrates it from localStorage (see Room.tsx ?template=ID).
-  const [tpls, setTpls] = useState<LessonTemplate[]>(() => templates.list());
+  // room and hydrates it from the template (see Room.tsx ?template=ID).
+  //
+  // The account first, this browser second (templatesApi.ts, PLAN.md 2.5).
+  // This browser's copies render at once, so the panel never waits on the
+  // network; the account's list replaces them when it answers, and the first
+  // signed-in load moves this browser's templates into the account.
+  const [tpls, setTpls] = useState<TemplateSummary[]>(() => deviceTemplateList());
+  const [tplLoading, setTplLoading] = useState(false);
+  const [tplNotice, setTplNotice] = useState<string | null>(null);
+  const [tplProblem, setTplProblem] = useState<string | null>(null);
+  const [tplRemoving, setTplRemoving] = useState<string | null>(null);
+  const templateUserId = auth.user?.id ?? null;
+  useEffect(() => {
+    // Until auth answers there is no knowing whose account to read, and the
+    // browser's copies are already on screen meanwhile.
+    if (auth.loading) return;
+    let alive = true;
+    setTplLoading(templateUserId !== null);
+    void loadTemplateList(templateUserId).then((r) => {
+      if (!alive) return;
+      setTpls(r.templates);
+      setTplNotice(r.notice);
+      setTplProblem(r.problem);
+      setTplLoading(false);
+    });
+    return () => { alive = false; };
+  }, [auth.loading, templateUserId]);
+  // Marked once it has actually been on screen, not when it was decided, so a
+  // page closed mid-import shows it next time instead of never.
+  useEffect(() => {
+    if (tplNotice && templateUserId) markImportNoticeShown(templateUserId);
+  }, [tplNotice, templateUserId]);
 
   const removeBoard = (roomId: string) => {
     savedBoards.remove(roomId);
@@ -208,7 +241,7 @@ export default function Home() {
   const openBoard = (board: SavedBoard) => {
     navigate(`/room/${board.roomId}?name=${encodeURIComponent(board.name)}`);
   };
-  const useTemplate = (tpl: LessonTemplate) => {
+  const useTemplate = (tpl: TemplateSummary) => {
     // Need a teacher name to enter a fresh room. Fall back to a stored
     // name if present, else ask the user once.
     const stored = safeStorageGet("mathslive_teacher_name").trim();
@@ -218,9 +251,14 @@ export default function Home() {
     const newRoomId = uuidv4().slice(0, 8);
     navigate(`/room/${newRoomId}?name=${encodeURIComponent(name)}&template=${encodeURIComponent(tpl.id)}`);
   };
-  const removeTemplate = (id: string) => {
-    templates.remove(id);
-    setTpls(templates.list());
+  const onRemoveTemplate = async (tpl: TemplateSummary) => {
+    if (tplRemoving) return;
+    setTplRemoving(tpl.id);
+    setTplProblem(null);
+    const r = await removeTemplate(tpl, templateUserId);
+    setTplRemoving(null);
+    if (r.ok) setTpls(prev => prev.filter(t => t.id !== tpl.id));
+    else setTplProblem(r.problem);
   };
 
   // Turn a free-text class name into a valid, stable room id. Must satisfy
@@ -382,13 +420,26 @@ export default function Home() {
                   snapshots the teacher can re-instantiate as fresh
                   rooms. Hidden when empty so first-time users see the
                   clean landing page. Parallel structure & styling to
-                  the saved-boards panel above. */}
-              {tpls.length > 0 && (
+                  the saved-boards panel above. Signed in, the list is
+                  the account's with this browser's copies merged in
+                  (templatesApi.ts, PLAN.md 2.5); "this device only"
+                  marks a copy the account does not have. */}
+              {(tpls.length > 0 || tplNotice) && (
                 <div className="ml-dark-saved ml-dark-templates">
                   <div className="ml-dark-saved-head">
                     <span>My lesson templates</span>
                     <span className="ml-dark-saved-count">{tpls.length}</span>
                   </div>
+                  {tplNotice && (
+                    <div className="ml-dark-saved-more" role="status" style={{ marginTop: 6, marginBottom: 2 }}>
+                      ✓ {tplNotice}
+                    </div>
+                  )}
+                  {tplLoading && (
+                    <div className="ml-dark-saved-more" role="status" style={{ marginTop: 6, marginBottom: 2 }}>
+                      Checking your account…
+                    </div>
+                  )}
                   <ul className="ml-dark-saved-list">
                     {tpls.slice(0, 6).map(t => (
                       <li key={t.id} className="ml-dark-saved-item">
@@ -400,21 +451,26 @@ export default function Home() {
                           <span className="ml-dark-saved-label">📐 {t.name}</span>
                           <span className="ml-dark-saved-meta">
                             template · saved {formatRelativeTime(t.savedAt)}
+                            {templateUserId && t.source === 'device' ? ' · this device only' : ''}
                           </span>
                         </button>
                         <button
                           className="ml-dark-saved-remove"
-                          onClick={() => removeTemplate(t.id)}
+                          onClick={() => { void onRemoveTemplate(t); }}
+                          disabled={tplRemoving !== null}
                           aria-label={`Remove ${t.name}`}
-                          title="Remove this template"
+                          title={t.source === 'account' ? 'Remove this template from your account' : 'Remove this template from this device'}
                         >
-                          ×
+                          {tplRemoving === t.id ? '…' : '×'}
                         </button>
                       </li>
                     ))}
                   </ul>
                   {tpls.length > 6 && (
                     <div className="ml-dark-saved-more">+{tpls.length - 6} more</div>
+                  )}
+                  {tplProblem && (
+                    <div className="ml-dark-saved-more" role="alert">{tplProblem}</div>
                   )}
                 </div>
               )}

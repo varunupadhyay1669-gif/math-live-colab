@@ -2,7 +2,7 @@ import React, { forwardRef, useCallback, useEffect, useImperativeHandle, useRef,
 import { Socket } from 'socket.io-client';
 import katex from 'katex';
 import rough from 'roughjs';
-import { templates as templatesStore } from '../lib/prefs';
+import { saveTemplate } from '../lib/templatesApi';
 import { apiFetch } from '../lib/passcode';
 
 // AUTONOMOUS: KaTeX render helper. Safe-fails on invalid LaTeX (returns
@@ -531,6 +531,10 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
     const [showSaveTemplateModal, setShowSaveTemplateModal] = useState(false);
     const [saveTemplateName, setSaveTemplateName] = useState('');
     const [saveTemplateToast, setSaveTemplateToast] = useState<string | null>(null);
+    // A save in flight (templatesApi.ts). The dialog closes at once; this stops
+    // a second Save from racing the first.
+    const [savingTemplate, setSavingTemplate] = useState(false);
+    const saveTemplateToastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
     const selectedObject = selectedObjectId ? objects.find(obj => obj.id === selectedObjectId) : null;
     const canEdit = interactive;
@@ -4531,9 +4535,11 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
           <button onClick={exportBoardHD} className="whiteboard-action" title="Download a high-definition PNG of the WHOLE board — everything written this session, not just the visible area. Great as context for AI/LLMs.">📸 HD Export</button>
           {/* AUTONOMOUS: Save current whiteboard state as a reusable
               template. Opens a small inline modal for naming; on save
-              the snapshot lands in localStorage and shows up on the
-              Home page's "My templates" panel for one-click reuse in
-              a fresh room. Teacher-only because students don't own
+              the snapshot goes to the teacher's account (this browser's
+              storage when signed out or offline — templatesApi.ts) and
+              shows up on the Home page's "My templates" panel for
+              one-click reuse in a fresh room, on every device signed in
+              to that account. Teacher-only because students don't own
               the board content; saving from a student view would
               snapshot whatever they happen to be viewing. */}
           {canEdit && isTeacher && (
@@ -4942,7 +4948,7 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
                   💾 Save this board as a template
                 </h3>
                 <p style={{ fontSize: 13, color: '#64748B', margin: '0 0 14px', lineHeight: 1.5 }}>
-                  Save the current shapes, text, and rulers. You'll be able to start a fresh class from this layout in one click — it'll show up on the home page under "My templates".
+                  Save the current shapes, text, and rulers. You'll be able to start a fresh class from this layout in one click — it'll show up on the home page under "My templates". Signed in, it's saved to your account, so it's there on your other devices too.
                 </p>
                 <input
                   autoFocus
@@ -4984,29 +4990,39 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
                   </button>
                   <button
                     id="wb-save-template-submit"
+                    disabled={savingTemplate}
                     onClick={() => {
-                      // Snapshot the CURRENT whiteboard state. Images are
-                      // included but if the total exceeds the localStorage
-                      // quota the templates.save() will throw — caught
-                      // below with a friendly toast.
-                      try {
-                        const snapshot = {
-                          objects,
-                          strokes,
-                          shapes,
-                          texts,
-                          instruments,
-                          gridMode,
-                          view, // saved so reopened templates use the same zoom/pan baseline
-                        };
-                        const tpl = templatesStore.save(saveTemplateName, snapshot);
-                        setShowSaveTemplateModal(false);
-                        setSaveTemplateToast(`✓ Saved: ${tpl.name}`);
-                        setTimeout(() => setSaveTemplateToast(null), 3000);
-                      } catch (err) {
-                        setSaveTemplateToast(`⚠️ ${String(err)}`);
-                        setTimeout(() => setSaveTemplateToast(null), 5000);
-                      }
+                      if (savingTemplate) return;
+                      // Snapshot the CURRENT whiteboard state, close the
+                      // dialog, and save in the background. A save goes to
+                      // the account now (templatesApi.ts) — a network round
+                      // trip — and a tutor mid-class must never wait on one
+                      // with a dialog over the board. The toast says where
+                      // the template landed: the account, or this device
+                      // when signed out or the account cannot be reached.
+                      const snapshot = {
+                        objects,
+                        strokes,
+                        shapes,
+                        texts,
+                        instruments,
+                        gridMode,
+                        view, // saved so reopened templates use the same zoom/pan baseline
+                      };
+                      // One timer at a time, so an earlier toast's timer
+                      // cannot clear the answer to a later save.
+                      const showToast = (msg: string | null, ms?: number) => {
+                        if (saveTemplateToastTimer.current) clearTimeout(saveTemplateToastTimer.current);
+                        setSaveTemplateToast(msg);
+                        saveTemplateToastTimer.current = ms ? setTimeout(() => setSaveTemplateToast(null), ms) : null;
+                      };
+                      setShowSaveTemplateModal(false);
+                      setSavingTemplate(true);
+                      showToast('💾 Saving template…');
+                      void saveTemplate(saveTemplateName, snapshot)
+                        .then((r) => showToast(r.message, r.ok && r.saved?.source === 'account' ? 3000 : 6000))
+                        .catch(() => showToast('⚠️ Could not save the template. Try again.', 6000))
+                        .finally(() => setSavingTemplate(false));
                     }}
                     style={{
                       padding: '8px 16px',
@@ -5015,11 +5031,12 @@ const Whiteboard = forwardRef<WhiteboardRef, WhiteboardProps>(
                       background: '#4F46E5',
                       color: '#fff',
                       fontWeight: 700,
-                      cursor: 'pointer',
+                      cursor: savingTemplate ? 'wait' : 'pointer',
+                      opacity: savingTemplate ? 0.6 : 1,
                       boxShadow: '0 2px 6px rgba(79,70,229,0.30)',
                     }}
                   >
-                    Save template
+                    {savingTemplate ? 'Saving…' : 'Save template'}
                   </button>
                 </div>
               </div>

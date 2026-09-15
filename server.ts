@@ -4944,6 +4944,7 @@ Build a widget that teaches: ${safePrompt}`;
     mountPeopleRoutes(app, appPool, { secret: sessionSecret });
     mountClassDataRoutes(app, appPool, { secret: sessionSecret });
     mountLessonRoutes(app, appPool, { secret: sessionSecret });
+    (await import('./src/server/templates')).mountTemplateRoutes(app, appPool, { secret: sessionSecret });
     mountOwnerDashRoutes(app, appPool, {
       secret: sessionSecret,
       // Names only, and only for rooms that are actually occupied. The admin
