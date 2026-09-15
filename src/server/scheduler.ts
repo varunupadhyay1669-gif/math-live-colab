@@ -11,6 +11,12 @@
 // database the arbiter rather than any in-process flag, which is the only
 // thing that survives a restart mid-run.
 //
+// A lock is only as good as what it is keyed by. Until 14 Sep 2026 a warning
+// was claimed for the day it went out, but a warning stays true for longer
+// than a day, so every teacher whose access ended got each warning on two days
+// running and "your access ended" on every day of grace. A warning is claimed
+// for the end it is about now; the whole story is at warningClaim().
+//
 // THE RIGHT DAY. The server's clock is UTC and every teacher is in India. Ask
 // "has today's mail gone?" in UTC and the answer flips at 5:30am IST, so a
 // teacher can get yesterday's warning again over breakfast. Every date here is
@@ -27,7 +33,7 @@ export const MAIL_LOG_SCHEMA_SQL = `
   CREATE TABLE IF NOT EXISTS mail_log (
     kind    text NOT NULL,          -- 'warn_2' | 'warn_1' | 'grace' | 'digest'
     target  text NOT NULL,          -- teacher id, or 'owner'
-    day     date NOT NULL,          -- the IST date it was sent for
+    day     date NOT NULL,          -- IST date: when a digest went out, or when the access a warning is about ends
     sent_at timestamptz NOT NULL DEFAULT now(),
     PRIMARY KEY (kind, target, day)
   );
@@ -62,9 +68,14 @@ async function unclaim(pool: Pool, kind: string, target: string, day: string): P
     [kind, target, day]).catch(() => {});
 }
 
+/** Sends one email the way sendMail() does. Passed in, so a test can be the inbox. */
+type Send = typeof sendMail;
+
 // ── Teacher-facing: nobody should be surprised by the paywall ──────────────
 
 type WarningKind = 'warn_2' | 'warn_1' | 'grace';
+
+const WARNING_KINDS: WarningKind[] = ['warn_2', 'warn_1', 'grace'];
 
 function warningFor(state: string, daysLeft: number): WarningKind | null {
   if (state === 'grace') return 'grace';
@@ -93,6 +104,95 @@ function warningsDue(rows: BillableTeacher[], now = new Date()): DueWarning[] {
     if (kind) due.push({ row, kind, access, standing });
   }
   return due;
+}
+
+/**
+ * When each warning falls due, counted from the end it is about.
+ *
+ * Read off accessFrom(), whose daysLeft is a Math.ceil: "2" holds from two days
+ * before the end until one day before, "1" from then until the end, and grace
+ * from the end until grace runs out. Those are exactly the stretches in which
+ * warningFor() names each kind.
+ */
+const DUE_FROM_END_MS: Record<WarningKind, number> = {
+  warn_2: -2 * DAY_MS,
+  warn_1: -DAY_MS,
+  grace: 0,
+};
+
+/**
+ * How far this process's clock and the database's may disagree.
+ *
+ * sent_at is stamped by Postgres and the decision is made here. They share a
+ * box today; this is so it does not matter if one day they do not, and a row
+ * stamped a moment before its warning fell due still counts as sent.
+ */
+const CLOCK_SLACK_MS = 5 * 60_000;
+
+/** A warning already in mail_log, as sendExpiryWarnings() reads it back. */
+export interface SentWarning {
+  kind: string;
+  /**
+   * YYYY-MM-DD, selected with to_char. Left as a pg date it arrives as a Date
+   * at local midnight, which toISOString() turns into the day before anywhere
+   * east of UTC, India included.
+   */
+  day: string;
+  sent_at: Date | string;
+}
+
+/** Whether a warning goes out, and the mail_log day it is claimed under. */
+export type WarningClaim =
+  | { send: true; day: string; reason: string }
+  | { send: false; day: string | null; reason: string };
+
+/**
+ * Whether one teacher is sent one warning now, and the day to claim it under.
+ *
+ * 14 Sep 2026. The claim was (kind, teacher, the day it went out), and a
+ * warning stays true for longer than a day. daysLeft is a Math.ceil, so access
+ * ending at 16:18 IST reads "2 days left" from 16:18 two days before until 16:18
+ * the day after: the afternoon run sent warn_2, and the next morning's run found
+ * a new date with no row and sent it again. warn_1 did the same, and grace,
+ * which is true for three days, went out on each of them. Rachel's mail_log:
+ * warn_2 on 7 and 8 Sep, warn_1 on 8 and 9 Sep, grace on 9, 10, 11 and 12 Sep.
+ *
+ * So a warning is claimed under the END: (kind, teacher, the IST date the
+ * access ends). However long it stays true, and however many runs and restarts
+ * that spans, one end has one row of each kind. A payment or a grant moves the
+ * end to another date, which has no rows yet, so the new end earns its own
+ * warnings. The date rather than the instant because the email names the date:
+ * two ends on the same day would be the same email twice.
+ *
+ * Rows written before that change carry the day they went out, which an
+ * end-keyed claim never collides with — a warn_2 sent this morning would go out
+ * again straight after the deploy. So a row also counts if it is the same kind
+ * and was sent at any point since that kind fell due for this end. Short of the
+ * end moving by a few hours, anything of that kind sent in that stretch was
+ * about this end, however its row was keyed.
+ *
+ * Pure, with the rows handed in, so it is tested without a database. Two runs
+ * racing each other are still settled by the INSERT in claim().
+ */
+function warningClaim(kind: WarningKind, access: Access, sent: SentWarning[]): WarningClaim {
+  const ends = access.until ? new Date(access.until).getTime() : NaN;
+  // Free forever has no end: nothing to warn about, and nothing to claim it by.
+  if (!Number.isFinite(ends)) return { send: false, day: null, reason: 'the access has no end' };
+
+  const day = istDay(new Date(ends));
+  const dueFrom = ends + DUE_FROM_END_MS[kind];
+  for (const s of sent) {
+    if (s.kind !== kind) continue;
+    if (s.day === day) {
+      return { send: false, day, reason: `${kind} is already claimed for the end on ${day}` };
+    }
+    const at = new Date(s.sent_at).getTime();
+    if (at >= dueFrom - CLOCK_SLACK_MS) {
+      return { send: false, day,
+        reason: `${kind} already went out on ${istDay(new Date(at))}, after it fell due for the end on ${day}` };
+    }
+  }
+  return { send: true, day, reason: `no ${kind} yet for the end on ${day}` };
 }
 
 function warningMail(kind: WarningKind, a: Access, standing: Standing): { subject: string; body: string } {
@@ -139,16 +239,31 @@ function warningMail(kind: WarningKind, a: Access, standing: Standing): { subjec
   };
 }
 
-async function sendExpiryWarnings(pool: Pool, day: string): Promise<number> {
+async function sendExpiryWarnings(pool: Pool, now: Date, send: Send): Promise<number> {
   const r = await pool.query<BillableTeacher>(BILLABLE_TEACHERS_SQL);
+  const due = warningsDue(r.rows, now);
+  if (due.length === 0) return 0;
+
+  // What these teachers have already been sent, however it was keyed. Grace is
+  // the longest any warning stays due, so nothing older than that, plus a
+  // margin, can bear on warningClaim().
+  const log = await pool.query<SentWarning & { target: string }>(
+    `SELECT kind, target, to_char(day, 'YYYY-MM-DD') AS day, sent_at
+       FROM mail_log
+      WHERE kind = ANY($1::text[]) AND target = ANY($2::text[]) AND sent_at >= $3`,
+    [WARNING_KINDS, due.map(d => d.row.id), new Date(now.getTime() - (GRACE_DAYS + 2) * DAY_MS)],
+  );
+
   let sent = 0;
-  for (const { row, kind, access, standing } of warningsDue(r.rows)) {
-    if (!await claim(pool, kind, row.id, day)) continue;
+  for (const { row, kind, access, standing } of due) {
+    const c = warningClaim(kind, access, log.rows.filter(s => s.target === row.id));
+    if (!c.send || !await claim(pool, kind, row.id, c.day)) continue;
     const { subject, body } = warningMail(kind, access, standing);
-    const res = await sendMail([row.email], subject, body);
+    const res = await send([row.email], subject, body);
     if (res.ok) { sent++; console.log(`📧 ${kind} → ${row.email}`); }
     else {
-      await unclaim(pool, kind, row.id, day);
+      // Handed back under the same key, so the next run sends it after all.
+      await unclaim(pool, kind, row.id, c.day);
       console.error(`Could not warn ${row.email}: ${res.reason}`);
     }
   }
@@ -212,9 +327,12 @@ function digestLines(teachers: BillableTeacher[], c: DigestCounts, now = new Dat
   return { subject: `MathsLive — ${f.paying} paying, ${c.claims_pending} to confirm`, lines };
 }
 
-async function sendOwnerDigest(pool: Pool, day: string): Promise<boolean> {
+async function sendOwnerDigest(pool: Pool, now: Date, send: Send): Promise<boolean> {
   const to = ownerAddresses();
   if (to.length === 0) return false;
+  // Claimed under the day it goes out, unlike a warning: the digest is about
+  // the day, so once a day is exactly what that key gives.
+  const day = istDay(now);
   if (!await claim(pool, 'digest', 'owner', day)) return false;
 
   try {
@@ -231,8 +349,8 @@ async function sendOwnerDigest(pool: Pool, day: string): Promise<boolean> {
            WHERE NOT EXISTS (SELECT 1 FROM platform_admins p WHERE p.email = u.email)
              AND u.created_at > now() - INTERVAL '1 day')::int                              AS new_signups`,
     );
-    const { subject, lines } = digestLines(teachers.rows, q.rows[0]);
-    const res = await sendMail(to, subject, lines.join('\n'));
+    const { subject, lines } = digestLines(teachers.rows, q.rows[0], now);
+    const res = await send(to, subject, lines.join('\n'));
     if (!res.ok) {
       await unclaim(pool, 'digest', 'owner', day);
       return false;
@@ -245,6 +363,17 @@ async function sendOwnerDigest(pool: Pool, day: string): Promise<boolean> {
   }
   console.log('📧 owner digest sent');
   return true;
+}
+
+/**
+ * Everything one run sends, once it is past the hour gate.
+ *
+ * The clock and the sender are parameters so a test can put a week of runs
+ * through this, against a pretend mail_log, rather than through a copy of it.
+ */
+async function sendDailyMail(pool: Pool, now = new Date(), send: Send = sendMail): Promise<void> {
+  await sendExpiryWarnings(pool, now, send);
+  await sendOwnerDigest(pool, now, send);
 }
 
 /**
@@ -268,9 +397,7 @@ export function startDailyJobs(pool: Pool): void {
     }
     try {
       if (istHour() < SEND_HOUR_IST) return;
-      const day = istDay();
-      await sendExpiryWarnings(pool, day);
-      await sendOwnerDigest(pool, day);
+      await sendDailyMail(pool);
     } catch (err) {
       // A failed run must never take the server with it; the next tick retries.
       console.error('Daily mail run failed:', (err as Error).message);
@@ -289,3 +416,6 @@ export const _warningFor = warningFor;
 export const _warningsDue = warningsDue;
 export const _warningMail = warningMail;
 export const _digestLines = digestLines;
+/** Exposed for tests: whether a warning has already gone for its end, and one run of the mail against a pretend database. */
+export const _warningClaim = warningClaim;
+export const _sendDailyMail = sendDailyMail;
