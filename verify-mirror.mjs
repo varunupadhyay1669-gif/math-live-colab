@@ -30,6 +30,7 @@ import { PRODUCT, subjectFor } from './src/lib/product.ts';
 import { can, permissionsOf } from './src/server/authz.ts';
 import { LESSON_HISTORY_KEEP, LESSON_TTL_HOURS } from './src/server/records.ts';
 import { cutoffFrom } from './src/server/classData.ts';
+import { explainerKey, touchLiveExplainer, MAX_LIVE_EXPLAINERS } from './src/lib/liveExplainers.ts';
 import {
   calculate, compile, parse, evaluate, tokenize, formatResult, freeVariables,
   ExpressionError, FUNCTION_NAMES,
@@ -875,6 +876,63 @@ section('OFFLINE — nothing a room holds may grow without a ceiling');
   assert(uncapped.length === 0,
     'every list a room grows has a ceiling beside it',
     uncapped.length ? `no ceiling near: ${[...new Set(uncapped)].join(', ')}` : '');
+}
+
+section('OFFLINE — closing an explanation does not wipe what the student typed');
+{
+  // 15 Sep 2026, from the founder: a student filled in half a worksheet opened as
+  // an explanation; the teacher closed it to explain question 4 on the
+  // whiteboard, opened it again, and every answer was gone. Closing unmounted the
+  // explanation's iframe, so reopening loaded the file from scratch.
+  const html = '<!doctype html><html><head></head><body><input id="q4"></body></html>';
+  assert(explainerKey(html, 0) === explainerKey(html.slice(0), 0),
+    'the same explanation, reopened, finds the same document',
+    'a reopen and a reconnect hand over a new object carrying the same HTML');
+  assert(explainerKey(html, 0) !== explainerKey(html, 1),
+    'restarting the lesson is the one time a fresh document is wanted');
+  assert(explainerKey(html, 0) !== explainerKey(html.replace('q4', 'q5'), 0),
+    'a different explanation is a different document');
+
+  let made = 0;
+  const create = () => `blob:test-${++made}`;
+  let r = touchLiveExplainer([], 'a', create, 1);
+  assert(r.created && r.next.length === 1 && made === 1, 'the first showing builds a document');
+  const firstUrl = r.next[0].url;
+  r = touchLiveExplainer(r.next, 'a', create, 2);
+  assert(!r.created && made === 1 && r.next[0].url === firstUrl,
+    'showing it again reuses the running document instead of loading the file again',
+    'a new URL is a reload, and a reload is an empty worksheet');
+
+  r = touchLiveExplainer(r.next, 'b', create, 3);
+  r = touchLiveExplainer(r.next, 'c', create, 4);
+  const order = r.next.map(e => e.key).join();
+  r = touchLiveExplainer(r.next, 'a', create, 5);
+  assert(r.next.map(e => e.key).join() === order,
+    'bringing one forward never reorders the others',
+    'React moves a keyed node whose position changes, and a moved iframe reloads');
+
+  r = touchLiveExplainer(r.next, 'd', create, 6);
+  assert(r.next.length === MAX_LIVE_EXPLAINERS && r.evicted.map(e => e.key).join() === 'b',
+    'past the cap, the least recently used document goes',
+    JSON.stringify(r.next.map(e => e.key)));
+  assert(r.next.some(e => e.key === 'a') && r.next[r.next.length - 1].key === 'd',
+    'the one used most recently survives, and a new document is appended at the end');
+  assert(touchLiveExplainer([{ key: 'x', url: 'u', usedAt: 1 }], 'y', create, 2, 1).next.map(e => e.key).join() === 'y',
+    'even at a cap of one, the explanation being shown is the one kept');
+
+  // The wiring: every kept explanation rendered from the list, hidden rather than
+  // unmounted.
+  const roomSrc = readFileSync('src/pages/Room.tsx', 'utf8');
+  assert(!/\{showTempContent && tempContent && tempContentUrl && \(/.test(roomSrc),
+    'the explanation iframe is no longer mounted only while it is showing',
+    'that condition is what threw the document away on close');
+  const at = roomSrc.indexOf('liveExplainers.map(');
+  const explainers = at >= 0 ? roomSrc.slice(at, at + 1600) : '';
+  assert(at >= 0 && /key=\{entry\.key\}/.test(explainers) && /src=\{entry\.url\}/.test(explainers),
+    'every kept explanation renders its own keyed iframe');
+  assert(/visibility: 'hidden'/.test(explainers) && !/display: 'none'/.test(explainers),
+    'a closed explanation is hidden with visibility, never display:none',
+    'display:none hands a canvas back at zero width');
 }
 
 section('OFFLINE — one board cannot grow until it kills the server');

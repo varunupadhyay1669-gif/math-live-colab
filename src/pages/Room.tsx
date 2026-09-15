@@ -58,6 +58,7 @@ import ConnectionStatus from "../components/ConnectionStatus";
 import Leaderboard from "../components/Leaderboard";
 import Whiteboard from "../components/Whiteboard";
 import Calculator from "../components/Calculator";
+import { explainerKey, touchLiveExplainer, type LiveExplainer } from "../lib/liveExplainers";
 import { useAuth } from "../lib/auth";
 import { PRODUCT, subjectFor } from '../lib/product';
 
@@ -321,50 +322,97 @@ export default function Room() {
   const [activeExplanationId, setActiveExplanationId] = useState<string | null>(null);
   const tempFileInputRef = useRef<HTMLInputElement>(null);
 
-  // Memoize blob URL to prevent iframe from reloading on every render
-  const tempContentUrl = useMemo(() => {
-    if (!tempContent) return null;
-    // The SAME script trio the main lesson gets, and the mirror source is the
-    // part that matters. Without it an explanation was never mirrored at all:
-    // the teacher ran one copy, every student ran their own, and the classic
-    // replay engine was the only thing holding them together. A stateful
-    // explainer — a six-question ladder, a stepper, anything remembering where
-    // it is — diverged the moment anyone touched it or joined late. Measured on
-    // a six-question quiz opened as an explanation: teacher on Q3, one student
-    // on Q1, another on Q4, all in the same class at the same moment.
-    //
-    // Only one lesson iframe is mounted at a time (this one replaces the
-    // lesson's while it is showing), so there is exactly one source streaming
-    // and no crosstalk between the two.
-    // The mirror, and the step lock. That is the whole engine now.
-    //
-    // seededSyncScript used to be here too — the input-replay engine, which
-    // re-derived the lesson's state on every screen by re-running clicks. It has
-    // not driven a student since the mirror landed, but it stayed loaded in this
-    // iframe and kept its reach: it journaled every click, snapshotted the whole
-    // document on a timer, and cancelled input at capture phase whenever the
-    // iframe was in a blocked state — which is what made a student's forwarded
-    // taps vanish the moment they were given control.
-    //
-    // Everything it still genuinely provided — the cursor, the "look here" ping,
-    // lesson-load errors, an on-demand document snapshot, follow-click — now
-    // comes from the mirror source itself, where it belongs. One engine.
-    const scripts = stepLockScript + mirrorScriptFor('source');
-    let content = tempContent.html;
-    if (content.includes("<head>")) {
-      content = content.replace("<head>", "<head>" + scripts);
-    } else {
-      content = scripts + content;
-    }
-    const blob = new Blob([content], { type: 'text/html' });
-    return URL.createObjectURL(blob);
-  }, [tempContent?.html, tempContent?.name, randomSeed]);
+  // ── Live explanation documents ──
+  //
+  // Every explanation shown this session keeps its own document, hidden when it
+  // is not on screen, so closing one and opening it again returns to the same
+  // running page. Until 15 Sep 2026 closing unmounted the iframe and reopening
+  // loaded the file from scratch: a student's half-finished worksheet came back
+  // empty after the teacher stepped out to the whiteboard to explain question 4.
+  // Which document, how many, and why their order never changes: see
+  // src/lib/liveExplainers.ts.
+  //
+  // tempContentUrl keeps its name and meaning (the URL of the explanation on
+  // screen), because everything downstream only ever needs that one.
+  const activeExplainerKey = useMemo(
+    () => (tempContent ? explainerKey(tempContent.html, randomSeed) : null),
+    [tempContent?.html, randomSeed],
+  );
+  const [liveExplainers, setLiveExplainers] = useState<LiveExplainer[]>([]);
+  const liveExplainersRef = useRef<LiveExplainer[]>([]);
+  const explainerTickRef = useRef(0);
+  const explainerFramesRef = useRef(new Map<string, HTMLIFrameElement>());
 
   useEffect(() => {
-    return () => {
-      if (tempContentUrl) URL.revokeObjectURL(tempContentUrl);
-    };
-  }, [tempContentUrl]);
+    if (!tempContent || !activeExplainerKey) return;
+    const html = tempContent.html;
+    const { next, evicted } = touchLiveExplainer(
+      liveExplainersRef.current,
+      activeExplainerKey,
+      () => {
+        // The SAME script trio the main lesson gets, and the mirror source is the
+        // part that matters. Without it an explanation was never mirrored at all:
+        // the teacher ran one copy, every student ran their own, and the classic
+        // replay engine was the only thing holding them together. A stateful
+        // explainer — a six-question ladder, a stepper, anything remembering where
+        // it is — diverged the moment anyone touched it or joined late. Measured on
+        // a six-question quiz opened as an explanation: teacher on Q3, one student
+        // on Q1, another on Q4, all in the same class at the same moment.
+        //
+        // Several documents can be alive at once (the lesson and the kept
+        // explanations), but only the one on screen is a source anybody hears:
+        // the relay drops every message whose e.source is not iframeRef.
+        //
+        // seededSyncScript used to be here too — the input-replay engine, which
+        // re-derived the lesson's state on every screen by re-running clicks. It has
+        // not driven a student since the mirror landed, but it stayed loaded in this
+        // iframe and kept its reach: it journaled every click, snapshotted the whole
+        // document on a timer, and cancelled input at capture phase whenever the
+        // iframe was in a blocked state — which is what made a student's forwarded
+        // taps vanish the moment they were given control.
+        //
+        // Everything it still genuinely provided — the cursor, the "look here" ping,
+        // lesson-load errors, an on-demand document snapshot, follow-click — now
+        // comes from the mirror source itself, where it belongs. One engine.
+        const scripts = stepLockScript + mirrorScriptFor('source');
+        const content = html.includes("<head>")
+          ? html.replace("<head>", "<head>" + scripts)
+          : scripts + html;
+        return URL.createObjectURL(new Blob([content], { type: 'text/html' }));
+      },
+      ++explainerTickRef.current,
+    );
+    liveExplainersRef.current = next;
+    setLiveExplainers(next);
+    // After the evicted iframes have unmounted, not before.
+    if (evicted.length) setTimeout(() => evicted.forEach(e => URL.revokeObjectURL(e.url)), 0);
+    // Read through its key on purpose: a fresh object carrying the same HTML (a
+    // reopen, a reconnect) is the same explanation and must leave its document
+    // alone.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeExplainerKey]);
+
+  // "Clear all" removes the explanations, so their kept documents go with them.
+  useEffect(() => {
+    if (explanations.length > 0 || showTempContent || liveExplainersRef.current.length === 0) return;
+    const gone = liveExplainersRef.current;
+    liveExplainersRef.current = [];
+    setLiveExplainers([]);
+    setTimeout(() => gone.forEach(e => URL.revokeObjectURL(e.url)), 0);
+  }, [explanations, showTempContent]);
+
+  // Leaving the room releases every kept document. The ref is emptied as well, so
+  // React's development double-mount builds fresh URLs rather than reusing
+  // revoked ones.
+  useEffect(() => () => {
+    for (const e of liveExplainersRef.current) URL.revokeObjectURL(e.url);
+    liveExplainersRef.current = [];
+  }, []);
+
+  const tempContentUrl = useMemo(
+    () => liveExplainers.find(e => e.key === activeExplainerKey)?.url ?? null,
+    [liveExplainers, activeExplainerKey],
+  );
 
   // ── Zoom Sync ──
   const [zoomLevel, setZoomLevel] = useState(1);
@@ -1795,8 +1843,17 @@ export default function Room() {
   // lesson that never went away fires no load event at all -- so the pointer is
   // also set here, on the switch itself.
   useEffect(() => {
+    tempFrameRef.current = activeExplainerKey
+      ? explainerFramesRef.current.get(activeExplainerKey) ?? null
+      : null;
     iframeRef.current = showTempContent ? tempFrameRef.current : lessonFrameRef.current;
-  }, [showTempContent, whiteboardMode, tempContentUrl, iframeUrl]);
+  }, [showTempContent, whiteboardMode, tempContentUrl, iframeUrl, activeExplainerKey, liveExplainers]);
+
+  // Which kept explanation may claim the channel when its document finishes
+  // loading. Read at load time rather than captured at render, so a load that
+  // lands after the teacher has closed it cannot take over the lesson plumbing.
+  const explainerOnScreenKeyRef = useRef<string | null>(null);
+  explainerOnScreenKeyRef.current = showTempContent ? activeExplainerKey : null;
 
   // ── Mirror iframe onLoad: behave like a passive student view ──
   const handleMirrorLoad = useCallback(() => {
@@ -4678,25 +4735,43 @@ export default function Room() {
                 </div>
               )}
 
-              {/* EXPLANATION — an overlay ON TOP of the still-running lesson,
-                  no longer a replacement for it. It carries the same script trio
-                  as the lesson, so while it is showing it is the authoritative
-                  mirror source and the lesson underneath is ignored (the relay
-                  drops anything that is not the active surface). */}
-              {showTempContent && tempContent && tempContentUrl && (
-                <div style={{ position: 'absolute', inset: 0, zIndex: 6 }}>
-                  <iframe
-                    ref={tempFrameRef}
-                    src={tempContentUrl}
-                    className="w-full h-full border-none"
-                    style={{ background: '#ffffff' }}
-                    onLoad={() => handleSurfaceLoad(tempFrameRef.current, true)}
-                    sandbox={LESSON_IFRAME_SANDBOX}
-                    allow={LESSON_IFRAME_ALLOW}
-                    allowFullScreen
-                  />
-                </div>
-              )}
+              {/* EXPLANATIONS — overlays ON TOP of the still-running lesson,
+                  no longer a replacement for it, and no longer thrown away when
+                  closed. Every explanation shown this session keeps its
+                  document, hidden (with visibility, never display:none, for the
+                  lesson surface's reasons) while it is closed or the whiteboard
+                  is up, so opening it again returns to the same page: on 15 Sep
+                  2026 a student's half-finished worksheet came back empty after
+                  one trip to the whiteboard. The one on screen is the
+                  authoritative mirror source; the relay ignores the rest, as it
+                  ignores the hidden lesson. */}
+              {liveExplainers.map(entry => {
+                const onScreen = showTempContent && !!tempContent && !whiteboardMode && !teacherReplaced
+                  && entry.key === activeExplainerKey;
+                return (
+                  <div
+                    key={entry.key}
+                    style={onScreen
+                      ? { position: 'absolute', inset: 0, zIndex: 6 }
+                      : { position: 'absolute', inset: 0, zIndex: 6, visibility: 'hidden', pointerEvents: 'none' }}
+                    aria-hidden={onScreen ? undefined : true}
+                  >
+                    <iframe
+                      ref={el => {
+                        if (el) explainerFramesRef.current.set(entry.key, el);
+                        else explainerFramesRef.current.delete(entry.key);
+                      }}
+                      src={entry.url}
+                      className="w-full h-full border-none"
+                      style={{ background: '#ffffff' }}
+                      onLoad={e => handleSurfaceLoad(e.currentTarget, explainerOnScreenKeyRef.current === entry.key)}
+                      sandbox={LESSON_IFRAME_SANDBOX}
+                      allow={LESSON_IFRAME_ALLOW}
+                      allowFullScreen
+                    />
+                  </div>
+                );
+              })}
 
               {!iframeUrl && !showTempContent && !whiteboardMode && (
                 /* Empty room — let the teacher pick a starting surface.

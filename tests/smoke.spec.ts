@@ -626,4 +626,67 @@ test.describe('the mirror', () => {
     await teacher.close();
     await learner.close();
   });
+
+  test('closing an explanation and coming back keeps what the learner typed', async ({ browser }) => {
+    // 15 Sep 2026, from the founder, mid-class: a student had half a worksheet
+    // done inside an explanation. The tutor closed it to work question 4 through
+    // on the whiteboard, opened it again, and every answer was gone — the student
+    // had to start from the top. Closing unmounted the explanation's iframe, so
+    // reopening loaded the file afresh.
+    const code = room('x');
+    const teacher = await (await browser.newContext()).newPage();
+    const learner = await (await browser.newContext()).newPage();
+
+    await teacher.goto(`${BASE}/room/${code}?name=Teacher`);
+    await runLesson(teacher, '<!doctype html><html><body><h1>Main lesson</h1></body></html>');
+    await lessonFrame(teacher, 'Main lesson');
+
+    await teacher.getByTitle('Upload an HTML explainer or paste HTML code to overlay on top of the current example').click();
+    await teacher.getByPlaceholder('Title (optional, e.g. Step-by-step quadratic)').fill('Conversion Matrix');
+    await teacher.getByPlaceholder('Paste your HTML code here...').fill(`<!doctype html><html><body>
+      <h2>Triple Conversion Matrix</h2>
+      <p>XP: <b id="xp">0</b></p>
+      <input id="d1" placeholder="e.g. 0.25"><button id="c1">check</button>
+      <script>
+        var xp = 0;
+        document.getElementById('c1').onclick = function () {
+          if (document.getElementById('d1').value.trim() === '.8') {
+            xp += 10;
+            document.getElementById('xp').textContent = String(xp);
+          }
+        };
+      </script>
+    </body></html>`);
+    await teacher.getByRole('button', { name: /Show explainer/ }).click();
+
+    const sheet = await lessonFrame(teacher, 'Triple Conversion Matrix');
+    await learner.goto(`${BASE}/live/${code}?name=Learner`);
+    await lessonFrame(learner, 'Triple Conversion Matrix');
+
+    // The score exists only in the running document: a reload puts it back to 0,
+    // which is exactly what the class saw.
+    await sheet.locator('#d1').fill('.8');
+    await sheet.locator('#c1').click();
+    await expect(sheet.locator('#xp')).toHaveText('10');
+
+    // Out of the explanation, onto the whiteboard, back, and open it again.
+    await teacher.getByTitle(/^Showing: Conversion Matrix/).click();
+    await teacher.getByTitle(/Open the shared whiteboard temporarily/).click();
+    await teacher.getByTitle(/Return to the HTML simulation/).click();
+    // The tab's text is the explanation's name; "Show … again" is its tooltip.
+    await teacher.getByTitle('Show Conversion Matrix again').click();
+
+    const reopened = await lessonFrame(teacher, 'Triple Conversion Matrix');
+    await expect(reopened.locator('#d1')).toHaveValue('.8');
+    await expect(reopened.locator('#xp')).toHaveText('10');
+
+    // And the learner, whose screen is a copy of that document, sees it too.
+    await expect.poll(async () => {
+      const f = await lessonFrame(learner, 'Triple Conversion Matrix');
+      return (await f.locator('#xp').textContent())?.trim();
+    }, { timeout: 20_000, message: "the learner's worksheet came back empty" }).toBe('10');
+
+    await teacher.close();
+    await learner.close();
+  });
 });
