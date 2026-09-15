@@ -258,12 +258,21 @@ async function sendExpiryWarnings(pool: Pool, now: Date, send: Send): Promise<nu
   for (const { row, kind, access, standing } of due) {
     const c = warningClaim(kind, access, log.rows.filter(s => s.target === row.id));
     if (!c.send || !await claim(pool, kind, row.id, c.day)) continue;
+    // The day-keyed row an older release looks for, claimed as well. A rollback
+    // (guarded-restart.sh performs one by itself when a release fails its health
+    // check) runs code that only asks "did this kind go out today?", and would
+    // otherwise send again what this run is about to send. warningClaim() already
+    // counts such a row as sent, so it changes nothing here. Only a row this run
+    // inserted is ever handed back.
+    const today = istDay(now);
+    const heldToday = today !== c.day && await claim(pool, kind, row.id, today);
     const { subject, body } = warningMail(kind, access, standing);
     const res = await send([row.email], subject, body);
     if (res.ok) { sent++; console.log(`📧 ${kind} → ${row.email}`); }
     else {
-      // Handed back under the same key, so the next run sends it after all.
+      // Handed back under the same keys, so the next run sends it after all.
       await unclaim(pool, kind, row.id, c.day);
+      if (heldToday) await unclaim(pool, kind, row.id, today);
       console.error(`Could not warn ${row.email}: ${res.reason}`);
     }
   }

@@ -1582,9 +1582,16 @@ section('OFFLINE — an expiry email goes out once, not on consecutive days');
   const got = w.to('rachel@x');
   assert(JSON.stringify(got) === JSON.stringify(['warn_2 2026-09-07 16:30', 'warn_1 2026-09-08 16:30', 'grace 2026-09-09 16:30']),
     'each warning goes out once, at the first run after it falls due', JSON.stringify(got));
-  const keys = w.log.filter(r => r.target === 'rachel').map(r => `${r.kind} ${r.day}`);
+  const keys = w.log.filter(r => r.target === 'rachel' && r.day === '2026-09-09').map(r => `${r.kind} ${r.day}`);
   assert(JSON.stringify(keys) === JSON.stringify(['warn_2 2026-09-09', 'warn_1 2026-09-09', 'grace 2026-09-09']),
     'each is claimed under the date the access ends, not the date it went out', JSON.stringify(keys));
+  // A rollback runs code that only asks "did this kind go out today?", and
+  // guarded-restart.sh performs one by itself when a release fails its health
+  // check. Each send also holds that day-keyed row, so an older release switched
+  // on the same afternoon finds it and stays quiet instead of sending it again.
+  const heldForOldCode = w.log.filter(r => r.target === 'rachel' && r.day !== '2026-09-09').map(r => `${r.kind} ${r.day}`);
+  assert(JSON.stringify(heldForOldCode) === JSON.stringify(['warn_2 2026-09-07', 'warn_1 2026-09-08']),
+    'each send also holds the day-keyed row an older release would look for', JSON.stringify(heldForOldCode));
   assert(w.to('vani@x').length === 0, 'free forever is sent none of it', JSON.stringify(w.to('vani@x')));
   const forever = _warningClaim('warn_2', accessFrom(vani, IST('2026-09-08T09:00:00')), []);
   assert(!forever.send && forever.day === null, 'and has no end to claim a warning under', JSON.stringify(forever));
