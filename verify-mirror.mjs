@@ -26,6 +26,7 @@ import { _warningFor, _warningsDue, _warningMail, _digestLines, _warningClaim, _
 import { SEED_LESSONS } from './src/lib/seedLessons.ts';
 import { makeLimiter } from './src/server/rateLimit.ts';
 import { listMigrationFiles } from './src/server/migrate.ts';
+import { EMPTY_MIRROR, cacheMirrorFrame, mirrorSurfaceKey, servableFrame } from './src/server/mirrorCache.ts';
 import * as tplServer from './src/server/templates.ts';
 import * as tplClient from './src/lib/templatesApi.ts';
 import * as tplPrefs from './src/lib/prefs.ts';
@@ -388,6 +389,139 @@ section('OFFLINE — a student copy lines up with where the tutor is on the page
   const onRequest = roomSrc.slice(roomSrc.indexOf('newSocket.on("mirror_request"'), roomSrc.indexOf('newSocket.on("mirror_request"') + 900);
   assert(/EMIT_CURRENT_SCROLL/.test(onRequest),
     "answering a student's resync also re-announces where the tutor is scrolled");
+}
+
+section('OFFLINE — a cached frame and its fingerprint describe the same document');
+{
+  // 17 Sep 2026, and it is the whole of "the student somewhere else, I'm
+  // somewhere else" for a student who joined or asked for help. The room keeps
+  // ONE mirror frame, fed by whichever of the tutor's surfaces is streaming,
+  // and it used to be handed out with no idea which document it came from —
+  // and with a fingerprint the 2s heartbeat could overwrite on its own, with no
+  // body beside it. Both were measured, live, on this build.
+  const lessonFrame = { body: '<h1>page 1</h1>', attrs: '[]', head: '<style>a{}</style>', h: 'hash-lesson-1' };
+  const lesson = cacheMirrorFrame(EMPTY_MIRROR, lessonFrame, 'lesson');
+  assert(lesson.mirrorBody === lessonFrame.body && lesson.mirrorHash === 'hash-lesson-1' && lesson.mirrorSurface === 'lesson',
+    'a frame is cached whole: body, envelope, fingerprint and the document it came from');
+  assert(servableFrame(lesson, 'lesson')?.h === 'hash-lesson-1',
+    'and it is served to a screen showing that document');
+
+  // The tutor opens an explanation. Until the explanation has actually sent a
+  // frame, the slot holds the lesson — measured at 22 of 330 samples across
+  // twelve switches, in both directions, before this rule existed.
+  assert(servableFrame(lesson, 'explanation:e1') === null,
+    'the lesson frame is NOT served to a student whose screen is showing an explanation',
+    'this is the tutor on the whiteboard and the student on the worksheet, from the server side');
+
+  // The explanation's first frame is forced, so it carries its own head CSS.
+  const exp = cacheMirrorFrame(lesson, { body: '<h2>worked example</h2>', attrs: '[]', head: '<style>b{}</style>', h: 'hash-exp-1' }, 'explanation:e1');
+  assert(exp.mirrorHead === '<style>b{}</style>' && servableFrame(exp, 'lesson') === null,
+    "the explanation replaces the slot, and the lesson's screens are told nothing rather than shown it");
+
+  // Back to the lesson. Its next frame is an ordinary mutation frame, and the
+  // source only ships head CSS when it CHANGED against that iframe's own last
+  // send — so this one carries head:null.
+  const back = cacheMirrorFrame(exp, { body: '<h1>page 1</h1>', attrs: '[]', head: null, h: 'hash-lesson-1' }, 'lesson');
+  assert(back.mirrorHead !== '<style>b{}</style>',
+    "the explanation's stylesheet does not survive onto the lesson's body",
+    'the right content laid out with another document’s CSS reads as "the app is broken on their iPad"');
+  assert(back.mirrorHash === null,
+    'and a frame we cannot dress completely travels without a fingerprint',
+    'a hash covers body + attributes + head together, so claiming it while missing the head is the same lie');
+  assert(servableFrame(back, 'lesson')?.body === '<h1>page 1</h1>',
+    'the body is still served — something real on screen beats a blank page, and the heartbeat asks for the rest');
+
+  // The forced frame that follows carries the head, and the fingerprint returns.
+  const whole = cacheMirrorFrame(back, { body: '<h1>page 1</h1>', attrs: '[]', head: '<style>a{}</style>', h: 'hash-lesson-1' }, 'lesson');
+  assert(whole.mirrorHash === 'hash-lesson-1' && whole.mirrorHead === '<style>a{}</style>',
+    'a whole frame restores the fingerprint');
+
+  assert(mirrorSurfaceKey({ activeExplanationId: null }) === 'lesson'
+    && mirrorSurfaceKey({ activeExplanationId: 'e1' }) === 'explanation:e1',
+    'the surfaces that swap the streaming document are the lesson and the explanations');
+
+  // The two lines in the server that this depends on, because no unit test of a
+  // pure module can see them.
+  const serverSrc = readFileSync('server.ts', 'utf8');
+  const ping = serverSrc.slice(serverSrc.indexOf("socket.on('mirror_ping'"), serverSrc.indexOf("socket.on('mirror_canvas'"))
+    // The handler's own comment quotes the line that used to be there, which is
+    // worth keeping and is not code.
+    .split(String.fromCharCode(10)).filter(l => !l.trim().startsWith('//')).join(String.fromCharCode(10));
+  assert(!/room\.mirrorHash\s*=/.test(ping),
+    'the fingerprint heartbeat does not write the cached hash',
+    'one line, `room.mirrorHash = h`, is what paired page 0’s body with page 2’s fingerprint and froze a student for a lesson');
+  assert(/servableFrame\(room, mirrorSurfaceKey\(room\)\)/.test(serverSrc.slice(serverSrc.indexOf("socket.on('mirror_request'"))),
+    'a late joiner is answered through the surface check, not from the raw slot');
+  assert(/servableFrame\(room, mirrorSurfaceKey\(room\)\)/.test(serverSrc.slice(serverSrc.indexOf("socket.on('resync_student'"))),
+    "and so is the tutor's Resend");
+  const domHandler = serverSrc.slice(serverSrc.indexOf("socket.on('mirror_dom'"), serverSrc.indexOf("socket.on('mirror_ping'"));
+  assert(/socket\.volatile\.to\(roomId\)\.emit\('mirror_dom'/.test(domHandler),
+    'the live frame fan-out is still volatile',
+    '4 Sep 2026: queueing 3 MiB frames for one student on slow wifi filled the heap and ended a lesson for everybody');
+  assert(/deliverRepairs\(room,/.test(domHandler) && /armRepair\(room,/.test(serverSrc),
+    'but the student who ASKED is handed the next live frame guaranteed, once',
+    'the cached answer went out guaranteed and the frame correcting it went out volatile, on the very transport that had just dropped one — that asymmetry is a tutor pressing Resend eighteen times in ten seconds');
+  assert(/logSync\('mirror_frame_dropped'/.test(serverSrc),
+    'a frame too big for the mirror is recorded rather than silently discarded',
+    'the 3 MiB ceiling used to be a bare return: nothing in 48h of journal said a lesson had outgrown the mirror');
+}
+
+section('OFFLINE — a student copy fingerprints what it painted, not what it was told');
+{
+  // The other half of the same fault. The follower used to adopt whatever
+  // fingerprint a frame arrived wearing — `appliedHash = d.h` — without ever
+  // checking that it described the frame. Hand it one document's body carrying
+  // another document's hash and it agrees with every heartbeat afterwards: the
+  // student sits on the wrong page, MIRROR_STALE is never posted again, and the
+  // tutor's status pill is green next to a child who is somewhere else.
+  const strip = (s) => s.replace(/^[\s\S]*?<script[^>]*>/i, '').replace(/<\/script>[\s\S]*$/i, '');
+  const LESSON = '<!doctype html><html><head><style>#t{color:rgb(1,2,3)}</style></head><body class="k"><h1 id="t">page 1</h1></body></html>';
+
+  // A REAL source, so the fingerprint under test is the one that actually ships.
+  const sdom = new JSDOM(LESSON, { runScripts: 'outside-only', pretendToBeVisual: true });
+  const posted = [];
+  sdom.window.parent = { postMessage: (m) => posted.push(m) };
+  sdom.window.eval(strip(mirrorScriptFor('source')));
+  await new Promise(r => setTimeout(r, 300));
+  const frame = posted.filter(m => m && m.type === 'SYNC_MIRROR').pop();
+  assert(!!frame && typeof frame.h === 'string', 'the source produced a frame with a fingerprint');
+
+  // A REAL follower, painted by that frame.
+  const fdom = new JSDOM(stripLessonScripts(LESSON), { runScripts: 'outside-only', pretendToBeVisual: true });
+  const back = [];
+  fdom.window.parent = { postMessage: (m) => back.push(m) };
+  fdom.window.eval(strip(mirrorScriptFor('follower')));
+  const send = (msg) => fdom.window.dispatchEvent(new fdom.window.MessageEvent('message', { data: msg, source: fdom.window.parent }));
+  const lastAck = () => back.filter(m => m && m.type === 'MIRROR_ACK').pop();
+
+  send({ type: 'MIRROR_APPLY', body: frame.body, attrs: frame.attrs, head: frame.head, h: frame.h });
+  send({ type: 'MIRROR_PING', h: frame.h });
+  assert(lastAck()?.ok === true && lastAck()?.h === frame.h,
+    'a copy that painted the frame computes the source’s own fingerprint for it',
+    'the two halves build the signature separately, and they must agree character for character — a NUL separator on one side and a space on the other would report every student permanently stale');
+
+  // Now the poisoned pair: the body of a DIFFERENT document, wearing the
+  // fingerprint the source is currently advertising. This is exactly what the
+  // room's cache used to hand a joining or resyncing student.
+  back.length = 0;
+  send({ type: 'MIRROR_APPLY', body: '<h2 id="e">a different document</h2>', attrs: frame.attrs, head: frame.head, h: frame.h });
+  send({ type: 'MIRROR_PING', h: frame.h });
+  assert(lastAck()?.ok === false,
+    'a copy handed the wrong body wearing the right fingerprint says so',
+    'it used to adopt the hash, agree with every heartbeat and never ask again');
+  send({ type: 'MIRROR_PING', h: frame.h });
+  assert(back.some(m => m && m.type === 'MIRROR_STALE'),
+    'and asks for a real one',
+    'this is the repair the pre-acknowledged hash removed');
+
+  // The "nothing to do" path is the same hole: re-delivering a body the copy
+  // already holds, with a newer hash attached, used to relabel it as in step.
+  back.length = 0;
+  send({ type: 'MIRROR_APPLY', body: '<h2 id="e">a different document</h2>', attrs: frame.attrs, head: frame.head, h: 'a-newer-hash' });
+  send({ type: 'MIRROR_PING', h: 'a-newer-hash' });
+  assert(lastAck()?.ok === false,
+    'an unchanged body does not take on a newer fingerprint either',
+    'pressing Resend was what performed the relabelling: the repair silenced the alarm');
 }
 
 section('OFFLINE — a frame that did not paint is not recorded as painted');
