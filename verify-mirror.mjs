@@ -37,7 +37,7 @@ import { PRODUCT, subjectFor } from './src/lib/product.ts';
 import { can, permissionsOf } from './src/server/authz.ts';
 import { LESSON_HISTORY_KEEP, LESSON_TTL_HOURS } from './src/server/records.ts';
 import { cutoffFrom } from './src/server/classData.ts';
-import { explainerKey, touchLiveExplainer, MAX_LIVE_EXPLAINERS } from './src/lib/liveExplainers.ts';
+import { explainerKey, touchLiveExplainer, whiteboardSurfaceToggle, MAX_LIVE_EXPLAINERS } from './src/lib/liveExplainers.ts';
 import {
   calculate, compile, parse, evaluate, tokenize, formatResult, freeVariables,
   ExpressionError, FUNCTION_NAMES,
@@ -963,6 +963,75 @@ section('OFFLINE — closing an explanation does not wipe what the student typed
   assert(/visibility: 'hidden'/.test(explainers) && !/display: 'none'/.test(explainers),
     'a closed explanation is hidden with visibility, never display:none',
     'display:none hands a canvas back at zero width');
+}
+
+section('OFFLINE — the whiteboard and an explanation cannot both be the class\'s screen');
+{
+  // 17 Sep 2026, the founder's own journey: a worksheet open as an explanation,
+  // tap Whiteboard to work question 4 through, come back. Before this, tapping
+  // Whiteboard left the tutor's screen blank — lesson hidden, explanation hidden,
+  // and the board refusing to render because an explanation was still "active"
+  // — while the student carried on watching the worksheet. Two independent
+  // booleans, and the two sides broke the tie in opposite directions.
+  const kept = (...ids) => (id) => ids.includes(id);
+  const none = { whiteboardMode: false, activeExplanationId: null, explanationBeforeWhiteboard: null };
+  const onExp = { whiteboardMode: false, activeExplanationId: 'exp-1', explanationBeforeWhiteboard: null };
+
+  const enter = whiteboardSurfaceToggle(onExp, true, kept('exp-1'));
+  assert(enter.next.whiteboardMode && enter.showExplanation === null,
+    'asking for the board while an explanation is open closes the explanation for everyone',
+    'the tutor saw nothing and the student saw the worksheet: the class in two places');
+  assert(enter.next.explanationBeforeWhiteboard === 'exp-1',
+    'the board remembers which explanation the class was on');
+
+  const back = whiteboardSurfaceToggle(enter.next, false, kept('exp-1'));
+  assert(back.showExplanation === 'exp-1' && back.next.activeExplanationId === 'exp-1',
+    'leaving the board puts the class back on the same explanation',
+    'the tutor left mid-worksheet and must come back to it, not to the lesson behind it');
+  assert(back.next.explanationBeforeWhiteboard === null,
+    'and the board stops holding it, so the next trip cannot reopen a stale one');
+
+  // Every reachable combination, from every starting point.
+  for (const prev of [none, onExp, enter.next, { ...enter.next, explanationBeforeWhiteboard: null }]) {
+    for (const active of [true, false]) {
+      const r = whiteboardSurfaceToggle(prev, active, kept('exp-1'));
+      assert(!(r.next.whiteboardMode && r.next.activeExplanationId !== null),
+        `the board and an explanation are never both the class's screen (${prev.whiteboardMode}/${prev.activeExplanationId} → ${active})`,
+        JSON.stringify(r));
+    }
+  }
+
+  // A file the tutor deleted while the board was up must not come back.
+  assert(whiteboardSurfaceToggle(enter.next, false, kept()).showExplanation === undefined,
+    'an explanation deleted while the board was up is not reopened on the way out');
+  // An upload turns the flag off too, and it means "show the class this lesson".
+  assert(whiteboardSurfaceToggle(onExp, false, kept('exp-1')).showExplanation === undefined,
+    'turning the flag off when the class was never on the board changes nothing',
+    'an upload flips whiteboardMode off; it must not drag an old explanation back');
+  // A board template flips the mode on when it may already be on.
+  const again = whiteboardSurfaceToggle(enter.next, true, kept('exp-1'));
+  assert(again.next.explanationBeforeWhiteboard === 'exp-1' && again.showExplanation === undefined,
+    'entering the board twice does not forget what the first entry set aside',
+    'loading a board template emits the toggle whether or not the board is already up');
+
+  // The wiring: the student's overlay is gated the same way the tutor's is.
+  const studentSrc = readFileSync('src/pages/StudentView.tsx', 'utf8');
+  assert(/\{showTempContent && tempContent && tempUrl && !whiteboardMode && \(/.test(studentSrc),
+    "the student's explanation overlay is refused while the board is up",
+    'the tutor\'s copy has carried !whiteboardMode all along; the student\'s did not');
+  // Nothing is the lesson mirror while the board is the class's surface.
+  const room17 = readFileSync('src/pages/Room.tsx', 'utf8');
+  assert(/whiteboardModeRef\.current && type\.indexOf\('SYNC_MIRROR'\) === 0/.test(room17),
+    'the hidden lesson stops streaming while the class is on the board',
+    'it was pushing full-DOM and canvas frames to iPads for a surface nobody was watching');
+  // The tutor's own flip is optimistic — it does not wait for the server — so it
+  // has to set the explanation aside in the same batch or the tutor's screen
+  // passes through the blank state for a round trip, and stays there for good if
+  // the server refuses the toggle (a teacher socket outside its seat grace).
+  const toggle = room17.slice(room17.indexOf('const toggleWhiteboardMode ='), room17.indexOf('const toggleWhiteboardMode =') + 1400);
+  assert(/setShowTempContent\(false\);/.test(toggle) && !/setTempContent\(null\)/.test(toggle),
+    'asking for the board sets the explanation aside on the tutor\'s own screen, without discarding it',
+    'clearing tempContent would throw the running document away — the 15 Sep bug');
 }
 
 section('OFFLINE — one board cannot grow until it kills the server');

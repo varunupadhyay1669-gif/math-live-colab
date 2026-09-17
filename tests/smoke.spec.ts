@@ -77,6 +77,79 @@ async function inkStats(locator: Locator) {
   });
 }
 
+/**
+ * What this person is actually looking at.
+ *
+ * Not "is the element in the DOM" — every surface stays mounted here on
+ * purpose, hidden with visibility so its document keeps running, so the only
+ * honest answer walks up from each iframe and asks whether anything on the way
+ * has hidden it. The board is the one surface that really does unmount.
+ */
+async function surfaceOf(page: Page, markers: string[]): Promise<{ board: boolean; showing: string[] }> {
+  const shell = await page.evaluate(() => {
+    const frames: Array<{ src: string; visible: boolean }> = [];
+    document.querySelectorAll('iframe').forEach(el => {
+      const r = el.getBoundingClientRect();
+      let visible = r.width > 4 && r.height > 4;
+      let n: HTMLElement | null = el as HTMLElement;
+      while (n && visible) {
+        const cs = getComputedStyle(n);
+        if (cs.visibility === 'hidden' || cs.display === 'none' || cs.opacity === '0') visible = false;
+        n = n.parentElement;
+      }
+      frames.push({ src: (el as HTMLIFrameElement).src, visible });
+    });
+    return { frames, board: !!document.querySelector('.whiteboard-canvas-wrap') };
+  });
+  const showing: string[] = [];
+  for (const fr of shell.frames) {
+    if (!fr.visible || !fr.src) continue;
+    for (const f of page.frames()) {
+      if (f.url() !== fr.src) continue;
+      let html = '';
+      try { html = await f.content(); } catch { /* navigating */ }
+      for (const m of markers) if (html.includes(m) && !showing.includes(m)) showing.push(m);
+    }
+  }
+  return { board: shell.board, showing: showing.sort() };
+}
+
+/**
+ * The frame holding this text that the person can actually SEE.
+ *
+ * lessonFrame() above returns the first frame that matches, which is the right
+ * answer for "is it here at all" and the wrong one for "is it on screen": a
+ * learner watching an explanation also has a lesson shell mounted behind it,
+ * and that shell can be holding a copy of the same document. Reading the first
+ * match there answers a question nobody asked.
+ */
+async function visibleFrame(page: Page, contains: string, timeoutMs = 25_000): Promise<Frame> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const shown = await page.evaluate(() => {
+      const srcs: string[] = [];
+      document.querySelectorAll('iframe').forEach(el => {
+        const r = el.getBoundingClientRect();
+        let visible = r.width > 4 && r.height > 4;
+        let n: HTMLElement | null = el as HTMLElement;
+        while (n && visible) {
+          const cs = getComputedStyle(n);
+          if (cs.visibility === 'hidden' || cs.display === 'none' || cs.opacity === '0') visible = false;
+          n = n.parentElement;
+        }
+        if (visible) srcs.push((el as HTMLIFrameElement).src);
+      });
+      return srcs;
+    });
+    for (const f of page.frames()) {
+      if (f === page.mainFrame() || !shown.includes(f.url())) continue;
+      try { if ((await f.content()).includes(contains)) return f; } catch { /* navigating */ }
+    }
+    await page.waitForTimeout(400);
+  }
+  throw new Error(`no VISIBLE frame containing ${JSON.stringify(contains)} after ${timeoutMs}ms`);
+}
+
 /** Paste a lesson into the teacher's room and run it. */
 async function runLesson(teacher: Page, html: string) {
   await teacher.getByRole('button', { name: /Paste snippet|Paste Code/ }).first().click();
@@ -735,6 +808,128 @@ test.describe('the mirror', () => {
       }
       return best;
     }, { timeout: 15_000, message: 'the learner was left at the top of the reopened explanation' }).toBe(2000);
+
+    await teacher.close();
+    await learner.close();
+  });
+  test('the whiteboard takes the class with it, and hands the explanation back', async ({ browser }) => {
+    // 17 Sep 2026, the founder's own journey and the one liveExplainers.ts was
+    // written for: a worksheet open as an explanation, drop onto the whiteboard
+    // to work question 4 through, come back. Tapping Whiteboard used to leave
+    // the tutor's screen blank — lesson hidden, explanation hidden, and the
+    // board refusing to render because an explanation was still "active" —
+    // while the student carried on watching the worksheet, still being streamed
+    // live from a document the tutor could not see. And there was no way out:
+    // Back to main, the explanation tabs and Exit explanation are all hidden on
+    // the whiteboard, so "Back to HTML" was the only control left and it
+    // returned to the explanation, never to the board.
+    const code = room('w');
+    const teacher = await (await browser.newContext()).newPage();
+    const learner = await (await browser.newContext()).newPage();
+    const MARKS = ['MAIN-LESSON', 'WORKSHEET-Q4'];
+
+    await teacher.goto(`${BASE}/room/${code}?name=Teacher`);
+    await runLesson(teacher, '<!doctype html><html><body><h1>MAIN-LESSON</h1></body></html>');
+    await lessonFrame(teacher, 'MAIN-LESSON');
+
+    await teacher.getByTitle('Upload an HTML explainer or paste HTML code to overlay on top of the current example').click();
+    await teacher.getByPlaceholder('Title (optional, e.g. Step-by-step quadratic)').fill('Q4 sheet');
+    await teacher.getByPlaceholder('Paste your HTML code here...').fill(`<!doctype html><html><body>
+      <h2>WORKSHEET-Q4</h2><input id="a1"><p>SCORE <b id="sc">0</b></p>
+      <script>document.getElementById('a1').addEventListener('input', function () {
+        document.getElementById('sc').textContent = '7';
+      });<\/script></body></html>`);
+    await teacher.getByRole('button', { name: /Show explainer/ }).click();
+
+    const sheet = await lessonFrame(teacher, 'WORKSHEET-Q4');
+    await learner.goto(`${BASE}/live/${code}?name=Learner`);
+    await lessonFrame(learner, 'WORKSHEET-Q4');
+
+    // Half a worksheet done — the 15 Sep guarantee has to survive the trip.
+    await sheet.locator('#a1').fill('0.8');
+    await expect(sheet.locator('#sc')).toHaveText('7');
+
+    // The one-click drop into the board that sits beside "Back to main".
+    await teacher.getByTitle('Open the shared whiteboard').click();
+
+    await expect.poll(() => surfaceOf(teacher, MARKS).then(s => JSON.stringify(s)),
+      { timeout: 15_000, message: "the tutor asked for the board and got a blank screen" })
+      .toBe(JSON.stringify({ board: true, showing: [] }));
+    await expect.poll(() => surfaceOf(learner, MARKS).then(s => JSON.stringify(s)),
+      { timeout: 15_000, message: 'the tutor went to the board and the learner stayed on the explanation' })
+      .toBe(JSON.stringify({ board: true, showing: [] }));
+
+    // And a learner arriving now boots onto the board, not onto the explanation
+    // the room was still holding for joiners.
+    const latecomer = await (await browser.newContext()).newPage();
+    await latecomer.goto(`${BASE}/live/${code}?name=Latecomer`);
+    await expect.poll(() => surfaceOf(latecomer, MARKS).then(s => JSON.stringify(s)),
+      { timeout: 20_000, message: 'a learner who joined mid-board was put on the explanation instead' })
+      .toBe(JSON.stringify({ board: true, showing: [] }));
+    await latecomer.close();
+
+    // Back — and the class comes back to the worksheet, not to the lesson behind it.
+    await teacher.getByTitle(/Return to the HTML simulation/).click();
+    await expect.poll(() => surfaceOf(teacher, MARKS).then(s => JSON.stringify(s)),
+      { timeout: 15_000 }).toBe(JSON.stringify({ board: false, showing: ['WORKSHEET-Q4'] }));
+    await expect.poll(() => surfaceOf(learner, MARKS).then(s => JSON.stringify(s)),
+      { timeout: 15_000, message: 'the learner did not come back to the explanation with the tutor' })
+      .toBe(JSON.stringify({ board: false, showing: ['WORKSHEET-Q4'] }));
+
+    // Still the same running document, with the answer still in it.
+    const reopened = await lessonFrame(teacher, 'WORKSHEET-Q4');
+    await expect(reopened.locator('#a1')).toHaveValue('0.8');
+    await expect(reopened.locator('#sc')).toHaveText('7');
+    await expect.poll(async () => {
+      const f = await visibleFrame(learner, 'WORKSHEET-Q4');
+      return (await f.locator('#sc').textContent())?.trim();
+    }, { timeout: 20_000, message: "the learner's worksheet came back empty" }).toBe('7');
+
+    await teacher.close();
+    await learner.close();
+  });
+
+  test('a lesson hidden by the whiteboard goes quiet, then says what it looks like on the way back', async ({ browser }) => {
+    // Since 9133613 the lesson iframe stays mounted and running underneath the
+    // board, and it went on streaming full-DOM frames and a canvas frame every
+    // 120ms to iPads for a surface nobody in the class was looking at. Stopping
+    // that leaves a second problem behind it: a hidden document keeps
+    // snapshotting itself every 500ms and its own change-detection consumes each
+    // change whether or not the relay passed it on, so on the way back it
+    // believes the class already holds a frame the class never received and says
+    // nothing at all. On a lesson that then stops changing, the learner is left
+    // on the old screen for as long as that takes.
+    const code = room('q');
+    const teacher = await (await browser.newContext()).newPage();
+    const learner = await (await browser.newContext()).newPage();
+
+    await teacher.goto(`${BASE}/room/${code}?name=Teacher`);
+    await runLesson(teacher, '<!doctype html><html><body><h1>MAIN-LESSON</h1><p>STATE <b id="t">before</b></p></body></html>');
+    const main = await lessonFrame(teacher, 'MAIN-LESSON');
+    await learner.goto(`${BASE}/live/${code}?name=Learner`);
+    const learnerState = async () => {
+      for (const f of learner.frames()) {
+        try { if ((await f.content()).includes('MAIN-LESSON')) return (await f.locator('#t').textContent())?.trim(); }
+        catch { /* navigating */ }
+      }
+      return null;
+    };
+    await expect.poll(learnerState, { timeout: 25_000 }).toBe('before');
+
+    await teacher.getByTitle(/Open the shared whiteboard temporarily/).click();
+    await expect.poll(() => surfaceOf(learner, ['MAIN-LESSON']).then(s => s.board), { timeout: 15_000 }).toBe(true);
+
+    // The sim advances behind the board — a timer, a step, a forwarded tap —
+    // and then goes static, which is every worksheet and most explainers.
+    await main.evaluate(() => { document.getElementById('t')!.textContent = 'after-board'; });
+    await teacher.waitForTimeout(3000);
+    expect(await learnerState(),
+      'the hidden lesson was still streaming to the learner while the class was on the board').toBe('before');
+
+    await teacher.getByTitle(/Return to the HTML simulation/).click();
+    await expect.poll(learnerState,
+      { timeout: 10_000, message: 'the tutor came back to the lesson and the learner stayed on the old screen' })
+      .toBe('after-board');
 
     await teacher.close();
     await learner.close();

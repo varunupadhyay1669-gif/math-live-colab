@@ -3,6 +3,7 @@ import { createServer } from 'http';
 import { Server } from 'socket.io';
 import path from 'path';
 import { pressureFrom, idleWindowFor, describeMemory, type MemoryPolicy } from './src/lib/memoryGuard';
+import { whiteboardSurfaceToggle } from './src/lib/liveExplainers';
 import fs from 'fs';
 import { createHmac, randomBytes } from 'crypto';
 // pg is CommonJS; this file is ESM. Named imports off a CJS module are the
@@ -79,6 +80,18 @@ interface RoomData {
   // leaves it here to reopen; only an explicit delete discards it.
   explanations: Array<{ id: string; name: string; html: string }>;
   activeExplanationId: string | null;
+  /**
+   * Which explanation the class was on when the whiteboard took the surface.
+   *
+   * 17 Sep 2026, the founder's own journey: an explanation open, take a look at
+   * question 4, drop onto the whiteboard to work it through, come back. The
+   * board and an explanation are two surfaces and only one of them can be the
+   * class's, so entering the board sets the explanation aside for everyone and
+   * leaving the board brings it back. Set aside, not discarded: the document
+   * itself stays alive and running in the teacher's tab (liveExplainers.ts), so
+   * the student's answers are still there when the class returns to it.
+   */
+  explanationBeforeWhiteboard?: string | null;
   /** Has the teacher asked the room to transcribe what's said? */
   narrationOn: boolean;
   liveSnapshotHtml: string | null;
@@ -605,6 +618,7 @@ async function startServer() {
       tempContent: null,
       explanations: [],
       activeExplanationId: null,
+      explanationBeforeWhiteboard: null,
       narrationOn: false,
       liveSnapshotHtml: null,
       mirrorBody: null,
@@ -3245,8 +3259,49 @@ Build a widget that teaches: ${safePrompt}`;
       // student who joins after the toggle never learns the teacher is on
       // the whiteboard (the broadcast was a one-shot event), so they'd
       // sit on the "Waiting for teacher" placeholder forever.
-      room.whiteboardMode = !!active;
-      io.to(roomId).emit('whiteboard_mode_changed', { active: room.whiteboardMode });
+      //
+      // THE CLASS GOES TO THE BOARD TOGETHER, AND COMES BACK TOGETHER.
+      //
+      // 17 Sep 2026: whiteboard mode and "an explanation is showing" were two
+      // independent booleans that could both be true, and the two sides broke
+      // the tie in opposite directions — the tutor's own screen went blank (the
+      // lesson hidden, the explanation hidden, and <Whiteboard> refusing to
+      // render because an explanation was 'active'), while the student carried
+      // on watching the explanation. "The student somewhere else, I'm somewhere
+      // else," in the most literal form. Every escape hatch is withdrawn in that
+      // state too: Back to main, the tab strip and Exit explanation are all
+      // hidden on the whiteboard, so there was no way back to the board at all.
+      //
+      // Both flags belong to one question — what is the class looking at — so
+      // they are decided here, in one place, in one order, rather than by two
+      // client-side renders that disagree. Entering the board sets the
+      // explanation aside; leaving it brings the same one back. The order of
+      // these two broadcasts matters: no client is ever handed a moment where
+      // the board and an explanation are both up.
+      //
+      // The rule itself is pure, in src/lib/liveExplainers.ts beside the one that
+      // keeps the documents alive, and is checked offline in verify-mirror.mjs.
+      const { next, showExplanation } = whiteboardSurfaceToggle(
+        {
+          whiteboardMode: room.whiteboardMode,
+          activeExplanationId: room.activeExplanationId,
+          explanationBeforeWhiteboard: room.explanationBeforeWhiteboard ?? null,
+        },
+        !!active,
+        // Deleted while the board was up? Then there is nothing to come back to.
+        (id) => room.explanations.some(e => e.id === id),
+      );
+      room.whiteboardMode = next.whiteboardMode;
+      room.explanationBeforeWhiteboard = next.explanationBeforeWhiteboard;
+      if (next.whiteboardMode) {
+        // `|| room.tempContent` is the belt: a room holding explanation HTML with
+        // no id behind it would otherwise carry it onto the board for joiners.
+        if (showExplanation !== undefined || room.tempContent) activateExplanation(roomId, room, showExplanation ?? null);
+        io.to(roomId).emit('whiteboard_mode_changed', { active: true });
+      } else {
+        io.to(roomId).emit('whiteboard_mode_changed', { active: false });
+        if (showExplanation !== undefined) activateExplanation(roomId, room, showExplanation);
+      }
     });
 
     socket.on('whiteboard_scroll', ({ roomId, scrollX, scrollY }: { roomId: string; scrollX: number; scrollY: number }) => {
@@ -3328,6 +3383,8 @@ Build a widget that teaches: ${safePrompt}`;
       room.explanations = room.explanations.filter(e => e.id !== id);
       if (room.explanations.length === before) return;
       // Deleting the one on screen must also take it off everyone's screen.
+      // One set aside by the whiteboard needs nothing here: leaving the board
+      // asks whether it is still kept before it reopens anything.
       if (room.activeExplanationId === id) activateExplanation(roomId, room, null);
       else broadcastExplanations(roomId, room);
     });
