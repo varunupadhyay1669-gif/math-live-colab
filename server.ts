@@ -21,6 +21,7 @@ import { mountLessonRoutes } from './src/server/lessons';
 import { MAIL_LOG_SCHEMA_SQL, startDailyJobs } from './src/server/scheduler';
 import { rateLimit, makeLimiter, handshakeIp } from './src/server/rateLimit';
 import { runMigrations } from './src/server/migrate';
+import { EMPTY_MIRROR, cacheMirrorFrame, mirrorSurfaceKey, servableFrame } from './src/server/mirrorCache';
 
 interface FileEntry {
   id: string;
@@ -101,10 +102,24 @@ interface RoomData {
   // mirrorAttrs/mirrorHead carry the styling envelope (body attributes and
   // runtime-injected head CSS) so a cache-served joiner looks identical, and
   // mirrorHash is the fingerprint students compare against to detect a lost frame.
+  // mirrorSurface says WHICH of the tutor's documents the slot holds, so it is
+  // never handed to a screen showing a different one. The rules live in
+  // src/server/mirrorCache.ts; nothing here writes these five fields by hand.
   mirrorBody: string | null;
   mirrorAttrs: string | null;
   mirrorHead: string | null;
   mirrorHash: string | null;
+  mirrorSurface: string | null;
+  /**
+   * Students who asked for a frame and have not been handed a live one yet.
+   *
+   * The cached answer to "I cannot see anything" goes out on the guaranteed
+   * channel, but the LIVE frame that corrects it is volatile (see mirror_dom) —
+   * so it is dropped for precisely the student whose transport just hiccupped,
+   * which is the student who asked. The poison arrived and the repair did not.
+   * One frame each, guaranteed, then back to volatile.
+   */
+  mirrorRepairs: Map<string, number>;
   // ── Video call ──
   // Who is currently IN the call, by socket id. The call is a thing the room
   // owns, not something the two browsers negotiate between themselves.
@@ -621,10 +636,8 @@ async function startServer() {
       explanationBeforeWhiteboard: null,
       narrationOn: false,
       liveSnapshotHtml: null,
-      mirrorBody: null,
-      mirrorAttrs: null,
-      mirrorHead: null,
-      mirrorHash: null,
+      ...EMPTY_MIRROR,
+      mirrorRepairs: new Map<string, number>(),
       sharedVideo: null,
       mirrorAcks: new Map<string, { h: string | null; ok: boolean; at: number }>(),
       lessonState: null,
@@ -665,10 +678,31 @@ async function startServer() {
     // Drop the old lesson's mirror snapshot so a student joining right after a
     // lesson switch never renders the previous lesson's DOM (the source will
     // stream the new one within a frame of its iframe rebuilding).
-    room.mirrorBody = null;
-    room.mirrorAttrs = null;
-    room.mirrorHead = null;
-    room.mirrorHash = null;
+    Object.assign(room, EMPTY_MIRROR);
+  }
+
+  /**
+   * The tutor has moved to a different document (an explanation opened, closed,
+   * or swapped for another one).
+   *
+   * Empty the slot. It holds a frame from the document the class has just left,
+   * and until the new one speaks there is nothing here that belongs on anyone's
+   * screen. Measured on 17 Sep 2026: it served the wrong document in 22 of 330
+   * samples across twelve explanation switches, in both directions - a student
+   * asking in the quarter-second around a switch was handed the lesson to paint
+   * into their explanation, or the explanation to paint into their lesson.
+   *
+   * It deliberately does NOT ask the source for a replacement here. That was
+   * tried, and it made things worse: the request reaches the tutor's tab before
+   * the tab has finished moving to the new surface, so the OLD document answers
+   * it and the frame is filed under the new one - the same wrong page, now
+   * wearing the right label. A student's own request is the safe trigger,
+   * because by the time one arrives the tab has long since moved; and the new
+   * surface announces itself anyway, when it loads or when it first changes.
+   */
+  function mirrorSurfaceChanged(roomId: string, room: RoomData) {
+    Object.assign(room, EMPTY_MIRROR);
+    logSync('mirror_surface', { roomId, revision: room.revision, reason: mirrorSurfaceKey(room) });
   }
 
   // ── Event journal helpers ──
@@ -3328,8 +3362,12 @@ Build a widget that teaches: ${safePrompt}`;
     /** Point the room at one explanation (or none) and tell everyone. */
     function activateExplanation(roomId: string, room: RoomData, id: string | null) {
       const found = id ? room.explanations.find(e => e.id === id) : null;
+      const was = mirrorSurfaceKey(room);
       room.activeExplanationId = found ? found.id : null;
       room.tempContent = found ? { html: found.html, name: found.name } : null;
+      // The class is now looking at a different document, so the cached frame
+      // is the wrong one to hand anybody until the new surface has spoken.
+      if (mirrorSurfaceKey(room) !== was) mirrorSurfaceChanged(roomId, room);
       if (found) io.to(roomId).emit('temp_content', { html: found.html, name: found.name, id: found.id });
       else io.to(roomId).emit('clear_temp_content');
       broadcastExplanations(roomId, room);
@@ -4065,20 +4103,57 @@ Build a widget that teaches: ${safePrompt}`;
     }
 
     const MAX_MIRROR_FRAME = 3 * 1024 * 1024;
+    let lastOversizeLogAt = 0;
+    // How long a student's ask stays armed. Longer than the follower's own
+    // retry (it asks again after two mismatched heartbeats, ~4s), so a lesson
+    // that is simply not changing still gets its one guaranteed frame when it
+    // next does; short enough that a tab closed mid-ask leaves nothing behind.
+    const MIRROR_REPAIR_TTL = 20_000;
+    /** Remember that this student is owed one frame on the guaranteed channel. */
+    function armRepair(room: RoomData, studentId: string) {
+      const now = Date.now();
+      for (const [id, at] of room.mirrorRepairs) if (now - at > MIRROR_REPAIR_TTL) room.mirrorRepairs.delete(id);
+      // A 1:1 class has one student; a ceiling anyway, because this list is the
+      // one place a student can ask the server to hold something for them.
+      if (room.mirrorRepairs.size >= 16 && !room.mirrorRepairs.has(studentId)) return;
+      room.mirrorRepairs.set(studentId, now);
+    }
+    /** Hand the frame to everyone who asked, once each, and clear the list. */
+    function deliverRepairs(room: RoomData, frame: object) {
+      if (room.mirrorRepairs.size === 0) return;
+      const now = Date.now();
+      for (const [studentId, at] of room.mirrorRepairs) {
+        room.mirrorRepairs.delete(studentId);
+        if (now - at > MIRROR_REPAIR_TTL) continue;
+        if (!room.users.has(studentId)) continue;
+        io.to(studentId).emit('mirror_dom', frame);
+      }
+    }
     socket.on('mirror_dom', ({ roomId, body, scrollX, scrollY, attrs, head, h }: { roomId: string; body: string; scrollX?: number; scrollY?: number; attrs?: string; head?: string | null; h?: string }) => {
       if (typeof roomId !== 'string' || typeof body !== 'string') return;
       const frameChars = body.length
         + (typeof head === 'string' ? head.length : 0)
         + (typeof attrs === 'string' ? attrs.length : 0);
-      if (frameChars > MAX_MIRROR_FRAME) return;
       const room = rooms.get(roomId);
       if (!isMirrorSource(room, socket.id)) return;
-      room.mirrorBody = body;
-      // Cache the full styling envelope too, so a late joiner served from cache
-      // renders with the same body attributes and runtime CSS as everyone else.
-      room.mirrorAttrs = typeof attrs === 'string' ? attrs : null;
-      if (typeof head === 'string') room.mirrorHead = head;
-      room.mirrorHash = typeof h === 'string' ? h : null;
+      if (frameChars > MAX_MIRROR_FRAME) {
+        // Say so. This used to be a bare `return`: the frame vanished, the
+        // cache kept the last page that fit, and nothing anywhere recorded that
+        // a lesson had outgrown the mirror. The tutor's own warning sits higher
+        // (3.5M characters of body alone, in mirrorScript) and never fires in
+        // the band that matters, so the journal is the only place this can be
+        // seen. Once a second is plenty to spot it without flooding the log of
+        // a lesson that is producing four frames a second.
+        if (Date.now() - lastOversizeLogAt >= 1000) {
+          lastOversizeLogAt = Date.now();
+          logSync('mirror_frame_dropped', { roomId, revision: room.revision, socketId: socket.id, reason: `${frameChars} chars > ${MAX_MIRROR_FRAME}` });
+        }
+        return;
+      }
+      // Cache body, styling envelope and fingerprint TOGETHER, tagged with the
+      // document they came from. See src/server/mirrorCache.ts for why every
+      // one of those words is load-bearing.
+      Object.assign(room, cacheMirrorFrame(room, { body, attrs, head, h }, mirrorSurfaceKey(room)));
       // VOLATILE, and this is the fix for the crash that ended a live lesson on
       // 4 Sep 2026: Node hit its heap limit, systemd restarted it, and both
       // people saw "Reconnecting" mid-class.
@@ -4100,6 +4175,19 @@ Build a widget that teaches: ${safePrompt}`;
       // a moment of staleness that repairs itself; a queued one costs everyone
       // the lesson.
       socket.volatile.to(roomId).emit('mirror_dom', { body, scrollX, scrollY, attrs, head, h });
+      // …with ONE exception, and it is the asymmetry that made a bad half-second
+      // permanent. A student who asked for a frame is a student whose transport
+      // has just proved it can drop one; the cached answer to that ask goes out
+      // guaranteed, and the live frame that supersedes it went out volatile, on
+      // the very transport that dropped the last one. So the stale page landed
+      // and its replacement did not, over and over, which is what a tutor
+      // pressing Resend eighteen times in ten seconds looks like.
+      //
+      // One frame each, then they are off the list and back on the volatile
+      // stream. That bounds what can queue at the rate students ASK (seconds
+      // apart) rather than the rate the lesson MUTATES (four a second), which
+      // is the number that filled the heap on 4 Sep.
+      deliverRepairs(room, { body, scrollX, scrollY, attrs, head, h });
     });
     // Fingerprint heartbeat (a few bytes): lets a student detect that a snapshot
     // never arrived and request a resync. Rate-limited as loss-tolerant.
@@ -4108,7 +4196,16 @@ Build a widget that teaches: ${safePrompt}`;
       if (!checkRateLimit(socket.id, true)) return;
       const room = rooms.get(roomId);
       if (!isMirrorSource(room, socket.id)) return;
-      room.mirrorHash = h;
+      // The cached fingerprint is NOT written here, and that is the whole point
+      // of this line's absence. `room.mirrorHash = h` used to run on every 2s
+      // heartbeat with no body beside it, so the slot could hold one page's body
+      // wearing another page's fingerprint — and a student handed that pair
+      // paints the old page, adopts the live hash, and agrees with every
+      // heartbeat afterwards. Measured on 17 Sep 2026: with a lesson whose frame
+      // exceeded the 3 MiB ceiling, the cache held page 0's body carrying page
+      // 2's live fingerprint, and the student sat on page 0 reporting ok:true
+      // for the rest of the lesson. A fingerprint may only describe a body that
+      // was actually cached with it (src/server/mirrorCache.ts).
       socket.to(roomId).emit('mirror_ping', { h });
     });
     socket.on('mirror_canvas', ({ roomId, canvases }: { roomId: string; canvases: any }) => {
@@ -4185,11 +4282,18 @@ Build a widget that teaches: ${safePrompt}`;
       // Serve the cached frame immediately (instant late-join), then ask the
       // teacher to push a fresh one (covers canvas + freshest state). Includes
       // the styling envelope so the cache-served render isn't unstyled.
-      if (room.mirrorBody) {
-        io.to(socket.id).emit('mirror_dom', {
-          body: room.mirrorBody, attrs: room.mirrorAttrs, head: room.mirrorHead, h: room.mirrorHash,
-        });
-      }
+      //
+      // Only if the slot holds the document this student's screen is showing.
+      // It is one slot fed by whichever of the tutor's three surfaces is
+      // streaming, and it used to be handed out with no idea which — so for a
+      // quarter-second either side of every explanation open and close, a
+      // student asking here was given the other document to paint.
+      const cached = servableFrame(room, mirrorSurfaceKey(room));
+      if (cached) io.to(socket.id).emit('mirror_dom', cached);
+      // Whether or not there was one: this student is owed the next live frame
+      // on the guaranteed channel, because the one thing we know about them is
+      // that a frame did not reach them.
+      armRepair(room, socket.id);
       if (room.teacherSocketId) io.to(room.teacherSocketId).emit('mirror_request', {});
     });
 
@@ -4271,11 +4375,11 @@ Build a widget that teaches: ${safePrompt}`;
       // Serve the cached frame straight away, then ask the source for a fresh
       // one. Pushing a dom_snapshot here rebuilt the student's iframe, which
       // restarted the lesson on their screen — the opposite of catching up.
-      if (room.mirrorBody) {
-        io.to(studentId).emit('mirror_dom', {
-          body: room.mirrorBody, attrs: room.mirrorAttrs, head: room.mirrorHead, h: room.mirrorHash,
-        });
-      }
+      // Same rule as mirror_request: only a frame from the document this
+      // student is actually showing, and the fresh one comes guaranteed.
+      const cached = servableFrame(room, mirrorSurfaceKey(room));
+      if (cached) io.to(studentId).emit('mirror_dom', cached);
+      armRepair(room, studentId);
       if (room.teacherSocketId) io.to(room.teacherSocketId).emit('mirror_request', {});
       logSync('resync_student', { roomId, revision: room.revision, socketId: studentId });
     });
@@ -4540,6 +4644,7 @@ Build a widget that teaches: ${safePrompt}`;
           // A closed tab is a hang-up as far as the other party is concerned.
           leaveCall(roomId, room, socket.id);
           room.mirrorAcks.delete(socket.id);
+          room.mirrorRepairs.delete(socket.id);
 
           io.to(roomId).emit('user_list', getRoomUserList(room));
           io.to(roomId).emit('user_left', { userId: socket.id, userName: user?.name || 'Unknown' });
@@ -4551,10 +4656,8 @@ Build a widget that teaches: ${safePrompt}`;
           // source on the next change, so keeping it for an empty room buys
           // nothing and costs megabytes across a day of lessons.
           if (room.users.size === 0) {
-            room.mirrorBody = null;
-            room.mirrorAttrs = null;
-            room.mirrorHead = null;
-            room.mirrorHash = null;
+            Object.assign(room, EMPTY_MIRROR);
+            room.mirrorRepairs.clear();
             room.liveSnapshotHtml = null;
           }
 

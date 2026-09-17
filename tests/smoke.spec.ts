@@ -934,4 +934,67 @@ test.describe('the mirror', () => {
     await teacher.close();
     await learner.close();
   });
+
+  test('a page the mirror cannot carry leaves the learner behind, and says so', async ({ browser }) => {
+    // 17 Sep 2026, the fault underneath "the student somewhere else, I'm
+    // somewhere else" for a tutor who was doing nothing unusual.
+    //
+    // A frame over the server's 3 MiB ceiling is dropped. That part is
+    // unavoidable — it will not fit down the socket — and the learner staying on
+    // the last page that did fit is the honest outcome. What was NOT honest was
+    // everything after it: the 2s fingerprint heartbeat wrote the room's cached
+    // hash with no body beside it, so the cache came to hold page 1's body
+    // wearing page 2's fingerprint. A learner asking for a resync was handed
+    // that pair, adopted the hash it arrived wearing without checking it against
+    // what it had painted, and from then on agreed with every heartbeat. The
+    // tutor's screen said the class was with them; the child was eight minutes
+    // behind and neither of them could tell.
+    //
+    // So: the learner falls behind, the tutor is TOLD, and when the tutor makes
+    // the page fit again the learner catches up.
+    const code = room('z');
+    const teacher = await (await browser.newContext()).newPage();
+    const learner = await (await browser.newContext()).newPage();
+
+    await teacher.goto(`${BASE}/room/${code}?name=Teacher`);
+    // The 3.3MB of padding is built at runtime, so the uploaded file stays small
+    // — it is the live DOM the mirror serialises that has to be too big.
+    await runLesson(teacher, `<!doctype html><html><body>
+      <h1>Bearings</h1><p id="n">page 1</p><div id="fat"></div>
+      <button id="huge" onclick="document.getElementById('n').textContent='page 2';document.getElementById('fat').textContent='x'.repeat(3300000);">page 2</button>
+      <button id="trim" onclick="document.getElementById('n').textContent='page 3';document.getElementById('fat').textContent='';">page 3</button>
+    </body></html>`);
+    const src = await lessonFrame(teacher, 'Bearings');
+    await learner.goto(`${BASE}/live/${code}?name=Learner`);
+    const fol = await lessonFrame(learner, 'Bearings');
+    await expect.poll(async () => fol.locator('#n').textContent(), { timeout: 20_000 }).toBe('page 1');
+    const warning = teacher.getByTestId('sync-warning');
+    await expect(warning).toBeHidden();
+
+    // A page the mirror physically cannot carry.
+    await src.locator('#huge').click();
+    await expect.poll(async () => src.locator('#n').textContent(), { timeout: 10_000 }).toBe('page 2');
+
+    // The tutor is told, and keeps being told. This is the assertion that fails
+    // without the fix: the learner used to be handed the stale body with the
+    // live fingerprint, adopt it, and report itself in sync within a couple of
+    // heartbeats — the warning appeared and then went away, which is worse than
+    // never appearing at all.
+    await expect(warning).toBeVisible({ timeout: 20_000 });
+    await teacher.waitForTimeout(9000);
+    await expect(warning).toBeVisible();
+    expect(await fol.locator('#n').textContent()).toBe('page 1');
+
+    // And it is not a dead end: make the page fit and the learner catches up,
+    // without anybody reloading anything.
+    await src.locator('#trim').click();
+    await expect.poll(async () => fol.locator('#n').textContent(), {
+      timeout: 25_000,
+      message: 'the learner never caught up once the page fitted again',
+    }).toBe('page 3');
+    await expect(warning).toBeHidden({ timeout: 25_000 });
+
+    await teacher.close();
+    await learner.close();
+  });
 });
