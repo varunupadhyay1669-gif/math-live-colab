@@ -39,6 +39,7 @@ import { can, permissionsOf } from './src/server/authz.ts';
 import { LESSON_HISTORY_KEEP, LESSON_TTL_HOURS } from './src/server/records.ts';
 import { cutoffFrom } from './src/server/classData.ts';
 import { explainerKey, touchLiveExplainer, whiteboardSurfaceToggle, MAX_LIVE_EXPLAINERS } from './src/lib/liveExplainers.ts';
+import { contentRetryDelay, contentRetryOffset, CONTENT_RETRY_STEADY_MS } from './src/lib/contentRetry.ts';
 import {
   calculate, compile, parse, evaluate, tokenize, formatResult, freeVariables,
   ExpressionError, FUNCTION_NAMES,
@@ -1166,6 +1167,58 @@ section('OFFLINE — the whiteboard and an explanation cannot both be the class\
   assert(/setShowTempContent\(false\);/.test(toggle) && !/setTempContent\(null\)/.test(toggle),
     'asking for the board sets the explanation aside on the tutor\'s own screen, without discarding it',
     'clearing tempContent would throw the running document away — the 15 Sep bug');
+}
+
+section('OFFLINE — a student with an empty screen never stops asking');
+{
+  // 17 Sep 2026, from the production journal: 80 "request_content" across 95
+  // joins, and 14 of 17 student sockets sent them at offsets [0, 3, 8, 18] —
+  // every rung of the ladder, so every one of those students still had a blank
+  // screen when it ran out. After the fourth there was nothing: the effect's
+  // dependencies do not change while a student is stuck, so it was never
+  // re-armed. One student pressed Retry Loading fourteen times in 4.3 seconds
+  // and then reloaded the page. The class carried on without them.
+  assert([0, 1, 2, 3].map(contentRetryOffset).join() === [2000, 5000, 10000, 20000].join(),
+    'the first four attempts still land at 2s, 5s, 10s and 20s',
+    'a lesson usually arrives in the first seconds, and a student who is merely early must not be made to wait');
+
+  // The whole point: there is no attempt number that means "stop".
+  const far = [4, 5, 50, 5000, 100000].map(contentRetryDelay);
+  assert(far.every(d => Number.isFinite(d) && d > 0),
+    'there is no attempt count at which the student gives up',
+    JSON.stringify(far));
+  assert(far.every(d => d === CONTENT_RETRY_STEADY_MS),
+    'past the ladder it settles into one steady cadence');
+
+  // And it stays cheap. These are iPads on hotel wifi and the server has 1 GB:
+  // a stuck student may keep asking, but not faster than a person would.
+  assert(CONTENT_RETRY_STEADY_MS >= 10000 && CONTENT_RETRY_STEADY_MS <= 30000,
+    'the steady cadence is somewhere between ten and thirty seconds',
+    `${CONTENT_RETRY_STEADY_MS}ms`);
+  const anHour = 3600000;
+  let n = 0;
+  while (contentRetryOffset(n) < anHour) n++;
+  assert(n < 260, 'an hour of being stuck is a few hundred asks, not thousands', `${n} in an hour`);
+
+  // Nonsense in, first rung out — never NaN, never a timer that fires forever.
+  assert(contentRetryDelay(-1) === 2000 && contentRetryDelay(NaN) === 2000,
+    'a bad attempt number still schedules a real attempt');
+
+  // The wiring. A schedule that never gives up is worth nothing if the page
+  // still builds its own fixed list of timers.
+  const studentSrc = readFileSync('src/pages/StudentView.tsx', 'utf8');
+  assert(/contentRetryDelay\(/.test(studentSrc),
+    'the student page asks the schedule how long to wait');
+  assert(!/\[\s*2000\s*,\s*5000\s*,\s*10000\s*,\s*20000\s*\]/.test(studentSrc),
+    'the student page no longer holds a ladder that ends',
+    'four timers and then silence is exactly what the journal recorded');
+  // And it only runs while there is genuinely nothing to look at — an
+  // explanation or the whiteboard means the class IS on screen.
+  const ladderAt = studentSrc.indexOf('contentRetryDelay(');
+  const ladder = ladderAt >= 0 ? studentSrc.slice(Math.max(0, ladderAt - 900), ladderAt) : '';
+  assert(/showTempContent \|\| whiteboardMode/.test(ladder),
+    'a student who is watching an explanation or the whiteboard is not chasing anything',
+    'asking forever for a lesson nobody is showing is bandwidth a hotel wifi cannot spare');
 }
 
 section('OFFLINE — one board cannot grow until it kills the server');

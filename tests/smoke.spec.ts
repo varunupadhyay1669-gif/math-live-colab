@@ -150,6 +150,53 @@ async function visibleFrame(page: Page, contains: string, timeoutMs = 25_000): P
   throw new Error(`no VISIBLE frame containing ${JSON.stringify(contains)} after ${timeoutMs}ms`);
 }
 
+/**
+ * Everything a page's socket SENT, as {event, seconds-since-t0}.
+ *
+ * Reads the websocket frames rather than trusting the UI, because the questions
+ * below are about what one person's page makes ANOTHER person's page do, and
+ * that only exists on the wire. Socket.IO opens on long-polling and upgrades,
+ * so the first second of a page's traffic is not here — everything these tests
+ * measure happens well after that.
+ */
+function sentFrames(page: Page, t0 = Date.now()) {
+  const sent: Array<{ ev: string; at: number; body: string }> = [];
+  page.on('websocket', ws => {
+    ws.on('framesent', d => {
+      const s = typeof d.payload === 'string' ? d.payload : String(d.payload);
+      const m = s.match(/^42\["([a-z_]+)"/);
+      if (m) sent.push({ ev: m[1], at: Math.round((Date.now() - t0) / 100) / 10, body: s });
+    });
+  });
+  return sent;
+}
+
+/**
+ * Where the ink is on an annotation canvas: the top fifth against the bottom
+ * half, counted in pixels that are not transparent.
+ *
+ * WHERE rather than HOW MUCH, because the two screens are different sizes and
+ * the question is only ever "which surface does this canvas think it is on".
+ */
+async function inkByHalf(page: Page) {
+  const c = page.locator('canvas').first();
+  if (!(await c.count())) return { top: 0, bottom: 0 };
+  return c.evaluate((el) => {
+    const cv = el as HTMLCanvasElement;
+    if (!cv.width || !cv.height) return { top: 0, bottom: 0 };
+    const d = cv.getContext('2d')!.getImageData(0, 0, cv.width, cv.height).data;
+    let top = 0, bottom = 0;
+    for (let y = 0; y < cv.height; y++) {
+      for (let x = 0; x < cv.width; x++) {
+        if (d[(y * cv.width + x) * 4 + 3] > 20) {
+          if (y < cv.height * 0.2) top++; else if (y > cv.height * 0.5) bottom++;
+        }
+      }
+    }
+    return { top, bottom };
+  });
+}
+
 /** Paste a lesson into the teacher's room and run it. */
 async function runLesson(teacher: Page, html: string) {
   await teacher.getByRole('button', { name: /Paste snippet|Paste Code/ }).first().click();
@@ -994,6 +1041,185 @@ test.describe('the mirror', () => {
     }).toBe('page 3');
     await expect(warning).toBeHidden({ timeout: 25_000 });
 
+    await teacher.close();
+    await learner.close();
+  });
+
+  test('a learner staring at nothing never stops asking', async ({ browser }) => {
+    // 17 Sep 2026, from the production journal: 80 "request_content" across 95
+    // joins, and 14 of 17 student sockets sent them at offsets [0, 3, 8, 18] —
+    // every rung of a four-rung ladder, which means every one of those students
+    // still had an empty screen when it ran out. After that the page went
+    // silent for good: the effect's dependencies do not change while a student
+    // is stuck, so nothing re-armed it. One student pressed Retry Loading
+    // fourteen times in 4.3 seconds and then reloaded.
+    //
+    // A student with nothing on their screen must keep asking for as long as
+    // they have nothing on their screen.
+    const code = room('r');
+    const teacher = await (await browser.newContext()).newPage();
+    const learner = await (await browser.newContext()).newPage();
+
+    // The tutor is here, but has not started. This is the common early arrival.
+    await teacher.goto(`${BASE}/room/${code}?name=Teacher`);
+    await teacher.waitForTimeout(1500);
+
+    const sent = sentFrames(learner);
+    await learner.goto(`${BASE}/live/${code}?name=Learner`);
+    await expect(learner.getByText('Waiting for teacher...')).toBeVisible({ timeout: 15_000 });
+
+    // Long enough for the old ladder to finish (20s) and for the steady cadence
+    // that replaced its silence to come round at least once.
+    await learner.waitForTimeout(42_000);
+    const asks = sent.filter(s => s.ev === 'request_content').map(s => s.at);
+
+    // The early rungs are still there: a lesson usually lands in the first
+    // couple of seconds and a student who is merely early must not wait.
+    expect(asks.filter(at => at < 25).length,
+      `the early attempts stopped happening (asks at ${JSON.stringify(asks)})`).toBeGreaterThanOrEqual(4);
+    // And it did not give up.
+    expect(asks.filter(at => at >= 25).length,
+      `the learner gave up asking and sat on an empty screen (asks at ${JSON.stringify(asks)})`).toBeGreaterThan(0);
+
+    // The button says something back. It did its work silently before, which is
+    // why a real student pressed it fourteen times and then left.
+    const retry = learner.getByRole('button', { name: /Retry Loading/ });
+    await retry.click();
+    await expect(learner.getByText(/Asking your teacher/),
+      'pressing Retry Loading still gives the student no sign that anything happened').toBeVisible({ timeout: 5_000 });
+
+    // Ten more presses in a couple of seconds must not become ten more asks:
+    // the room pays for every one of them.
+    const before = sent.filter(s => s.ev === 'request_content').length;
+    for (let i = 0; i < 10; i++) await retry.click();
+    await learner.waitForTimeout(1000);
+    expect(sent.filter(s => s.ev === 'request_content').length - before,
+      'a rage-clicked button put one ask per press on the wire').toBeLessThanOrEqual(2);
+
+    await teacher.close();
+    await learner.close();
+  });
+
+  test('one learner asking again does not hand the class the explanation', async ({ browser }) => {
+    // 17 Sep 2026. "request_content" is a student saying there is nothing on
+    // their screen. It used to be answered by asking the TUTOR's page for its
+    // current document — and the tutor's explanations are mirror sources too,
+    // so while an explanation was open it was the EXPLANATION that answered,
+    // and its markup was stored as the room's live lesson. Every student who
+    // hydrated after that got the explainer installed underneath their
+    // explanation overlay, and found it there when the tutor closed it: the
+    // tutor on the worksheet, the student on the thing explained five minutes
+    // ago. The same answer also re-broadcast the lesson to the whole room, so
+    // one student's private "I can't see anything" reached everybody.
+    //
+    // The student should be served from the mirror instead, which is the only
+    // copy that knows which surface the class is on.
+    const code = room('q');
+    const teacher = await (await browser.newContext()).newPage();
+    const learner = await (await browser.newContext()).newPage();
+    const tutorSent = sentFrames(teacher);
+
+    await teacher.goto(`${BASE}/room/${code}?name=Teacher`);
+    await runLesson(teacher, '<!doctype html><html><body><h1>Main lesson</h1></body></html>');
+    await lessonFrame(teacher, 'Main lesson');
+    await learner.goto(`${BASE}/live/${code}?name=Learner`);
+    await lessonFrame(learner, 'Main lesson');
+
+    await teacher.getByTitle('Upload an HTML explainer or paste HTML code to overlay on top of the current example').click();
+    await teacher.getByPlaceholder('Title (optional, e.g. Step-by-step quadratic)').fill('Explainer');
+    await teacher.getByPlaceholder('Paste your HTML code here...')
+      .fill('<!doctype html><html><body><h1>EXPLAINER DOC</h1></body></html>');
+    await teacher.getByRole('button', { name: /Show explainer/ }).click();
+    await lessonFrame(teacher, 'EXPLAINER DOC');
+    const shown = await lessonFrame(learner, 'EXPLAINER DOC');
+    await learner.waitForTimeout(1500);
+
+    // Everything the tutor's page sends from here is caused by the student.
+    const mark = tutorSent.length;
+
+    // The learner asks for the lesson again, through the product's own path for
+    // it: the surface on their screen reporting that it could not follow along.
+    await shown.evaluate(() => window.parent.postMessage({ type: 'SYNC_REPLAY_MISS' }, '*'));
+    await teacher.waitForTimeout(4000);
+    const caused = tutorSent.slice(mark);
+
+    const uploaded = caused.filter(c => c.ev === 'sync_html_update' || c.ev === 'run_preview');
+    expect(uploaded.map(u => u.ev + (u.body.includes('EXPLAINER DOC') ? ' (the EXPLANATION!)' : '')),
+      'a student asking for the lesson made the tutor re-seed the room').toEqual([]);
+    // And the student was answered by the thing that knows what is on screen.
+    expect(caused.some(c => c.ev === 'mirror_dom'),
+      'nothing asked the mirror for a frame, so the student got no picture').toBe(true);
+
+    await teacher.close();
+    await learner.close();
+  });
+
+  test('a learner who arrives mid-explanation draws on the same page as the tutor', async ({ browser }) => {
+    // 17 Sep 2026. Ink is tagged with the surface it was drawn on, and each
+    // side only paints ink belonging to the surface it is showing. The copy of
+    // the explanation sent to a JOINING student carries no id, and the student
+    // was writing that missing id straight over the correct one it had been
+    // given a moment earlier — so the student's layer fell back to 'main'.
+    //
+    // A second message usually repaired it within a round trip, which is why
+    // this was invisible for so long. It does not arrive while the tutor's seat
+    // is inside its 45-second grace, and the journal has six of those with a
+    // student in the room. Then: the tutor circles a term on the explanation
+    // and says "this one", the student sees no circle, and sees instead
+    // whatever the tutor drew on the LESSON earlier, floating over the
+    // explanation. Two people pointing at different things.
+    //
+    // The lesson's ink goes at the top of the surface and the explanation's at
+    // the bottom, so which surface each screen believes it is on is readable as
+    // where the ink is.
+    const code = room('m');
+    const teacher = await (await browser.newContext()).newPage();
+    await teacher.goto(`${BASE}/room/${code}?name=Teacher`);
+    await runLesson(teacher, '<!doctype html><html><body><h1>Main lesson</h1></body></html>');
+    await lessonFrame(teacher, 'Main lesson');
+
+    await teacher.locator('[data-tip="Ink (permanent)"]').click();
+    const box = await teacher.locator('iframe').first().boundingBox();
+    if (!box) throw new Error('the tutor has no lesson surface to draw on');
+    const stroke = async (y1: number, y2: number) => {
+      await teacher.mouse.move(box.x + 60, box.y + y1);
+      await teacher.mouse.down();
+      await teacher.mouse.move(box.x + 300, box.y + y2, { steps: 12 });
+      await teacher.mouse.up();
+      await teacher.waitForTimeout(1200);
+    };
+    await stroke(box.height * 0.06, box.height * 0.10); // on the LESSON
+
+    await teacher.getByTitle('Upload an HTML explainer or paste HTML code to overlay on top of the current example').click();
+    await teacher.getByPlaceholder('Title (optional, e.g. Step-by-step quadratic)').fill('Explainer');
+    await teacher.getByPlaceholder('Paste your HTML code here...')
+      .fill('<!doctype html><html><body><h1>EXPLAINER DOC</h1></body></html>');
+    await teacher.getByRole('button', { name: /Show explainer/ }).click();
+    await lessonFrame(teacher, 'EXPLAINER DOC');
+    await stroke(box.height * 0.80, box.height * 0.84); // on the EXPLANATION
+
+    // The tutor's socket drops — the seat grace, with nobody able to answer for
+    // a joining student.
+    const offline = teacher.context();
+    await offline.setOffline(true);
+    await teacher.waitForTimeout(2000);
+
+    const learner = await (await browser.newContext()).newPage();
+    await learner.goto(`${BASE}/live/${code}?name=Learner`);
+    await lessonFrame(learner, 'EXPLAINER DOC');
+    await learner.waitForTimeout(4000);
+
+    const tutorInk = await inkByHalf(teacher);
+    const learnerInk = await inkByHalf(learner);
+    expect(tutorInk.bottom, "the tutor's own explanation ink is missing — the walk is wrong, not the app").toBeGreaterThan(0);
+    expect(tutorInk.top, "the tutor is showing the lesson's ink over the explanation").toBe(0);
+
+    expect(learnerInk.bottom,
+      "the tutor's marks on the explanation never reached the learner").toBeGreaterThan(0);
+    expect(learnerInk.top,
+      "the learner has the LESSON's old ink floating over the explanation").toBe(0);
+
+    await offline.setOffline(false);
     await teacher.close();
     await learner.close();
   });

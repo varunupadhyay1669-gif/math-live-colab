@@ -2290,19 +2290,51 @@ async function startServer() {
     });
 
     // ─── REQUEST CONTENT (student fallback) ───
-    // If a student missed the initial HTML delivery, they can request it again
+    // A student saying "there is nothing on my screen". The commonest distress
+    // signal in the room: 80 of them in the 48 hours to 17 Sep 2026.
     socket.on('request_content', ({ roomId }: { roomId: string }) => {
       const room = rooms.get(roomId);
       if (!isMember(room, socket.id)) return;
+      // One ask per socket per 1.5s. The client throttles too, but the room is
+      // what pays for this and the room is what has to be protected: one real
+      // student pressed Retry Loading fourteen times in 4.3 seconds on 17 Sep.
+      // Held on the socket so it is collected with the socket, not in a map
+      // that outlives the class.
+      const asker = socket as typeof socket & { lastContentAskAt?: number };
+      const now = Date.now();
+      if (asker.lastContentAskAt && now - asker.lastContentAskAt < 1500) return;
+      asker.lastContentAskAt = now;
+
       emitSessionState(socket.id, roomId, room, 'request_content');
       if (room.lastRunHtml) {
         socket.emit('run_preview', { fileId: room.activeFileId, html: room.lastRunHtml, revision: room.revision });
       }
-      // Also ask teacher for fresh DOM if available
-      if (room.teacherSocketId) {
-        room.pendingSyncStudents.add(socket.id);
-        io.to(room.teacherSocketId).emit('request_html_sync', { requestId: `retry-${socket.id}-${Date.now()}` });
+
+      // Then the thing that was missing: ASK THE MIRROR.
+      //
+      // This used to send the tutor a `request_html_sync`, and that had two
+      // effects nobody wanted. The tutor's page answers it from whichever
+      // surface is on screen — and the tutor's explanations are full mirror
+      // sources, so while an explanation was open the EXPLANATION's document
+      // was uploaded and stored as the room's live lesson snapshot (measured on
+      // the wire, 17 Sep 2026: one student's ask, and the tutor sent back a
+      // `sync_html_update` containing the explainer). Its belt-and-braces half
+      // also re-emitted `run_preview`, which the server broadcasts to the WHOLE
+      // room with a revision bump — one student's private "I can't see
+      // anything" re-seeding every other student's lesson.
+      //
+      // What a student with an empty screen actually wants is the picture the
+      // rest of the class is looking at, and that is the mirror's job. So do
+      // exactly what mirror_request and resync_student do: hand over the cached
+      // frame at once, then ask the source for a fresh keyframe. Cheaper than
+      // what it replaces, and it cannot install one surface's document as
+      // another's.
+      if (room.mirrorBody) {
+        socket.emit('mirror_dom', {
+          body: room.mirrorBody, attrs: room.mirrorAttrs, head: room.mirrorHead, h: room.mirrorHash,
+        });
       }
+      if (room.teacherSocketId) io.to(room.teacherSocketId).emit('mirror_request', {});
     });
 
     // ─── SET ROOM PASSWORD ───
