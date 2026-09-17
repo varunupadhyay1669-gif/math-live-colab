@@ -1941,6 +1941,23 @@ export default function Room() {
       const type = e.data?.type;
       if (!type) return;
 
+      // The board is its own surface and carries its own strokes; nothing is the
+      // lesson mirror while it is up. Since 9133613 the lesson iframe stays
+      // mounted and running underneath, so without this the hidden lesson went
+      // on streaming full-DOM frames and a canvas frame every 120ms to iPads for
+      // a surface nobody in the class was looking at — 30 mirror frames in six
+      // seconds on a still room, measured 17 Sep 2026 — and the "not seeing your
+      // screen" warning reported the health of a mirror nobody could see, which
+      // sends the tutor to Resend for a problem that is not on screen.
+      //
+      // Coming back needs nothing pushed from here: the follower notices the
+      // fingerprint it holds no longer matches the tutor's and asks. Measured on
+      // 17 Sep 2026 with a lesson that changed behind the board and then went
+      // static — the worst case, because the source's own change-detection has
+      // already consumed the change — the learner was back on the tutor's screen
+      // in 53, 49, 63 and 58ms over four runs.
+      if (whiteboardModeRef.current && type.indexOf('SYNC_MIRROR') === 0) return;
+
       // ── LIVE MIRROR (source → students) ──
       // The authoritative iframe streams its real DOM/canvas. Relay to the
       // server (which fans out to every follower). MUST be handled and returned
@@ -2943,6 +2960,14 @@ export default function Room() {
     if (newMode) {
       setDrawMode(false);
       setLaserMode(false);
+      // Set aside any explanation locally, in the same batch, so the tutor's own
+      // screen never passes through the state this fixes: board asked for,
+      // explanation still 'showing', and nothing rendered at all. The server
+      // does the same for the whole class and brings the explanation back when
+      // the board closes. tempContent is deliberately left alone — it is what
+      // identifies the kept document, and the document must keep running with
+      // the student's answers in it (src/lib/liveExplainers.ts).
+      setShowTempContent(false);
     }
     // Leaving the board? Keep what was on it before it goes off screen.
     if (!newMode) captureBoardNow('Whiteboard');

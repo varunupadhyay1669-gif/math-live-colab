@@ -2172,8 +2172,19 @@ export default function StudentView() {
           )}
 
           {/* EXPLANATION — an overlay on top of the lesson shell, which stays
-              mounted underneath holding the teacher's last painted frame. */}
-          {showTempContent && tempContent && tempUrl && (
+              mounted underneath holding the teacher's last painted frame.
+              Never over the whiteboard: the tutor's copy of this overlay has
+              carried a !whiteboardMode guard all along and this one did not, so
+              on 17 Sep 2026 a tutor who dropped onto the board mid-explanation
+              was looking at the board (or, before the same day's server fix, at
+              nothing at all) while the student was still looking at the
+              explanation, with no warning on either side. The board and an
+              explanation are now mutually exclusive by the time either side
+              renders — the server decides it, in one place, and orders its two
+              broadcasts so no client ever holds both. This guard is what makes
+              that a rule rather than a convention: the student can never be the
+              one left alone on the wrong surface. */}
+          {showTempContent && tempContent && tempUrl && !whiteboardMode && (
             <div style={{ position: 'absolute', inset: 0, zIndex: 6 }}>
               <iframe
                 ref={tempFrameRef}
