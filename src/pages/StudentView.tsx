@@ -6,6 +6,7 @@ import { cleanDisplayName } from "../lib/displayName";
 import { stepLockScript } from "../lib/stepLockScript";
 import { setupAttentionDetection } from "../lib/attentionDetector";
 import { clientId } from '../lib/clientId';
+import { contentRetryDelay } from '../lib/contentRetry';
 import { localTimezone } from "../lib/tz";
 import { socketAuth, isPasscodeError, refusePasscode, apiFetch } from "../lib/passcode";
 import { ScreenPeer, screenShareSupported, displayCaptureOptions } from "../lib/screenShare";
@@ -1036,7 +1037,18 @@ export default function StudentView() {
     newSocket.on("temp_content", ({ html, name, id }: { html: string; name: string; id?: string }) => {
       setTempContent({ html, name });
       setShowTempContent(true);
-      setActiveExplanationId(id ?? null);
+      // Only an explanation that names itself may change which one we think is
+      // on screen. The copy a JOINING student is sent carries no id (the join
+      // handler emits html+name only), and it arrives AFTER the session_state
+      // that did carry the right one — so `id ?? null` threw the right answer
+      // away and put this student's ink back on 'main'.
+      //
+      // 17 Sep 2026, reproduced: with the tutor's socket inside its 45s seat
+      // grace there is no second session_state to repair it, and a student who
+      // joined mid-explanation saw the LESSON's old ink floating over the
+      // explanation and none of the marks the tutor was making on it. The two
+      // of them were pointing at different things.
+      if (typeof id === 'string') setActiveExplanationId(id);
       showNotification(`📚 Teacher is showing explanation: ${name}`);
     });
     newSocket.on("clear_temp_content", () => {
@@ -1355,8 +1367,19 @@ export default function StudentView() {
   // This handles cases where the student is far away (e.g., different country)
   // and the large HTML payload gets dropped by Socket.io or network proxies.
   const httpFallbackRef = useRef<ReturnType<typeof setTimeout>>();
-  const fetchContentViaHttp = useCallback(async () => {
+  const lastAskAtRef = useRef(0);
+  const fetchContentViaHttp = useCallback(async (byHand = false) => {
     if (!roomId) return;
+    // A press ALWAYS says something back. On 17 Sep one student pressed Retry
+    // Loading fourteen times inside 4.3 seconds and then reloaded the page: the
+    // button did its work silently, so from the student's side it was dead.
+    if (byHand) showNotification('📡 Asking your teacher for the lesson…');
+    // ...but only one ask actually leaves the iPad per 1.5s, whatever the
+    // fingers do. Every ask costs the room a round trip and the tutor's source
+    // a keyframe, and fourteen of them in four seconds helps nobody.
+    const now = Date.now();
+    if (now - lastAskAtRef.current < 1500) return;
+    lastAskAtRef.current = now;
     // First try: ask server via socket (fastest, re-triggers teacher DOM capture)
     if (socket && connected) {
       socket.emit('request_content', { roomId });
@@ -1382,28 +1405,35 @@ export default function StudentView() {
   }, [roomId, currentHtml, socket, connected]);
 
   useEffect(() => {
-    // AUTONOMOUS: Aggressive retry ladder for stuck students.
+    // Retry ladder for a student who is looking at NOTHING.
     //
     // When a student joins and the server has no HTML yet (post-redeploy,
-    // teacher's iframe slow to respond, etc), they sit on "Waiting for
-    // teacher" with no recovery. The previous code tried ONE HTTP
-    // fallback at 2s; if that returned 204 (server had nothing yet) the
-    // student stayed stuck forever.
+    // teacher's iframe slow to respond, teacher hasn't started), they sit on
+    // "Waiting for teacher". Each attempt re-emits request_content via socket
+    // (which makes the server serve the mirror's cached frame and ask the
+    // tutor's source for a fresh one) AND tries the HTTP endpoint.
     //
-    // Now: retry at 2s, 5s, 10s, 20s. Each attempt re-emits
-    // request_content via socket (which makes the server re-ping the
-    // teacher) AND tries the HTTP endpoint. As soon as currentHtml is
-    // set, the effect tears down. Total max wait: 20s, then user can
-    // click the Retry Loading button manually.
-    if (!connected || currentHtml) return;
-    const retries = [2000, 5000, 10000, 20000];
-    const timers = retries.map(ms => setTimeout(() => {
-      // Re-check currentHtml inside the callback in case a prior attempt
-      // landed during the wait.
+    // 17 Sep 2026: this used to be four timers and then permanent silence.
+    // It now keeps asking — see src/lib/contentRetry.ts for the why and the
+    // cost. A student with an empty screen never stops deserving an answer,
+    // and the alternative they were choosing was reloading the page.
+    //
+    // The condition is "nothing on screen at all", which is exactly what puts
+    // the Waiting-for-teacher panel up: an explanation or the whiteboard means
+    // the student HAS the class in front of them and there is nothing to chase.
+    if (!connected) return;
+    if (currentHtml || showTempContent || whiteboardMode) return;
+    let attempt = 0;
+    // One timer at a time, rescheduling itself: a stuck student must not
+    // accumulate timers for as long as they are stuck.
+    let timer: ReturnType<typeof setTimeout>;
+    const tick = () => {
       fetchContentViaHttp();
-    }, ms));
-    return () => { timers.forEach(t => clearTimeout(t)); };
-  }, [connected, currentHtml, fetchContentViaHttp]);
+      timer = setTimeout(tick, contentRetryDelay(attempt++));
+    };
+    timer = setTimeout(tick, contentRetryDelay(attempt++));
+    return () => clearTimeout(timer);
+  }, [connected, currentHtml, showTempContent, whiteboardMode, fetchContentViaHttp]);
 
   // ── Helper: safely post message to iframe (queues if not ready) ──
   const postToIframe = useCallback((msg: any) => {
@@ -2218,7 +2248,7 @@ export default function StudentView() {
                   ))}
                 </div>
                 {connected && (
-                  <button onClick={fetchContentViaHttp}
+                  <button onClick={() => fetchContentViaHttp(true)}
                     className="btn mt-6" style={{ fontSize: '13px' }}>
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                       <polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/>
