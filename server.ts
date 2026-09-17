@@ -2329,11 +2329,26 @@ async function startServer() {
       // frame at once, then ask the source for a fresh keyframe. Cheaper than
       // what it replaces, and it cannot install one surface's document as
       // another's.
-      if (room.mirrorBody) {
-        socket.emit('mirror_dom', {
-          body: room.mirrorBody, attrs: room.mirrorAttrs, head: room.mirrorHead, h: room.mirrorHash,
-        });
-      }
+      //
+      // 17 Sep 2026, on merging the three fixes: this is the THIRD copy of that
+      // emit, and it went in from the raw slot — `room.mirrorBody` and
+      // `room.mirrorHash` straight off the room. That is the exact pair the
+      // cache rules exist to refuse (src/server/mirrorCache.ts): it hands over
+      // whichever document happened to stream last, with whatever fingerprint
+      // the slot is wearing, to the one student in the room we KNOW has nothing
+      // on screen. It is also the busiest of the three — 80 of these in 48
+      // hours against 18 resyncs — so leaving it raw would have undone the
+      // surface check on the path that carries most of the traffic. Same two
+      // lines as the other two handlers, deliberately:
+      //   * servableFrame refuses a frame from a document this student is not
+      //     showing (null is the right answer — the source is being asked for a
+      //     fresh one in the line below, and a blank half-second beats the
+      //     wrong page painted over a child's work);
+      //   * armRepair, because a student saying "there is nothing on my screen"
+      //     is the definition of someone a volatile frame has already failed.
+      const cached = servableFrame(room, mirrorSurfaceKey(room));
+      if (cached) socket.emit('mirror_dom', cached);
+      armRepair(room, socket.id);
       if (room.teacherSocketId) io.to(room.teacherSocketId).emit('mirror_request', {});
     });
 

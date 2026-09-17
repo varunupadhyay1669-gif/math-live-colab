@@ -72,11 +72,15 @@ export const EMPTY_MIRROR: MirrorCache = {
 /**
  * Which document the class is looking at.
  *
- * Deliberately NOT a function of whiteboardMode: on the whiteboard the tutor's
- * relay still points at the hidden lesson iframe (Room.tsx keeps iframeRef on
- * the lesson), so the frames still arriving are the lesson's and a student's
- * lesson iframe is still the right place for them. The surfaces that genuinely
- * swap the streaming document are the lesson and the explanations.
+ * Deliberately NOT a function of whiteboardMode. The board carries its own
+ * strokes and is nobody's mirror: since 17 Sep 2026 the tutor's relay drops
+ * every SYNC_MIRROR while it is up (src/pages/Room.tsx), so no frame is
+ * produced during a board trip and none can be filed under the wrong name. The
+ * slot goes on holding the lesson's last frame throughout, which is precisely
+ * what a student should be handed on the way back — and adding a third key for
+ * the board would instead empty the cache on every trip and make the class
+ * repaint from nothing each time. The surfaces that genuinely swap the
+ * streaming document are the lesson and the explanations.
  */
 export function mirrorSurfaceKey(room: { activeExplanationId: string | null }): string {
   return room.activeExplanationId ? `explanation:${room.activeExplanationId}` : 'lesson';

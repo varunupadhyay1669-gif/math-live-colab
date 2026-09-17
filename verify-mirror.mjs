@@ -455,6 +455,18 @@ section('OFFLINE — a cached frame and its fingerprint describe the same docume
     'a late joiner is answered through the surface check, not from the raw slot');
   assert(/servableFrame\(room, mirrorSurfaceKey\(room\)\)/.test(serverSrc.slice(serverSrc.indexOf("socket.on('resync_student'"))),
     "and so is the tutor's Resend");
+  // The third and busiest of them, added by a different fix on the same day:
+  // the student's own "there is nothing on my screen". 80 of these in the 48
+  // hours to 17 Sep against 18 resyncs, so this is the path most of the
+  // traffic takes and the one it would hurt most to leave reading the raw slot.
+  const askHandler = serverSrc.slice(serverSrc.indexOf("socket.on('request_content'"), serverSrc.indexOf("socket.on('set_room_password'"));
+  assert(/servableFrame\(room, mirrorSurfaceKey\(room\)\)/.test(askHandler)
+    && !/room\.mirrorBody,/.test(askHandler),
+    'a student asking for help is answered through the surface check too',
+    'it is the one person in the room we KNOW has nothing on screen: handing them the other document is the whole bug');
+  assert(/armRepair\(room, socket\.id\)/.test(askHandler),
+    'and is owed the next live frame on the guaranteed channel',
+    'a volatile frame has already failed this student — that is why they are asking');
   const domHandler = serverSrc.slice(serverSrc.indexOf("socket.on('mirror_dom'"), serverSrc.indexOf("socket.on('mirror_ping'"));
   assert(/socket\.volatile\.to\(roomId\)\.emit\('mirror_dom'/.test(domHandler),
     'the live frame fan-out is still volatile',
