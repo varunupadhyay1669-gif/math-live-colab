@@ -60,6 +60,7 @@ import Leaderboard from "../components/Leaderboard";
 import Whiteboard from "../components/Whiteboard";
 import Calculator from "../components/Calculator";
 import { explainerKey, touchLiveExplainer, type LiveExplainer } from "../lib/liveExplainers";
+import { studentsOutOfSync } from "../lib/syncWarning";
 import { useAuth } from "../lib/auth";
 import { PRODUCT, subjectFor } from '../lib/product';
 
@@ -485,6 +486,19 @@ export default function Room() {
 
   // ── Whiteboard ──
   const [whiteboardMode, setWhiteboardMode] = useState(false);
+
+  // Seconds-since-the-last-ack is the tutor's "is the student with me?"
+  // clock, and the board makes it meaningless: the lesson stops streaming
+  // while the whiteboard is up (see the relay guard below), so no acks come
+  // back and the count only measures how long the tutor has been at the
+  // board. Restarted on the way out, so the first ack after a board trip has
+  // a moment to land before anyone is named. Found in review on 17 Sep 2026,
+  // before a class saw it: src/lib/syncWarning.ts has the measurements.
+  const syncClockFromRef = useRef(0);
+  useEffect(() => {
+    if (whiteboardMode) return;
+    syncClockFromRef.current = Date.now();
+  }, [whiteboardMode]);
   const [whiteboardScrollX, setWhiteboardScrollX] = useState(0);
   const [whiteboardScrollY, setWhiteboardScrollY] = useState(0);
   const [whiteboardState, setWhiteboardState] = useState<any>(null);
@@ -5446,15 +5460,18 @@ export default function Room() {
           was told. So it comes to the front, it names the child, and it offers
           the repair that already existed rather than describing the problem. */}
       {(() => {
-        const stuck = users
-          .filter(u => u.role === 'student')
-          .map(u => ({ u, s: syncStatus[u.id] }))
-          // 12s, comfortably past the ~2s ping and the 7s the participants list
-          // treats as merely quiet — this pill must never cry wolf mid-lesson.
-          .filter(x => x.s && (Date.now() - x.s.at > 12_000 || !x.s.ok));
+        // Who is genuinely behind — past the ~2s ping and the 7s the participants
+        // list treats as merely quiet, this pill must never cry wolf mid-lesson —
+        // and nobody at all while the class is on the whiteboard, where the
+        // lesson is silent by design. src/lib/syncWarning.ts holds both rules.
+        const stuck = studentsOutOfSync(
+          users.filter(u => u.role === 'student'),
+          syncStatus,
+          { now: Date.now(), onWhiteboard: whiteboardMode, clockFrom: syncClockFromRef.current },
+        );
         if (stuck.length === 0) return null;
-        const names = stuck.map(x => x.u.name).join(', ');
-        const worst = Math.max(...stuck.map(x => Math.round((Date.now() - x.s!.at) / 1000)));
+        const names = stuck.map(x => x.name).join(', ');
+        const worst = Math.max(...stuck.map(x => x.secondsBehind));
         return (
           <div className="fixed bottom-3 left-1/2 -translate-x-1/2 z-[68] select-none"
             data-testid="sync-warning"
@@ -5470,7 +5487,7 @@ export default function Room() {
             </div>
             <button
               className="ml-admin-btn"
-              onClick={() => stuck.forEach(x => resyncStudent(x.u.id, x.u.name))}
+              onClick={() => stuck.forEach(x => resyncStudent(x.id, x.name))}
               style={{ background: 'rgba(255,255,255,0.18)', color: '#fff', border: 0,
                        borderRadius: 8, padding: '5px 10px', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>
               Resend

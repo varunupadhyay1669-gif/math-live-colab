@@ -217,7 +217,10 @@ assert(extractJson('Here you go:\n```json\n{"a":1}\n```')?.a === 1,
 
 // ── The archive layer, on real files ───────────────────────────────────────
 console.log('\nPACK 1.2 — the archive on disk');
-const root = path.join(tmpdir(), 'mathslive-pack-tests');
+// Per process. Two suites running at once — an agent's and a human's, which is
+// now normal here — shared this directory and deleted each other's fixtures
+// mid-write: ENOTEMPTY, a red gate for a reason nobody believes (17 Sep 2026).
+const root = path.join(tmpdir(), `mathslive-pack-tests-${process.pid}`);
 const runTool = (dir) => {
   try {
     execFileSync(process.execPath, ['--import', 'tsx', 'tools/validate_pack.mjs', dir],

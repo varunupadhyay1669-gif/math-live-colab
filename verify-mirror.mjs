@@ -40,6 +40,7 @@ import { LESSON_HISTORY_KEEP, LESSON_TTL_HOURS } from './src/server/records.ts';
 import { cutoffFrom } from './src/server/classData.ts';
 import { explainerKey, touchLiveExplainer, whiteboardSurfaceToggle, MAX_LIVE_EXPLAINERS } from './src/lib/liveExplainers.ts';
 import { contentRetryDelay, contentRetryOffset, CONTENT_RETRY_STEADY_MS } from './src/lib/contentRetry.ts';
+import { studentsOutOfSync, SYNC_STALE_MS } from './src/lib/syncWarning.ts';
 import {
   calculate, compile, parse, evaluate, tokenize, formatResult, freeVariables,
   ExpressionError, FUNCTION_NAMES,
@@ -467,6 +468,18 @@ section('OFFLINE — a cached frame and its fingerprint describe the same docume
   assert(/armRepair\(room, socket\.id\)/.test(askHandler),
     'and is owed the next live frame on the guaranteed channel',
     'a volatile frame has already failed this student — that is why they are asking');
+  // 17 Sep 2026, in review: asking for a resync was the only student-reachable
+  // mirror path with no floor under it, and arming a repair had just doubled
+  // what each ask costs the room.
+  const askAt = serverSrc.indexOf("socket.on('mirror_request'");
+  const askMirror = askAt >= 0 ? serverSrc.slice(askAt, askAt + 1400) : '';
+  assert(/lastMirrorAskAt/.test(askMirror) && /< 1200\) return;/.test(askMirror),
+    'a student can ask for a resync about once a second, not as fast as they can click',
+    'each ask costs a cached frame now and a guaranteed frame later, up to 3MB each, on the channel that filled the heap on 4 Sep 2026');
+  const arm = serverSrc.slice(serverSrc.indexOf('function armRepair'), serverSrc.indexOf('function deliverRepairs'));
+  assert(/if \(room\.teacherSocketId === studentId\) return;/.test(arm),
+    "the tutor's own tab is never owed a repair frame",
+    'Dual View can ask like any follower, but the tutor page has no mirror_dom listener: the frame is pure waste');
   const domHandler = serverSrc.slice(serverSrc.indexOf("socket.on('mirror_dom'"), serverSrc.indexOf("socket.on('mirror_ping'"));
   assert(/socket\.volatile\.to\(roomId\)\.emit\('mirror_dom'/.test(domHandler),
     'the live frame fan-out is still volatile',
@@ -1053,6 +1066,54 @@ section('OFFLINE — nothing a room holds may grow without a ceiling');
   assert(uncapped.length === 0,
     'every list a room grows has a ceiling beside it',
     uncapped.length ? `no ceiling near: ${[...new Set(uncapped)].join(', ')}` : '');
+}
+
+section('OFFLINE — the whiteboard makes the "is my student with me?" clock meaningless');
+{
+  // 17 Sep 2026, found in review before any class saw it. Stopping the hidden
+  // lesson from streaming during a board trip also stopped its 2s heartbeat, and
+  // the heartbeat is what produces the acks this pill counts. Measured on the
+  // board: clean at 5s and 10s, "Learner is not seeing your screen — 40 seconds
+  // behind" at 40s with a Resend that could send nothing, gone a second after
+  // leaving the board. Silence on the board is not evidence of anything.
+  const learners = [{ id: 's1', name: 'Anjanaya' }, { id: 's2', name: 'Maryam' }];
+  const t0 = Date.UTC(2026, 8, 17, 9, 0, 0);
+  const acked = (at, ok = true) => ({ s1: { ok, at }, s2: { ok: true, at } });
+
+  assert(studentsOutOfSync(learners, acked(t0 - 30_000), { now: t0, onWhiteboard: false, clockFrom: 0 }).length === 2,
+    'half a minute of silence from both learners names them both');
+  assert(studentsOutOfSync(learners, acked(t0 - 30_000), { now: t0, onWhiteboard: true, clockFrom: 0 }).length === 0,
+    'the same silence, on the whiteboard, names nobody',
+    'the lesson is silent there by design: no frames, no acks, nothing to be behind');
+
+  // Coming back from the board: the clock restarts, so the trip is not counted.
+  const back = t0 - 500;
+  assert(studentsOutOfSync(learners, acked(t0 - 300_000), { now: t0, onWhiteboard: false, clockFrom: back }).length === 0,
+    'straight after a five-minute board trip, nobody is named yet',
+    'the first ack lands about two seconds later; naming them before that is crying wolf');
+  assert(studentsOutOfSync(learners, acked(t0 - 300_000), { now: back + SYNC_STALE_MS + 1_000, onWhiteboard: false, clockFrom: back }).length === 2,
+    'and if the acks genuinely do not come back, they are named a few seconds later');
+
+  // "My screen does not match" is only believed if it was said after the trip.
+  const beforeTrip = { s1: { ok: false, at: back - 60_000 }, s2: { ok: true, at: back - 60_000 } };
+  assert(studentsOutOfSync(learners, beforeTrip, { now: back + 1_000, onWhiteboard: false, clockFrom: back }).length === 0,
+    'a mismatch reported before the board trip is not held against the learner after it');
+  const afterTrip = { s1: { ok: false, at: back + 500 }, s2: { ok: true, at: back + 500 } };
+  const named = studentsOutOfSync(learners, afterTrip, { now: back + 1_000, onWhiteboard: false, clockFrom: back });
+  assert(named.length === 1 && named[0].name === 'Anjanaya' && named[0].id === 's1',
+    'one reported after it, and that one is named at once', JSON.stringify(named));
+
+  assert(studentsOutOfSync(learners, {}, { now: t0, onWhiteboard: false, clockFrom: 0 }).length === 0,
+    'a learner who has never acked at all is not named here',
+    'every lesson would open with a red warning; arriving is the join path\'s business');
+  const behind = studentsOutOfSync(learners, acked(t0 - 45_000), { now: t0, onWhiteboard: false, clockFrom: 0 });
+  assert(behind.every(x => x.secondsBehind === 45), 'and the pill can say how far behind, honestly', JSON.stringify(behind));
+
+  const room = readFileSync('src/pages/Room.tsx', 'utf8');
+  assert(/studentsOutOfSync\(/.test(room) && /onWhiteboard: whiteboardMode/.test(room),
+    'the tutor pill asks this function, and tells it about the whiteboard');
+  assert(/syncClockFromRef\.current = Date\.now\(\)/.test(room),
+    'and restarts the clock when the class comes back from the board');
 }
 
 section('OFFLINE — closing an explanation does not wipe what the student typed');

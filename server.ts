@@ -4158,6 +4158,11 @@ Build a widget that teaches: ${safePrompt}`;
     const MIRROR_REPAIR_TTL = 20_000;
     /** Remember that this student is owed one frame on the guaranteed channel. */
     function armRepair(room: RoomData, studentId: string) {
+      // Never the tutor's own tab. Its Dual View pane is a follower like any
+      // other and can ask for a resync, but the tutor's page has no mirror_dom
+      // listener: the frame it would be sent is pure waste, up to 3MB of it on
+      // the guaranteed channel (found in review, 17 Sep 2026).
+      if (room.teacherSocketId === studentId) return;
       const now = Date.now();
       for (const [id, at] of room.mirrorRepairs) if (now - at > MIRROR_REPAIR_TTL) room.mirrorRepairs.delete(id);
       // A 1:1 class has one student; a ceiling anyway, because this list is the
@@ -4326,6 +4331,17 @@ Build a widget that teaches: ${safePrompt}`;
       if (typeof roomId !== 'string') return;
       const room = rooms.get(roomId);
       if (!isMember(room, socket.id)) return;
+      // One ask per socket per 1.2s — the same guard request_content carries,
+      // for the same reason: the room is what pays. Each ask costs a cached
+      // frame now and a guaranteed frame when the tutor's next one lands, up to
+      // 3MB each, on the channel whose queueing filled the heap on 4 Sep 2026.
+      // This was the only student-reachable mirror path with no floor under it
+      // (found in review, 17 Sep 2026). The follower's own retry is about four
+      // seconds, so nothing legitimate is refused.
+      const asker = socket as typeof socket & { lastMirrorAskAt?: number };
+      const askedAt = Date.now();
+      if (asker.lastMirrorAskAt && askedAt - asker.lastMirrorAskAt < 1200) return;
+      asker.lastMirrorAskAt = askedAt;
       // Serve the cached frame immediately (instant late-join), then ask the
       // teacher to push a fresh one (covers canvas + freshest state). Includes
       // the styling envelope so the cache-served render isn't unstyled.

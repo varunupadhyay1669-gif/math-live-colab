@@ -1223,4 +1223,39 @@ test.describe('the mirror', () => {
     await teacher.close();
     await learner.close();
   });
+
+  test('a long trip to the whiteboard does not accuse the learner of falling behind', async ({ browser }) => {
+    // 17 Sep 2026, found in review before a class saw it. Stopping the hidden
+    // lesson streaming during a board trip also stops its 2s heartbeat, and the
+    // tutor's red pill counts seconds since the learner last acked a frame. So
+    // every board trip past twelve seconds read "Learner is not seeing your
+    // screen — 40 seconds behind", with a Resend that could send nothing, on the
+    // one surface where the tutor cannot check.
+    const code = room('w');
+    const teacher = await (await browser.newContext()).newPage();
+    const learner = await (await browser.newContext()).newPage();
+
+    await teacher.goto(`${BASE}/room/${code}?name=Teacher`);
+    await runLesson(teacher, '<!doctype html><html><body><h1>Main lesson</h1></body></html>');
+    await lessonFrame(teacher, 'Main lesson');
+    await learner.goto(`${BASE}/live/${code}?name=Learner`);
+    await lessonFrame(learner, 'Main lesson');
+
+    const warning = teacher.locator('[data-testid="sync-warning"]');
+    await teacher.getByTitle(/Open the shared whiteboard temporarily/).click();
+    await teacher.waitForTimeout(18_000);   // well past the twelve the pill fires at
+    await expect(warning,
+      'the tutor was told the learner had fallen behind while the class was on the board').toHaveCount(0);
+
+    await teacher.getByTitle(/Return to the HTML simulation/).click();
+    await lessonFrame(teacher, 'Main lesson');
+    // Acks resume a couple of seconds later: the minutes at the board must not
+    // be counted against the first one.
+    await teacher.waitForTimeout(6_000);
+    await expect(warning,
+      'the tutor was accused the moment the class came back from the board').toHaveCount(0);
+
+    await teacher.close();
+    await learner.close();
+  });
 });
